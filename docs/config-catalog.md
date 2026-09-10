@@ -3362,6 +3362,26 @@ export interface Config {
 
 Source: [`packages/web/web-search-exa/src/index.ts:35`](../packages/web/web-search-exa/src/index.ts)
 
+<a id="deepseek-aidsh-web-search-exa-mcp"></a>
+
+## `@deepseek-ai/dsh-web-search-exa-mcp`
+
+Requires: `web`
+
+```ts config-catalog
+/** Plugin config (all optional — `apply` fills the environment and constant defaults). */
+export interface Config {
+  /** Exa API key, sent as the endpoint's `exaApiKey` parameter. Falls back to `$EXA_API_KEY`; absent = anonymous access. */
+  apiKey?: string
+  /** Endpoint URL. Defaults to the hosted Exa MCP endpoint. */
+  endpoint?: string
+  /** Default result count when a request carries no `maxResults`. Omitted = the endpoint's own default. */
+  numResults?: number
+}
+```
+
+Source: [`packages/web/web-search-exa-mcp/src/index.ts:32`](../packages/web/web-search-exa-mcp/src/index.ts)
+
 <a id="deepseek-aidsh-web-search-perplexity"></a>
 
 ## `@deepseek-ai/dsh-web-search-perplexity`

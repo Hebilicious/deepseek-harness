@@ -424,21 +424,27 @@
 
     # The shared base enables the stable model-facing web_search and web_fetch
     # tools. The Web app disables this host row and composes both tools per agent
-    # preset; products with a stricter network policy override tool-web. DeepSeek
-    # search resolves the same DEEPSEEK_API_KEY
-    # credential the Models page manages for chat, at each search; its Messages
-    # endpoint is separate from the chat-completions endpoint, so it takes its own
-    # base-URL override. Anonymous fetch accepts only public HTTP(S) destinations,
-    # resolves and validates every destination, and pins every actual connection.
-    # Search is a full auxiliary model request with server-side retrieval, so this
-    # shipped DeepSeek route gets 60s while the provider-neutral tool default
-    # remains 30s.
+    # preset; products with a stricter network policy override tool-web. The
+    # shipped search route is the keyless hosted Exa MCP endpoint, so web_search
+    # works in a deployment that holds no search credential. Anonymous fetch
+    # accepts only public HTTP(S) destinations, resolves and validates every
+    # destination, and pins every actual connection. Search is a network round
+    # trip to a third-party endpoint, so `tool-web` below gets 60s while the
+    # provider-neutral tool default remains 30s.
     - id: web
       name: '@deepseek-ai/dsh-web'
       config:
-        searchProvider: deepseek-official
+        searchProvider: exa-mcp
         fetchProvider: http
 
+    - id: web-search-exa-mcp
+      name: '@deepseek-ai/dsh-web-search-exa-mcp'
+
+    # DeepSeek's own search route stays mounted for a deployment that pins
+    # `searchProvider: deepseek-official`. It resolves the same DEEPSEEK_API_KEY
+    # credential the Models page manages for chat, at each search; its Messages
+    # endpoint is separate from the chat-completions endpoint, so it takes its own
+    # base-URL override.
     - id: web-search-deepseek
       name: '@deepseek-ai/dsh-web-search-deepseek'
       config:

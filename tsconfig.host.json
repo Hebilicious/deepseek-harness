@@ -281,6 +281,7 @@
     { "path": "./packages/compaction/compaction-tool-result-pruner" },
     { "path": "./packages/web/web" },
     { "path": "./packages/web/web-search-exa" },
+    { "path": "./packages/web/web-search-exa-mcp" },
     { "path": "./packages/web/web-search-perplexity" },
     { "path": "./packages/web/web-search-deepseek" },
     { "path": "./packages/web/web-fetch-http" },
