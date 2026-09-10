@@ -226,6 +226,39 @@ function reasoningInfo(
   }
 }
 
+const OPENCODE_SESSION_HEADER = 'x-opencode-session'
+
+/**
+ * Hostname of one model endpoint, when the value is a usable absolute URL.
+ * @param baseUrl - the resolved model endpoint.
+ * @returns the lowercase hostname, or `undefined` when the value is absent or not a URL.
+ */
+function endpointHost(baseUrl: string | undefined): string | undefined {
+  if (baseUrl === undefined || baseUrl.length === 0) return undefined
+  try {
+    return new URL(baseUrl).hostname.toLowerCase()
+  } catch {
+    return undefined
+  }
+}
+
+/**
+ * Whether one route is an OpenCode (Go/Zen) gateway that requires
+ * {@link OPENCODE_SESSION_HEADER} on inference requests.
+ *
+ * Catalog routes are keyed `opencode` / `opencode-*`. A hand-declared route
+ * that still talks to `opencode.ai` needs the same header even when its
+ * provider id is a local name.
+ * @param provider - harness route key.
+ * @param baseUrl - resolved model endpoint.
+ * @returns true when this request must carry the OpenCode session header.
+ */
+export function targetsOpenCodeGateway(provider: string, baseUrl: string | undefined): boolean {
+  if (provider === 'opencode' || provider.startsWith('opencode-')) return true
+  const host = endpointHost(baseUrl)
+  return host === 'opencode.ai' || (host !== undefined && host.endsWith('.opencode.ai'))
+}
+
 /** Native header TypeErrors can echo credentials; other plugin errors own their public message. */
 function requestHeaderDiagnostic(error: unknown): string {
   if (error instanceof TypeError) {
@@ -236,7 +269,14 @@ function requestHeaderDiagnostic(error: unknown): string {
     : 'the contributing plugin threw a non-Error value; throw an Error with a safe diagnostic'
 }
 
-/** Prepare request-owned headers without allowing contributors to replace attribution. */
+/**
+ * Prepare request-owned headers without allowing contributors to replace
+ * attribution. OpenCode Go rejects inference without a stable
+ * `x-opencode-session` per conversation; a profile `headers` entry of that name
+ * cannot express a per-conversation id, so the live session value replaces it
+ * before contributors see the headers. pi-ai's `sessionId` stream option does
+ * not become that header on Chat Completions, so it is stamped here.
+ */
 function requestHeaders(
   configured: Readonly<Record<string, string>> | undefined,
   options: GenerateOptions<string>,
@@ -247,6 +287,10 @@ function requestHeaders(
     const initial = new Headers()
     // Profile aliases overwrite case-insensitively; the Headers constructor appends them.
     for (const [name, value] of Object.entries(configured ?? {})) initial.set(name, value)
+    const session = options.sessionId === undefined ? '' : String(options.sessionId)
+    if (session.length > 0 && targetsOpenCodeGateway(options.provider, baseURL)) {
+      initial.set(OPENCODE_SESSION_HEADER, session)
+    }
     const request: PiAiRequestHeaderContext = Object.freeze({
       provider: options.provider,
       model: options.model,
