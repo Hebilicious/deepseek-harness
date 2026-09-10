@@ -12,6 +12,7 @@ import type {
 import LlmRuntime, { createUserMessage, CONTEXT_WINDOW_EXCEEDED_CODE, LlmError, ReasoningEffortId, userAgent } from '@deepseek-ai/dsh-llm'
 import * as LlmPiAi from '@deepseek-ai/dsh-llm-pi-ai'
 import { PiAiAdapter } from '@deepseek-ai/dsh-llm-pi-ai'
+import { targetsOpenCodeGateway } from '../src/adapter.ts'
 import { MAX_TIMER_DELAY_MS } from '@deepseek-ai/dsh-timeout'
 import { getBuiltinModels } from '@earendil-works/pi-ai/providers/all'
 import { DEFAULT_MAX_REQUEST_IMAGE_BYTES, resolveProfiles } from '../src/config.ts'
@@ -121,7 +122,79 @@ describe('PiAiAdapter provider routing', () => {
     await assemble(ctx, { model: 'deepseek-v4-flash', messages: [] })
     expect(server.headers[0]?.['x-company']).toBe('private')
     expect(server.headers[0]?.['user-agent']).toBe(userAgent())
+    expect(server.headers[0]?.['x-opencode-session']).toBeUndefined()
   })
+
+  it.each([
+    ['opencode', 'http://127.0.0.1/v1', true],
+    ['opencode-go', 'http://127.0.0.1/v1', true],
+    ['acme', 'https://opencode.ai/zen/go/v1', true],
+    ['acme', 'https://go.opencode.ai/v1', true],
+    ['acme', 'https://api.deepseek.com', false],
+    ['acme', undefined, false],
+    ['acme', '', false],
+    ['acme', 'not a url', false],
+  ] as const)('targetsOpenCodeGateway(%j, %j) is %s', (provider, baseUrl, expected) => {
+    expect(targetsOpenCodeGateway(provider, baseUrl)).toBe(expected)
+  })
+
+  it('sends x-opencode-session from the harness conversation id on OpenCode Go', async () => {
+    const server = await mockServer([{ events: textEvents }])
+    const ctx = new Context()
+    await ctx.plugin(LlmRuntime)
+    await ctx.plugin(LlmPiAi, {
+      providers: { 'opencode-go': { apiKeyEnv: 'PI_TEST_KEY', baseURL: server.url } },
+    })
+    await assemble(ctx, {
+      provider: 'opencode-go',
+      model: 'deepseek-v4-flash',
+      messages: [],
+      sessionId: 'session-abc' as never,
+    })
+    expect(server.headers[0]?.['x-opencode-session']).toBe('session-abc')
+    expect(server.headers[0]?.['user-agent']).toBe(userAgent())
+  })
+
+  it('replaces a static OpenCode session header with the live conversation id', async () => {
+    const server = await mockServer([{ events: textEvents }])
+    const ctx = new Context()
+    await ctx.plugin(LlmRuntime)
+    await ctx.plugin(LlmPiAi, {
+      providers: {
+        'opencode-go': {
+          apiKeyEnv: 'PI_TEST_KEY',
+          baseURL: server.url,
+          headers: { 'X-Opencode-Session': 'fixed-across-sessions' },
+        },
+      },
+    })
+    await assemble(ctx, {
+      provider: 'opencode-go',
+      model: 'deepseek-v4-flash',
+      messages: [],
+      sessionId: 'session-live' as never,
+    })
+    expect(server.headers[0]?.['x-opencode-session']).toBe('session-live')
+  })
+
+  it.each([undefined, '' as never])(
+    'omits x-opencode-session when an OpenCode request session id is %j',
+    async (sessionId) => {
+      const server = await mockServer([{ events: textEvents }])
+      const ctx = new Context()
+      await ctx.plugin(LlmRuntime)
+      await ctx.plugin(LlmPiAi, {
+        providers: { 'opencode-go': { apiKeyEnv: 'PI_TEST_KEY', baseURL: server.url } },
+      })
+      await assemble(ctx, {
+        provider: 'opencode-go',
+        model: 'deepseek-v4-flash',
+        messages: [],
+        ...sessionId === undefined ? {} : { sessionId },
+      })
+      expect(server.headers[0]?.['x-opencode-session']).toBeUndefined()
+    },
+  )
 
   it('forwards common stream options and profile reasoning', async () => {
     const server = await mockServer([{ events: textEvents }])

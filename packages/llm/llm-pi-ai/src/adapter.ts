@@ -201,13 +201,75 @@ function reasoningInfo(
   }
 }
 
-/** Merge deployment headers while removing case-insensitive attribution collisions. */
-function requestHeaders(headers: Readonly<Record<string, string>> | undefined): Record<string, string> {
+const OPENCODE_SESSION_HEADER = 'x-opencode-session'
+
+/**
+ * Hostname of one model endpoint, when the value is a usable absolute URL.
+ * @param baseUrl - the resolved model endpoint.
+ * @returns the lowercase hostname, or `undefined` when the value is absent or not a URL.
+ */
+function endpointHost(baseUrl: string | undefined): string | undefined {
+  if (baseUrl === undefined || baseUrl.length === 0) return undefined
+  try {
+    return new URL(baseUrl).hostname.toLowerCase()
+  } catch {
+    return undefined
+  }
+}
+
+/**
+ * Whether one route is an OpenCode (Go/Zen) gateway that requires
+ * {@link OPENCODE_SESSION_HEADER} on inference requests.
+ *
+ * Catalog routes are keyed `opencode` / `opencode-*`. A hand-declared route
+ * that still talks to `opencode.ai` needs the same header even when its
+ * provider id is a local name.
+ * @param provider - harness route key.
+ * @param baseUrl - resolved model endpoint.
+ * @returns true when this request must carry the OpenCode session header.
+ */
+export function targetsOpenCodeGateway(provider: string, baseUrl: string | undefined): boolean {
+  if (provider === 'opencode' || provider.startsWith('opencode-')) return true
+  const host = endpointHost(baseUrl)
+  return host === 'opencode.ai' || (host !== undefined && host.endsWith('.opencode.ai'))
+}
+
+/** Route facts {@link requestHeaders} needs to stamp OpenCode session affinity. */
+interface RequestHeaderRoute {
+  /** Harness provider route key. */
+  provider: string
+  /** Resolved model endpoint. */
+  baseUrl: string | undefined
+  /** Harness conversation id, when the request names one. */
+  sessionId: string | undefined
+}
+
+/**
+ * Merge deployment headers while removing case-insensitive attribution
+ * collisions. OpenCode Go rejects inference without a stable
+ * `x-opencode-session` per conversation; a profile `headers` entry of that
+ * name cannot express a per-conversation id, so the live session value
+ * replaces it when the request names one.
+ */
+function requestHeaders(
+  headers: Readonly<Record<string, string>> | undefined,
+  route: RequestHeaderRoute,
+): Record<string, string> {
   const attribution = attributionHeaders()
   const reserved = new Set(Object.keys(attribution).map(name => name.toLowerCase()))
-  return {
+  const merged: Record<string, string> = {
     ...Object.fromEntries(Object.entries(headers ?? {}).filter(([name]) => !reserved.has(name.toLowerCase()))),
     ...attribution,
+  }
+  const session = route.sessionId
+  if (!targetsOpenCodeGateway(route.provider, route.baseUrl) || session === undefined || session.length === 0) {
+    return merged
+  }
+  return {
+    ...Object.fromEntries(
+      Object.entries(merged).filter(([name]) => name.toLowerCase() !== OPENCODE_SESSION_HEADER),
+    ),
+    [OPENCODE_SESSION_HEADER]: session,
   }
 }
 
@@ -384,8 +446,14 @@ export class PiAiAdapter extends LlmAdapter {
         ...options.sessionId === undefined ? {} : { sessionId: String(options.sessionId) },
         signal: watchdog.signal,
         // Profile headers are deployment-owned; attribution names are
-        // Harness-owned and therefore win collisions.
-        headers: requestHeaders(profile.headers),
+        // Harness-owned and therefore win collisions. OpenCode session
+        // affinity is stamped here because pi-ai's streamSimple option of the
+        // same name does not become `x-opencode-session` on Chat Completions.
+        headers: requestHeaders(profile.headers, {
+          provider: options.provider,
+          baseUrl: model.baseUrl,
+          sessionId: options.sessionId === undefined ? undefined : String(options.sessionId),
+        }),
       })
       const iterator = toStreamChunks(events, model.contextWindow, options.signal, model.id)[Symbol.asyncIterator]()
       let exhausted = false
