@@ -5,7 +5,7 @@ import SessionStore, { Session, SessionId } from '@deepseek-ai/dsh-session'
 import type { UserMessage } from '@deepseek-ai/dsh-session'
 import SessionProjectionRegistry from '@deepseek-ai/dsh-session-projection'
 import { describe, expect, it } from 'vitest'
-import { ReactLoopInbox } from '../src/inbox.ts'
+import { DurableAgentInbox } from '../src/inbox.ts'
 
 function unsupportedInbox(): Agent['inbox'] {
   const rejectMutation = (): never => {
@@ -43,14 +43,14 @@ async function inboxAgent(rawId: string): Promise<{
   ctx: Context
   session: Session
   agent: Agent
-  inbox: ReactLoopInbox
+  inbox: DurableAgentInbox
 }> {
   const ctx = new Context()
   await ctx.plugin(SessionStore)
   await ctx.plugin(SessionProjectionRegistry)
   const session = ctx.sessions.create(SessionId(rawId))
   const agent = stubAgent(rawId, { ctx, session })
-  const inbox = new ReactLoopInbox(ctx.sessionProjections, session, agentEvents(ctx, agent))
+  const inbox = new DurableAgentInbox(ctx.sessionProjections, session, agentEvents(ctx, agent))
   Object.assign(agent, { inbox })
   return { ctx, session, agent, inbox }
 }
@@ -65,7 +65,7 @@ async function reconstructPersistedInbox(
   populate(session)
   await ctx.plugin(SessionProjectionRegistry)
   const agent = stubAgent(rawId, { ctx, session })
-  const inbox = new ReactLoopInbox(ctx.sessionProjections, session, agentEvents(ctx, agent))
+  const inbox = new DurableAgentInbox(ctx.sessionProjections, session, agentEvents(ctx, agent))
   try {
     void inbox.nextTurn
   } catch (error: unknown) {
@@ -75,7 +75,7 @@ async function reconstructPersistedInbox(
   throw new Error('persisted inbox reconstruction unexpectedly succeeded')
 }
 
-describe('ReactLoopInbox', () => {
+describe('DurableAgentInbox', () => {
   it('registers the durable projection in its constructor', async () => {
     const ctx = new Context()
     await ctx.plugin(SessionStore)
@@ -90,8 +90,8 @@ describe('ReactLoopInbox', () => {
     })
     const agent = stubAgent('inbox-projection', { ctx, session })
     const dispatch = agentEvents(ctx, agent)
-    const first = new ReactLoopInbox(ctx.sessionProjections, session, dispatch)
-    const second = new ReactLoopInbox(ctx.sessionProjections, session, dispatch)
+    const first = new DurableAgentInbox(ctx.sessionProjections, session, dispatch)
+    const second = new DurableAgentInbox(ctx.sessionProjections, session, dispatch)
 
     expect(first.nextTurn).toEqual([pending])
     expect(second.nextTurn).toEqual([pending])
@@ -132,7 +132,7 @@ describe('ReactLoopInbox', () => {
     await ctx.plugin(SessionProjectionRegistry)
     const parent = ctx.sessions.create(SessionId('inbox-fork-parent'))
     const parentAgent = stubAgent('inbox-fork-parent', { ctx, session: parent })
-    const parentInbox = new ReactLoopInbox(ctx.sessionProjections, parent, agentEvents(ctx, parentAgent))
+    const parentInbox = new DurableAgentInbox(ctx.sessionProjections, parent, agentEvents(ctx, parentAgent))
     const inherited = createUserMessage({
       content: [{ type: 'text', text: 'parent pending' }],
       source: { kind: 'user' },
@@ -140,7 +140,7 @@ describe('ReactLoopInbox', () => {
     parentInbox.append('next-turn', inherited)
     const child = ctx.sessions.fork(parent, undefined, SessionId('inbox-fork-child'))
     const childAgent = stubAgent('inbox-fork-child', { ctx, session: child })
-    const childInbox = new ReactLoopInbox(ctx.sessionProjections, child, agentEvents(ctx, childAgent))
+    const childInbox = new DurableAgentInbox(ctx.sessionProjections, child, agentEvents(ctx, childAgent))
 
     expect(child.inheritedEventCount).toBe(parent.snapshotEvents().length)
     expect(childInbox.nextTurn).toEqual([inherited])

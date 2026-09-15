@@ -27,28 +27,22 @@
       "path": "../../session/session-persistence"
     },
     {
-      "path": "../../core/system-prompt"
-    },
-    {
-      "path": "../../core/tools"
-    },
-    {
       "path": "../../core/agent"
-    },
-    {
-      "path": "../../core/agent-external"
     },
     {
       "path": "../../core/scope"
     },
     {
-      "path": "../../settings/settings"
-    },
-    {
-      "path": "../../runtime-diagnostics/invariants"
-    },
-    {
       "path": "../../session/session-projection"
+    },
+    {
+      "path": "../../subprocess/subprocess"
+    },
+    {
+      "path": "../../util/values"
+    },
+    {
+      "path": "../../util/brand"
     }
   ]
 }

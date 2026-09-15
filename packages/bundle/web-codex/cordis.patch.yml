@@ -1,0 +1,40 @@
+# The dsh-web-codex bundle patch: the browser surface driven by a shared
+# `codex app-server` process instead of the in-process agent loop. Applied
+# after dsh-base and dsh-web-app; the profile's own cordis.patch.yml and any
+# --patch overlays still come after.
+#
+# The Codex driver keeps Codex's own loop, prompt, tools, MCP servers, and
+# config. DSH stays the shell: session create/resume, transcript, approvals,
+# notifications, model picker.
+
+# `ctx.agents.setFactory` accepts exactly one factory: the Codex driver mounts
+# it, so the base's in-process agent loop leaves the composition.
+- id: agent-loop
+  disabled: true
+
+# New sessions carry no model until the picker or a `model/selection` chooses
+# one; the driver then omits `model` on thread/turn calls and Codex applies
+# the account default.
+- id: agent-default-model
+  config:
+    provider: codex
+    model: ''
+
+# The first-prompt title provider resolves the session's logged route, which
+# is the catalog-only `codex` adapter that serves no streams. Pin the title
+# request to the DeepSeek route the base layer mounts.
+- id: session-title-llm
+  config:
+    provider: deepseek-official
+    model: deepseek-flash
+    targetWords: 5
+    targetCjkCharacters: 10
+    maxInputBytes: 4096
+    maxOutputTokens: 64
+    timeoutMs: 60000
+
+- insert:
+    # One shared app-server per profile; every session binds its own Codex
+    # thread on it. `codexHome` owns auth, config.toml, MCP, and hooks.
+    - id: agent-codex
+      name: '@deepseek-ai/dsh-agent-codex'

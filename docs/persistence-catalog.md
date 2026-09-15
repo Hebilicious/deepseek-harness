@@ -110,6 +110,48 @@ Sources: [`packages/core/session/src/types.ts:404`](../packages/core/session/src
 
 Source: [`packages/core/agent/src/types.ts:87`](../packages/core/agent/src/types.ts)
 
+### `agent-acp/*`
+
+<a id="agent-acpsession--log-only"></a>
+
+#### `agent-acp/session` — log-only
+
+```ts persistence-catalog
+/**
+ * The ACP session this session is bound to. Appended once by the driver
+ * after `session/new`, inside the pre-publication suffix; resume reads
+ * the fold to call `session/load` on the same identity. Log-only: the
+ * foreign session id is not model-visible content.
+ */
+'agent-acp/session': {
+  /** Opaque agent-issued ACP session id returned by `session/new`. */
+  sessionId: string
+}
+```
+
+Source: [`packages/core/agent-acp/src/session-state.ts:22`](../packages/core/agent-acp/src/session-state.ts)
+
+### `agent-codex/*`
+
+<a id="agent-codexthread--log-only"></a>
+
+#### `agent-codex/thread` — log-only
+
+```ts persistence-catalog
+/**
+ * The Codex thread this session is bound to. Appended once by the driver
+ * after `thread/start`, inside the pre-publication suffix; resume reads
+ * the fold to call `thread/resume` on the same identity. Log-only: the
+ * foreign thread id is not model-visible content.
+ */
+'agent-codex/thread': {
+  /** Opaque Codex thread id (UUIDv7) returned by `thread/start`. */
+  threadId: string
+}
+```
+
+Source: [`packages/core/agent-codex/src/thread-state.ts:22`](../packages/core/agent-codex/src/thread-state.ts)
+
 ### `agent-preset/*`
 
 <a id="agent-presetselected--log-only"></a>

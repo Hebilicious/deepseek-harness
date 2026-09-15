@@ -1,0 +1,130 @@
+/**
+ * REAL-composition proof: a test-only `cordis.yml` boots the ACP driver
+ * through the vendored Loader — session store, projections, agent registry,
+ * subprocess provider, LLM runtime, JSONL persistence, and the harness
+ * plugin — then a created session runs a real prompt against the scripted
+ * `devin acp` child and lands durable assistant output.
+ */
+
+import { existsSync } from 'node:fs'
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { fileURLToPath, pathToFileURL } from 'node:url'
+import { afterEach, describe, expect, it } from 'vitest'
+import { Context } from '@deepseek-ai/cordis'
+import Loader from '@deepseek-ai/cordis-plugin-loader'
+import Include from '@deepseek-ai/cordis-plugin-include'
+import AgentRegistry from '@deepseek-ai/dsh-agent'
+import LlmRuntime from '@deepseek-ai/dsh-llm'
+import SessionProjectionRegistry from '@deepseek-ai/dsh-session-projection'
+import JsonlSessionPersistence from '@deepseek-ai/dsh-session-persistence-jsonl'
+import SessionStore, { SessionId } from '@deepseek-ai/dsh-session'
+import { createUserMessage } from '@deepseek-ai/dsh-llm'
+import LocalSubprocessRuntime from '@deepseek-ai/dsh-subprocess-local'
+import TypertRegistry from '@deepseek-ai/dsh-typert-registry'
+import { AcpHarness } from '../src/index.ts'
+
+const mockAgent = fileURLToPath(new URL('./mock-acp-agent.ts', import.meta.url))
+
+/** Quote one value for single-line YAML interpolation. */
+function yamlString(value: string): string {
+  return JSON.stringify(value)
+}
+
+let root: string | undefined
+let context: Context | undefined
+
+afterEach(async () => {
+  await context?.fiber.dispose()
+  context = undefined
+  if (root !== undefined) await rm(root, { recursive: true, force: true })
+  root = undefined
+})
+
+describe('agent-acp real Loader composition', () => {
+  it('boots the shipped plugin shape and runs a session over the mock child', async () => {
+    root = await mkdtemp(join(tmpdir(), 'agent-acp-loader-'))
+    const recordFile = join(root, 'record.jsonl')
+    const configPath = join(root, 'cordis.yml')
+    const yml = [
+      "- name: '@deepseek-ai/dsh-session'",
+      "- name: '@deepseek-ai/dsh-session-projection'",
+      "- name: '@deepseek-ai/dsh-agent'",
+      "- name: '@deepseek-ai/dsh-subprocess-local'",
+      "- name: '@deepseek-ai/dsh-llm'",
+      "- name: '@deepseek-ai/dsh-typert-registry'",
+      "- name: '@deepseek-ai/dsh-session-persistence-jsonl'",
+      '  config:',
+      `    root: ${yamlString(join(root, 'sessions'))}`,
+      "- name: '@deepseek-ai/dsh-agent-acp'",
+      '  config:',
+      `    executable: ${yamlString(process.execPath)}`,
+      `    args: [${yamlString(mockAgent)}, acp]`,
+      `    modelsArgs: [${yamlString(mockAgent)}, models, list, '--format', json]`,
+      `    authStatusArgs: [${yamlString(mockAgent)}, auth, status]`,
+      `    authLogoutArgs: [${yamlString(mockAgent)}, auth, logout]`,
+      '    env:',
+      `      MOCK_RECORD_FILE: ${yamlString(recordFile)}`,
+      "      MOCK_TEXT: 'composed answer'",
+      '',
+    ]
+    await writeFile(configPath, yml.join('\n'))
+
+    context = new Context()
+    context.baseUrl = pathToFileURL(root).href + '/'
+    await context.plugin(Loader)
+    context.loader.builtins.include = Include
+    const modules = new Map<string, unknown>([
+      ['@deepseek-ai/dsh-session', SessionStore],
+      ['@deepseek-ai/dsh-session-projection', SessionProjectionRegistry],
+      ['@deepseek-ai/dsh-agent', AgentRegistry],
+      ['@deepseek-ai/dsh-subprocess-local', LocalSubprocessRuntime],
+      ['@deepseek-ai/dsh-llm', LlmRuntime],
+      ['@deepseek-ai/dsh-typert-registry', TypertRegistry],
+      ['@deepseek-ai/dsh-session-persistence-jsonl', JsonlSessionPersistence],
+      ['@deepseek-ai/dsh-agent-acp', AcpHarness],
+    ])
+    context.loader.internal = {
+      version: 'v2',
+      async import(specifier: string) {
+        if (!modules.has(specifier)) throw new Error(`unexpected Loader import: ${specifier}`)
+        return modules.get(specifier)
+      },
+    } as unknown as NonNullable<typeof context.loader.internal>
+    await context.loader.create({
+      name: 'cordis:include',
+      config: { path: pathToFileURL(configPath).href },
+    })
+    await context.loader.await()
+
+    const unloaded = [...context.loader.entries()]
+      .filter(entry => entry.fiber === undefined && !entry.disabled)
+      .map(entry => entry.options.name)
+    expect(unloaded).toEqual([])
+
+    const { agent } = await context.agents.create({
+      sessionId: SessionId('composed-acp'),
+      agentOptions: {},
+    })
+    agent.followup(createUserMessage({
+      content: [{ type: 'text', text: 'say hi' }],
+      source: { kind: 'user' },
+    }))
+    await agent.whenIdle()
+
+    const log = agent.session.snapshotEvents()
+    const assistant = log.find(event => event.type === 'assistant/message')
+    expect(assistant).toBeDefined()
+    expect(JSON.stringify(assistant!.data)).toContain('composed answer')
+    expect(log.some(event => event.type === 'agent-acp/session')).toBe(true)
+
+    expect(existsSync(recordFile)).toBe(true)
+    const calls = (await readFile(recordFile, 'utf8'))
+      .trim().split('\n')
+      .map(line => (JSON.parse(line) as { method: string }).method)
+    expect(calls).toContain('initialize')
+    expect(calls).toContain('session/new')
+    expect(calls).toContain('session/prompt')
+  }, 30_000)
+})

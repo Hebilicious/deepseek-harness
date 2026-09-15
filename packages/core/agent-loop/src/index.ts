@@ -5,10 +5,9 @@
  * @module @deepseek-ai/dsh-agent-loop
  */
 
-import { Context, FiberState, Service } from '@deepseek-ai/cordis'
+import { Context, Service } from '@deepseek-ai/cordis'
 import { randomUUID } from 'node:crypto'
 import z from '@deepseek-ai/schemastery'
-import { z as zod } from 'zod'
 import { brandString } from '@deepseek-ai/dsh-brand'
 import { emitAgentEvent } from '@deepseek-ai/dsh-agent'
 import type {
@@ -20,171 +19,27 @@ import type {
   CreateAgentOptions,
   ResumeAgentOptions,
   SessionStartSource,
-  TurnBoundaryProjection,
 } from '@deepseek-ai/dsh-agent'
+import {
+  assertAgentOptions,
+  FactoryOwnership,
+  raceAbort,
+  raceAbortCall,
+  turnBoundaryProjectionDefinition,
+} from '@deepseek-ai/dsh-agent-external'
 import { errorChain, ReasoningEffortId } from '@deepseek-ai/dsh-llm'
 import type {} from '@deepseek-ai/dsh-settings'
-import { interruptedTurnClosers, SessionLogOffset, SessionPreparation, SessionSeq } from '@deepseek-ai/dsh-session'
+import { interruptedTurnClosers, SessionLogOffset, SessionPreparation } from '@deepseek-ai/dsh-session'
 import type { Session, SessionHeader, SessionId } from '@deepseek-ai/dsh-session'
 import type {} from '@deepseek-ai/dsh-system-prompt'
 import type {} from '@deepseek-ai/dsh-tools'
 import type {} from '@deepseek-ai/dsh-session-projection'
-import type { ProjectionDefinition } from '@deepseek-ai/dsh-session-projection'
 import { SessionPersistenceNotFoundError } from '@deepseek-ai/dsh-session-persistence'
 import type { SessionHandle, SessionPersistence } from '@deepseek-ai/dsh-session-persistence'
 import { ReactLoopAgent } from './agent.ts'
 import { DEFAULT_MAX_PARALLEL_TOOL_CALLS } from './constants.ts'
 
-/** Fiber states that cannot own or serve a new lifecycle. */
-const INACTIVE_STATES: ReadonlySet<FiberState> = new Set([
-  FiberState.UNLOADING,
-  FiberState.DISPOSED,
-  FiberState.FAILED,
-])
-
-const turnBoundaryProjectionSchema: zod.ZodType<TurnBoundaryProjection> = zod.object({
-  openTurnStartSeq: zod.number().int().nonnegative().transform(SessionSeq).nullable(),
-  lastStepStartSeq: zod.number().int().nonnegative().transform(SessionSeq).nullable(),
-  lastStepBoundary: zod.object({
-    kind: zod.union([zod.literal('start'), zod.literal('end')]),
-    seq: zod.number().int().nonnegative().transform(SessionSeq),
-  }).nullable(),
-  lastTurn: zod.number().int().nonnegative(),
-})
-
-/** Host projection of agent turn and step boundaries. */
-export const turnBoundaryProjectionDefinition = {
-  key: 'turnBoundary',
-  stateVersion: 2,
-  stateSchema: turnBoundaryProjectionSchema,
-  init: () => ({
-    openTurnStartSeq: null,
-    lastStepStartSeq: null,
-    lastStepBoundary: null,
-    lastTurn: 0,
-  }),
-  apply: (state, event) => {
-    switch (event.type) {
-      case 'turn/start':
-        return {
-          ...state,
-          openTurnStartSeq: event.seq,
-          lastTurn: event.data.turn,
-        }
-      case 'turn/end':
-        return {
-          ...state,
-          openTurnStartSeq: null,
-        }
-      case 'step/start':
-        return {
-          ...state,
-          lastStepStartSeq: event.seq,
-          lastStepBoundary: { kind: 'start', seq: event.seq },
-        }
-      case 'step/end':
-        return {
-          ...state,
-          lastStepBoundary: { kind: 'end', seq: event.seq },
-        }
-      default:
-        return state
-    }
-  },
-} satisfies ProjectionDefinition<'turnBoundary', TurnBoundaryProjection>
-
-/** Factory-level ownership: live agent teardowns plus config startup work. */
-class FactoryOwnership {
-  private accepting = true
-  private readonly teardown = new AbortController()
-  private readonly inactive = Promise.withResolvers<void>()
-  private readonly liveAgents = new Set<() => Promise<void>>()
-  private startupTasks = new Set<Promise<void>>()
-
-  constructor(private readonly fiber: Context['fiber']) {}
-
-  /** Aborts (reason: `agent loop is not active` error) when factory teardown begins. */
-  get signal(): AbortSignal {
-    return this.teardown.signal
-  }
-
-  isActive(): boolean {
-    return this.accepting && !INACTIVE_STATES.has(this.fiber.state)
-  }
-
-  /** Track one live agent's shared teardown until it has run. */
-  track(dispose: () => Promise<void>): () => void {
-    this.liveAgents.add(dispose)
-    return () => { this.liveAgents.delete(dispose) }
-  }
-
-  /** Join config startup work that begins before an agent exists. */
-  trackStartup(job: Promise<void>): void {
-    this.startupTasks.add(job)
-    const forget = () => { this.startupTasks.delete(job) }
-    void job.then(forget, forget)
-  }
-
-  /** Join one public create/resume continuation; factory dispose awaits its settlement. */
-  trackWrapper(job: Promise<unknown>): void {
-    this.trackStartup(job.then(() => undefined, () => undefined))
-  }
-
-  /** Resolve `task`, or stop waiting when factory teardown begins. */
-  async waitWhileActive(job: Promise<void>): Promise<void> {
-    await Promise.race([job, this.inactive.promise])
-  }
-
-  async dispose(): Promise<void> {
-    this.accepting = false
-    this.teardown.abort(new Error('agent loop is not active'))
-    this.inactive.resolve()
-    await Promise.all([
-      ...[...this.liveAgents].map(dispose => dispose()),
-      ...this.startupTasks,
-    ])
-  }
-}
-
-/** Await `operation`, or throw the signal's reason as soon as it aborts. */
-async function raceAbort<T>(operation: PromiseLike<T> | T, signal: AbortSignal, id: SessionId): Promise<T> {
-  const toAbortError = (): Error => signal.reason instanceof Error
-    ? signal.reason
-    : new Error(`agent "${id}" creation aborted`, { cause: signal.reason })
-  if (signal.aborted) throw toAbortError()
-  const aborted = Promise.withResolvers<never>()
-  const listener = (): void => { aborted.reject(toAbortError()) }
-  signal.addEventListener('abort', listener, { once: true })
-  try {
-    return await Promise.race([Promise.resolve(operation), aborted.promise])
-  } finally {
-    signal.removeEventListener('abort', listener)
-  }
-}
-
-/** Start an abortable operation and release a value that arrives after cancellation. */
-async function raceAbortCall<T>(
-  operation: () => PromiseLike<T> | T,
-  signal: AbortSignal,
-  id: SessionId,
-  releaseAbandoned?: (value: T) => void,
-): Promise<T> {
-  if (signal.aborted) {
-    throw signal.reason instanceof Error
-      ? signal.reason
-      : new Error(`agent "${id}" creation aborted`, { cause: signal.reason })
-  }
-  const pending = Promise.resolve().then(operation)
-  try {
-    return await raceAbort(pending, signal, id)
-  } catch (error: unknown) {
-    // oxlint-disable-next-line typescript/no-unnecessary-condition -- the signal can abort while the operation is awaited.
-    if (signal.aborted && releaseAbandoned !== undefined) {
-      void pending.then(releaseAbandoned, () => undefined)
-    }
-    throw error
-  }
-}
+export { turnBoundaryProjectionDefinition }
 
 /** Resolve the deployment-wide scheduler cap at the owning config boundary. */
 function resolveMaxParallelToolCalls(value: number | undefined): number {
@@ -193,14 +48,6 @@ function resolveMaxParallelToolCalls(value: number | undefined): number {
     throw new Error('maxParallelToolCalls must be a positive integer')
   }
   return maxParallelToolCalls
-}
-
-/** Reject an output-token cap that cannot be represented exactly on the request wire. */
-function assertAgentOptions(options: AgentOptions): void {
-  if (options.maxTokens !== undefined
-    && (!Number.isSafeInteger(options.maxTokens) || options.maxTokens <= 0)) {
-    throw new TypeError('agent maxTokens must be a positive safe integer')
-  }
 }
 
 /** One session's owned write handle plus the count of events already stored through it. */
@@ -414,7 +261,7 @@ export class AgentLoop extends Service implements AgentFactory {
     // Register only after every config validation above has passed, so a
     // rejected constructor leaves no projection unit behind.
     ctx.sessionProjections.register(turnBoundaryProjectionDefinition)
-    this.ownership = new FactoryOwnership(ctx.fiber)
+    this.ownership = new FactoryOwnership(ctx.fiber, 'agent loop')
     this.runtime = { ctx }
     ctx.effect(() => () => this.ownership.dispose(), 'agentLoop.transactions()')
     ctx.effect(() => ctx.agents.setFactory(this), 'agentLoop.setFactory()')
@@ -748,7 +595,7 @@ export class AgentLoop extends Service implements AgentFactory {
    */
   private async appendUnstoredSuffix(stored: StoredSession | undefined, session: Session): Promise<void> {
     if (stored === undefined) return
-    // oxlint-disable-next-line typescript/no-deprecated -- Existing Session history read; migration deferred.
+    // Existing Session history read; migration deferred.
     const suffix = session.snapshotEvents(SessionLogOffset(stored.storedCount))
     if (suffix.length > 0) await stored.handle.append(suffix)
     // Advance by what was stored, not to `session.seq`: an event appended

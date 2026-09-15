@@ -1,0 +1,41 @@
+# The dsh-web-acp bundle patch: the browser surface driven by a shared
+# `devin acp` process instead of the in-process agent loop. Applied after
+# dsh-base and dsh-web-app; the profile's own cordis.patch.yml and any
+# --patch overlays still come after.
+#
+# The ACP driver keeps Devin's own loop, prompt, tools, MCP servers, and
+# config — ACP carries prompts, session updates, permission requests, and
+# control only. DSH stays the shell: session create/resume, transcript,
+# approvals, notifications, model picker.
+
+# `ctx.agents.setFactory` accepts exactly one factory: the ACP driver mounts
+# it, so the base's in-process agent loop leaves the composition.
+- id: agent-loop
+  disabled: true
+
+# New sessions carry no model until the picker or a `model/selection` chooses
+# one; the driver then leaves the session's `model` config option untouched
+# and Devin applies its own default.
+- id: agent-default-model
+  config:
+    provider: devin
+    model: ''
+
+# The first-prompt title provider resolves the session's logged route, which
+# is the catalog-only `devin` adapter that serves no streams. Pin the title
+# request to the DeepSeek route the base layer mounts.
+- id: session-title-llm
+  config:
+    provider: deepseek-official
+    model: deepseek-flash
+    targetWords: 5
+    targetCjkCharacters: 10
+    maxInputBytes: 4096
+    maxOutputTokens: 64
+    timeoutMs: 60000
+
+- insert:
+    # One shared `devin acp` process per profile; every session binds its own
+    # ACP session on it. Devin's own data directory owns auth and config.
+    - id: agent-acp
+      name: '@deepseek-ai/dsh-agent-acp'
