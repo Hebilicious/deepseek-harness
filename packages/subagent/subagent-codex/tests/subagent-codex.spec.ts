@@ -576,7 +576,7 @@ describe('task admission and package contracts', () => {
     await ctx.fiber.dispose()
   })
 
-  it('accepts an optional non-empty model and the three fixed permission modes', () => {
+  it('accepts an optional non-empty model and reasoning effort, and the three fixed permission modes', () => {
     expect(codex.Config({}).providerName).toBe('codex')
     expect(codex.Config({}).model).toBeUndefined()
     expect(codex.Config({ providerName: 'codex-safe' }).providerName)
@@ -584,6 +584,9 @@ describe('task admission and package contracts', () => {
     expect(() => codex.Config({ providerName: '' })).toThrow()
     expect(codex.Config({ model: 'gpt-codex' }).model).toBe('gpt-codex')
     expect(() => codex.Config({ model: '' })).toThrow()
+    expect(codex.Config({}).reasoningEffort).toBeUndefined()
+    expect(codex.Config({ reasoningEffort: 'max' }).reasoningEffort).toBe('max')
+    expect(() => codex.Config({ reasoningEffort: '' })).toThrow()
     expect(codex.Config({}).permissionMode).toBe(DEFAULT_CODEX_PERMISSION_MODE)
     for (const permissionMode of CODEX_PERMISSION_MODES) {
       expect(codex.Config({ permissionMode }).permissionMode).toBe(permissionMode)
@@ -618,6 +621,37 @@ describe('task admission and package contracts', () => {
     )
     await expect(run.result).resolves.toEqual({
       output: [{ type: 'text', text: 'native model answer' }],
+      stopReason: 'completed',
+    })
+    await run.dispose()
+    await ctx.fiber.dispose()
+  })
+
+  it('sends the configured reasoning effort on the run turn', async () => {
+    const ctx = new Context()
+    await ctx.plugin(SessionProjectionRegistry)
+    await ctx.plugin(SubagentRuntime)
+    await ctx.plugin(LocalSubprocessRuntime)
+    const child = fakeChild()
+    vi.spyOn(ctx.subprocess, 'spawn').mockReturnValue(child.handle)
+    codex.apply(ctx, { env: {}, disposeGraceMs: 3_000, reasoningEffort: 'max' })
+    const starting = ctx.subagents.start('codex', request())
+    const initialize = await child.peer.nextMethod('initialize')
+    child.peer.respond(initialize, { userAgent: 'codex-cli 0.153.4' })
+    await child.peer.nextMethod('initialized')
+    const threadStart = await child.peer.nextMethod('thread/start')
+    expect(threadStart.params).not.toHaveProperty('effort')
+    child.peer.respond(threadStart, { thread: { id: 'thread-1', ephemeral: true } })
+    const run = await starting
+    const turnStart = await child.peer.nextMethod('turn/start')
+    expect(turnStart.params).toMatchObject({ effort: 'max' })
+    child.peer.send(
+      { id: turnStart.id, result: { turn: { id: 'turn-1' } } },
+      agentMessage('effort answer', 'final_answer'),
+      turnCompleted('completed'),
+    )
+    await expect(run.result).resolves.toEqual({
+      output: [{ type: 'text', text: 'effort answer' }],
       stopReason: 'completed',
     })
     await run.dispose()
