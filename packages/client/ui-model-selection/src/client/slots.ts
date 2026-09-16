@@ -7,6 +7,7 @@
 import type { ModelSelection } from '@deepseek-ai/dsh-api-remotes/client'
 import type { SnapshotStore } from '@deepseek-ai/dsh-client-store'
 import type { ModelDirectoryState } from './directory.ts'
+import type { ModelPinsState } from './pins.ts'
 
 /** Injected business face of the composer model seat. */
 export interface ModelSelectInjected {
@@ -14,6 +15,10 @@ export interface ModelSelectInjected {
   available: boolean
   /** The session's shared directory store (same instance the /model popup reads). */
   directory: SnapshotStore<ModelDirectoryState>
+  hooks: {
+    /** Browser-wide pinned models; the renderer binds this source as `useModelPins`. */
+    modelPins: SnapshotStore<ModelPinsState>
+  }
   /** Ensure the shared advisory catalog is loaded (errors land on the store). */
   load: () => void
   /**
@@ -22,4 +27,10 @@ export interface ModelSelectInjected {
    * @returns whether the host accepted the selection.
    */
   select: (selection: ModelSelection) => Promise<boolean>
+  /**
+   * Add or remove one model's pin.
+   * @param providerId - the provider group id.
+   * @param modelId - the provider-owned model id.
+   */
+  togglePin: (providerId: string, modelId: string) => void
 }

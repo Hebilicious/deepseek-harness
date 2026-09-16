@@ -1,0 +1,32 @@
+- menu "模型与推理等级":
+  - img
+  - searchbox "搜索模型"
+  - group "已固定":
+    - text: 已固定
+    - menuitemradio "Acme Think Pro，提供方 Acme Gateway": Acme Think Pro Acme Gateway
+    - button "取消固定 Acme Think Pro" [pressed]:
+      - img
+  - group "DeepSeek":
+    - text: DeepSeek
+    - menuitemradio "DeepSeek-V4-Flash"
+    - button "固定 DeepSeek-V4-Flash":
+      - img
+    - menuitemradio "DeepSeek-V4-Flash-Vision-Exp"
+    - button "固定 DeepSeek-V4-Flash-Vision-Exp":
+      - img
+  - group "Acme Gateway":
+    - text: Acme Gateway
+    - menuitemradio "Acme Think" [checked]:
+      - text: Acme Think
+      - img
+    - button "固定 Acme Think":
+      - img
+    - menuitemradio "Acme Think Pro"
+    - button "取消固定 Acme Think Pro" [pressed]:
+      - img
+    - menuitemradio "Acme Swift"
+    - button "固定 Acme Swift":
+      - img
+    - menuitemradio "Acme Vision"
+    - button "固定 Acme Vision":
+      - img
