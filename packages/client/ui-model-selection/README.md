@@ -9,7 +9,7 @@ English | [中文](README.zh.md)
 
 ## Summary
 
-The Web GUI lets users switch the model and reasoning effort for an existing session through either the `/model` popup or the composer's model control. Both surfaces present the same provider-grouped choices, and the selected model determines the available effort names and default. A complete selection applies to the next request; a running step keeps the model and effort it started with. If no adapter can serve the session's route, the composer remains disabled until routing becomes available.
+The Web GUI lets users switch the model and reasoning effort for an existing session through either the `/model` popup or the composer's model control. Both surfaces present the same provider-grouped choices, and the selected model determines the available effort names and default. The composer's list filters as the user types and keeps pinned favourites in a section of their own. A complete selection applies to the next request; a running step keeps the model and effort it started with. If no adapter can serve the session's route, the composer remains disabled until routing becomes available.
 
 ## Table of Contents
 
@@ -31,6 +31,12 @@ Mount this plugin alongside `ui-conversation` and the commands package; the comp
 
 Models stay grouped by provider. The composer menu shows model and effort names only. The `/model` popup shows provider names and catalog descriptions; it localizes the two built-in DeepSeek descriptions and leaves external provider descriptions verbatim. The popup applies the selected model's default effort; the composer can then choose any advertised effort. An adapter without reasoning metadata leaves the Effort row absent; there is no arbitrary effort input.
 
+### Filter and pinned models
+
+The composer's model list opens with a filter field focused: typing narrows the rows as they are typed, Escape clears the filter before it backs out of the list, and Arrow Up/Down leave the field for the rows. A row matches on its display name, its provider-owned id, and its provider name, all case-insensitively, so `v4-pro` and a provider name both work; catalog descriptions do not participate.
+
+Every row carries a favourite toggle. A pinned model is listed again in a Pinned section above the provider groups, in the order it was pinned and labelled with the provider that serves it, while its provider group stays complete. Pins are a browser-wide preference in this browser's `localStorage` under `dsh.model-pins`, independent of sessions and of the model selection itself: a pinned model the catalog no longer serves is simply absent until the catalog serves it again.
+
 ### Unroutable sessions
 
 When the Host reports that no adapter serves the session's route, this plugin raises a composer block and the input goes inert with its own copy; recovering clears it without a reload. A `null` before the first load or after one failed never blocks, and catalog membership never blocks either — a route serving a model it does not advertise is missing from the groups yet usable.
@@ -44,6 +50,8 @@ When the Host reports that no adapter serves the session's route, this plugin ra
 <summary>Implementation internals — click to expand</summary>
 
 Two entries over ONE per-session directory owned by `ModelDirectoryResolver` (`ctx.modelDirectories`): the `/model` popupSelect contribution (registered through `ctx.commandUi`) and the composer's named `conversation.input.model` seat both load the session's advisory directory through `session.models` and submit through `session.selectModel` via the same `ModelDirectory` instance, so a switch made in either entry is what the other shows next. Directory loads and selections share a generation counter so an older response never overwrites a newer one; a connection reset drops every resident projection and repulls the Host-restored selection before display. Directories are per-session, resolved lazily, and disposed with the session scope; addressed subagent sessions expose neither entry. Every resident directory refetches directly on forwarded `llm/adapters-updated` and `settings/document-updated` owner events.
+
+The composer seat's pins are the one browser-wide state here: `apply` creates a single pin store, hands it to every session's seat through the inject `hooks` compartment (bound as `useModelPins`), and writes through the `togglePin` verb, so the section is the same everywhere and survives reloads through `localStorage`. The filter is local to one opening of the menu and never reaches a store. `pins.ts` owns the stored format and validates it on read, because the store engine's own `persist` option installs whatever JSON the browser holds.
 
 </details>
 
@@ -80,6 +88,7 @@ These limits define the current model surface. They are current package constrai
 - **No create-time or addressed-subagent selection** — both entries require an existing ordinary session's Agent; there is no draft-phase model choice to fold into session creation, and subagent continuation deliberately exposes no independent model-selection contract.
 - **Directory names are presentation-only** — selection and persistence use provider/model/effort ids; a provider whose catalog or exact-model metadata lookup fails lists as an unselectable failure row until reload.
 - **No arbitrary effort input** — the composer offers only the exact model's adapter-advertised levels; an adapter without reasoning metadata leaves the Effort row absent.
+- **Pins do not travel** — the pin list is one browser's `localStorage` entry, so another browser, profile, or device starts unpinned and no setting or session record carries it.
 
 <a id="dev-note"></a>
 ### Dev Note
@@ -91,4 +100,4 @@ None.
 
 </details>
 
-**Runtime invariant:** No companion is published. The plugin registers a single command contribution, and the HMR-safety spec proves that the registration is disposed correctly. The plugin emits no Cordis events and owns no cross-plugin mutable state.
+**Runtime invariant:** No companion is published. The plugin registers a single command contribution, and the HMR-safety spec proves that the registration is disposed correctly. The plugin emits no Cordis events and owns no cross-plugin mutable state; its browser-wide pin store is private to this plugin.
