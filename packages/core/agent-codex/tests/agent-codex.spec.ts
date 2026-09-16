@@ -239,9 +239,9 @@ describe('agent-codex driver', () => {
     expect(calls).toHaveLength(1)
     const results = eventsOf(agent, 'tool/result')
     expect(results).toHaveLength(1)
-    const block = (results[0]!.data['message'] as {
-      content: { type: string; isError?: boolean; content?: { text?: string }[] }[]
-    }).content[0]!
+    const block = (results[0]!.data as {
+      message: { content: { type: string; isError?: boolean; content?: { text?: string }[] }[] }
+    }).message.content[0]!
     expect(block.isError).toBe(false)
     expect(JSON.stringify(block.content)).toContain('tool output')
   }, TEST_TIMEOUT)
@@ -254,7 +254,7 @@ describe('agent-codex driver', () => {
 
     const results = eventsOf(agent, 'tool/result')
     expect(results).toHaveLength(1)
-    const block = (results[0]!.data['message'] as { content: { isError?: boolean }[] }).content[0]!
+    const block = (results[0]!.data as { message: { content: { isError?: boolean }[] } }).message.content[0]!
     expect(block.isError).toBe(true)
   }, TEST_TIMEOUT)
 

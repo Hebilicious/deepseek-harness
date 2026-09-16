@@ -150,11 +150,11 @@ function makeAgent() {
     },
     newSession(params: NewSessionRequest): Promise<NewSessionResponse> {
       record('session/new', params)
-      if (process.env.MOCK_MISSING_SESSION_ID === '1') return {} as NewSessionResponse
-      return {
+      if (process.env.MOCK_MISSING_SESSION_ID === '1') return Promise.resolve({} as NewSessionResponse)
+      return Promise.resolve({
         sessionId: process.env.MOCK_SESSION_ID ?? randomUUID(),
-        configOptions: configOptions as NewSessionResponse['configOptions'],
-      }
+        configOptions,
+      })
     },
     loadSession(params: LoadSessionRequest): Promise<LoadSessionResponse> {
       record('session/load', params)
@@ -163,7 +163,7 @@ function makeAgent() {
         error.code = -32601
         return Promise.reject(error)
       }
-      return Promise.resolve({ configOptions: configOptions as LoadSessionResponse['configOptions'] })
+      return Promise.resolve({ configOptions })
     },
     closeSession(params: unknown): Promise<Record<string, never>> {
       record('session/close', params)
@@ -172,11 +172,11 @@ function makeAgent() {
     setConfigOption(params: SetSessionConfigOptionRequest): Promise<SetSessionConfigOptionResponse> {
       record('session/set_config_option', params)
       for (const option of configOptions) {
-        if (option.id === params.configId && option.type === 'select') {
+        if (option.id === params.configId && option.type === 'select' && typeof params.value === 'string') {
           option.currentValue = params.value
         }
       }
-      return Promise.resolve({ configOptions: configOptions as SetSessionConfigOptionResponse['configOptions'] })
+      return Promise.resolve({ configOptions })
     },
     authenticate(params: AuthenticateRequest): Promise<Record<string, never>> {
       record('authenticate', params)

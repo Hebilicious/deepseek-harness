@@ -231,9 +231,9 @@ describe('agent-acp driver', () => {
     expect(eventsOf(agent, 'tool/call')).toHaveLength(1)
     const results = eventsOf(agent, 'tool/result')
     expect(results).toHaveLength(1)
-    const block = (results[0]!.data['message'] as {
-      content: { type: string; isError?: boolean; content?: { text?: string }[] }[]
-    }).content[0]!
+    const block = (results[0]!.data as {
+      message: { content: { type: string; isError?: boolean; content?: { text?: string }[] }[] }
+    }).message.content[0]!
     expect(block.isError).toBe(false)
     expect(JSON.stringify(block.content)).toContain('tool output')
   }, TEST_TIMEOUT)
@@ -246,9 +246,9 @@ describe('agent-acp driver', () => {
 
     const results = eventsOf(agent, 'tool/result')
     expect(results).toHaveLength(1)
-    const block = (results[0]!.data['message'] as {
-      content: { isError?: boolean }[]
-    }).content[0]!
+    const block = (results[0]!.data as {
+      message: { content: { isError?: boolean }[] }
+    }).message.content[0]!
     expect(block.isError).toBe(true)
   }, TEST_TIMEOUT)
 
