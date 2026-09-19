@@ -453,6 +453,12 @@ export interface BasicCompactionConfig extends CompactionPolicyConfig {
   modelPolicies?: ModelCompactPolicyConfig[]
   /** Enable automatic step-boundary pressure and overflow-recovery listeners. Defaults to `true`. */
   auto?: boolean
+  /**
+   * Text appended to every checkpoint preamble. Empty or absent appends
+   * nothing, leaving the default framing. The text must not contain the
+   * summary framing tags.
+   */
+  checkpointNotice?: string
 }
 
 /** Policy fields shared by the default policy and exact model overrides. */
@@ -888,6 +894,26 @@ export interface Config {
 ```
 
 Source: [`packages/goal/goal/src/index.ts:172`](../packages/goal/goal/src/index.ts)
+
+<a id="deepseek-aidsh-goal-round-driver"></a>
+
+## `@deepseek-ai/dsh-goal-round-driver`
+
+Requires: `agents` · `goals` · `sessions`
+
+```ts config-catalog
+/** Model-visible round policy. */
+export interface Config {
+  /**
+   * Completion-protocol text placed in every round prompt after the shared
+   * instruction body. Empty or absent uses the default protocol, which leaves
+   * the goal active for the next round while work remains.
+   */
+  roundProtocol?: string
+}
+```
+
+Source: [`packages/goal/goal-round-driver/src/index.ts:23`](../packages/goal/goal-round-driver/src/index.ts)
 
 <a id="deepseek-aidsh-headless"></a>
 
@@ -2969,10 +2995,17 @@ Requires: `agents` · `goals` · `tools` · `systemPrompt` · `sessionProjection
 export interface Config {
   /** Minimum admitted goal rounds before the model may self-report `blocked`. */
   blockedAfterConsecutiveRounds?: number
+  /**
+   * Permitted-reason policy appended to the `tool:goal` guidance. Supplying it
+   * also enables the capacity screen, so the executor refuses a `blocked_reason`
+   * that the supplied policy does not permit. Empty or absent appends nothing
+   * and screens nothing.
+   */
+  blockedReasonPolicy?: string
 }
 ```
 
-Source: [`packages/goal/tool-goal/src/index.ts:25`](../packages/goal/tool-goal/src/index.ts)
+Source: [`packages/goal/tool-goal/src/index.ts:26`](../packages/goal/tool-goal/src/index.ts)
 
 <a id="deepseek-aidsh-tool-jobs"></a>
 
@@ -3679,7 +3712,6 @@ These load from a `cordis.yml` entry with no `config:` block; they declare no co
 - `@deepseek-ai/dsh-experimental-computer-use-cua-driver-native` — requires `computerUse` · `tools` · `systemPrompt` ([`packages/experimental/computer-use-cua-driver-native/src/index.ts`](../packages/experimental/computer-use-cua-driver-native/src/index.ts))
 - `@deepseek-ai/dsh-fs-observation-policy` ([`packages/fs/fs-observation-policy/src/index.ts`](../packages/fs/fs-observation-policy/src/index.ts))
 - `@deepseek-ai/dsh-fs-ssh` — requires `ssh` · `sandboxPolicy` ([`packages/ssh/fs-ssh/src/index.ts`](../packages/ssh/fs-ssh/src/index.ts))
-- `@deepseek-ai/dsh-goal-round-driver` — requires `agents` · `goals` · `sessions` ([`packages/goal/goal-round-driver/src/index.ts`](../packages/goal/goal-round-driver/src/index.ts))
 - `@deepseek-ai/dsh-host-directory-picker-auto` — requires `webServer` · `loader` ([`packages/host/directory-picker-auto/src/index.ts`](../packages/host/directory-picker-auto/src/index.ts))
 - `@deepseek-ai/dsh-host-directory-picker-native` ([`packages/host/directory-picker-native/src/index.ts`](../packages/host/directory-picker-native/src/index.ts))
 - `@deepseek-ai/dsh-host-plugin-inventory` — requires `loader` ([`packages/host/plugin-inventory/src/index.ts`](../packages/host/plugin-inventory/src/index.ts))

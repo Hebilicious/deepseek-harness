@@ -20,6 +20,7 @@ import ToolRuntime from '@deepseek-ai/dsh-tools'
 import type { ToolExecutionResult } from '@deepseek-ai/dsh-tools'
 import * as toolGoal from '@deepseek-ai/dsh-tool-goal'
 import { createInboxStub } from '@deepseek-ai/dsh-agent-loop-testkit'
+import { capacityExcuse } from '@deepseek-ai/dsh-tool-goal/src/blocker.ts'
 
 const testToolSignal = new AbortController().signal
 
@@ -153,6 +154,7 @@ describe('goal tool registration and presentation', () => {
     const section = (await ctx.systemPrompt.assemble()).sections.find(item => item.name === 'tool:goal')
     expect(section?.text).toContain('infer goal intent')
     expect(section?.text).toContain('at least 5 consecutive goal rounds')
+    expect(section?.text).not.toContain('a credential or decision only a human can supply')
 
     await fiber.dispose()
     expect(ctx.tools.get('get_goal')).toBeUndefined()
@@ -204,6 +206,9 @@ describe('goal tool registration and presentation', () => {
     }).toThrow(
       'blockedAfterConsecutiveRounds must be a positive safe integer',
     )
+    expect(() => {
+      toolGoal.apply(ctx, { blockedReasonPolicy: 42 as unknown as string })
+    }).toThrow('blockedReasonPolicy must be a string')
     expect(ctx.tools.get('get_goal')).toBeUndefined()
   })
 
@@ -653,5 +658,82 @@ describe('goal tool state transitions', () => {
     })
     expect(blocked.concludesTurn).toBeUndefined()
     expect(blocked.additionalContexts).toBeUndefined()
+  })
+})
+
+describe('blocked reason policy', () => {
+  it('matches capacity vocabulary only when no external condition is named', () => {
+    expect(capacityExcuse('My context is nearly exhausted, so I am handing off here.'))
+      .toEqual(['context', 'exhausted'])
+    expect(capacityExcuse('The required credential is still unavailable.')).toBeUndefined()
+    expect(capacityExcuse('The user must decide whether the session-scoped cache stays.')).toBeUndefined()
+  })
+
+  it('appends the supplied policy and screens reasons against it', async () => {
+    const policy = 'Name a condition outside the agent. Your own capacity is never a blocker.'
+    const { ctx, root } = await harness({ blockedReasonPolicy: policy })
+    const section = (await ctx.systemPrompt.assemble()).sections.find(item => item.name === 'tool:goal')
+    expect(section?.text).toContain('difficulty, uncertainty, or useful remaining work is not blocked')
+    expect(section?.text?.endsWith(policy)).toBe(true)
+
+    openTurn(root, { kind: 'user' })
+    const created = ctx.goals.create(root.agent, { objective: 'vendor access' })
+    const reason = 'The vendor session credentials are still unavailable to this environment.'
+    const blocked = await execute(ctx, 'update_goal', {
+      goal_id: created.id,
+      revision: created.revision,
+      action: 'blocked',
+      blocked_reason: reason,
+    }, root.agent)
+    expect(resultGoal(blocked)).toMatchObject({
+      phase: 'blocked',
+      blockedReason: { code: 'model-reported', message: reason },
+    })
+  })
+
+  it('leaves a capacity excuse accepted while no policy text is supplied', async () => {
+    const { ctx, root } = await harness({ blockedAfterConsecutiveRounds: 9 })
+    openTurn(root, { kind: 'user' })
+    const created = ctx.goals.create(root.agent, { objective: 'default policy' })
+    const reason = 'My context is nearly exhausted, so I am handing off here.'
+    const blocked = await execute(ctx, 'update_goal', {
+      goal_id: created.id,
+      revision: created.revision,
+      action: 'blocked',
+      blocked_reason: reason,
+    }, root.agent)
+    expect(resultGoal(blocked)).toMatchObject({
+      phase: 'blocked',
+      blockedReason: { code: 'model-reported', message: reason },
+    })
+  })
+
+  it('refuses a self-capacity blocker before the configured round threshold', async () => {
+    const { ctx, root } = await harness({ blockedReasonPolicy: 'Name a condition outside the agent.' })
+    const humanTurn = openTurn(root, { kind: 'user' })
+    const created = ctx.goals.create(root.agent, { objective: 'keep going' })
+    closeTurn(root, humanTurn)
+    openTurn(root, { kind: 'goal', goalId: created.id, revision: created.revision, round: 1 })
+
+    const refused = await execute(ctx, 'update_goal', {
+      goal_id: created.id,
+      revision: created.revision,
+      action: 'blocked',
+      blocked_reason: 'My context is nearly exhausted, so I am handing off here.',
+    }, root.agent)
+    expect(refused.error?.info?.code).toBe('GOAL_TOOL_BLOCK_REASON_CAPACITY')
+    expect(refused.error?.message).toContain('context')
+    expect(refused.error?.message).toContain('a credential or decision only a human can supply')
+    expect(ctx.goals.get(root.agent)?.phase).toBe('active')
+
+    // The same round reaches the round-count gate once the reason names an
+    // external condition, so capacity screening runs before the threshold.
+    const external = await execute(ctx, 'update_goal', {
+      goal_id: created.id,
+      revision: created.revision,
+      action: 'blocked',
+      blocked_reason: 'The user must decide whether the session-scoped cache stays.',
+    }, root.agent)
+    expect(external.error?.info?.code).toBe('GOAL_TOOL_BLOCK_THRESHOLD')
   })
 })

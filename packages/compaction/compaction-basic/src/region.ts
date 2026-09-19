@@ -22,10 +22,12 @@ import type { TokenMeasurement, TokenMeter } from '@deepseek-ai/dsh-token-meter'
 import { SessionSeq, type Session, type SessionEvent } from '@deepseek-ai/dsh-session'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import { frameSummary } from './summarizer.ts'
-import type { SummarizationInput, SummaryResult } from './summarizer.ts'
+import type { CheckpointFraming, SummarizationInput, SummaryResult } from './summarizer.ts'
 
 interface RegionDependencies {
   readonly meter: TokenMeter
+  /** Checkpoint framing policy applied to every replacement user message. */
+  readonly checkpointFraming: CheckpointFraming
   summarize(input: SummarizationInput, agent: Agent, signal?: AbortSignal): Promise<SummaryResult>
   recover(error: unknown, agent: Agent, sourceEventSeqs: readonly SessionSeq[], signal?: AbortSignal): boolean
 }
@@ -409,7 +411,7 @@ async function summarizeCompaction(
     }
   }
   const checkpointMessage = createUserMessage({
-    content: frameSummary(summaryResult.summary),
+    content: frameSummary(summaryResult.summary, dependencies.checkpointFraming),
     source: compactCheckpointSource(compactionId, sourceCommandId),
   })
   // The checkpoint is text-only, so its fixed-heuristic price IS its route
