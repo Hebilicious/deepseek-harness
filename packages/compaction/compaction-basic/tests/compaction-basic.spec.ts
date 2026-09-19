@@ -322,6 +322,7 @@ describe('compact configuration and defaults', () => {
       maxOverflowRetries: 1,
       modelPolicies: [],
       auto: true,
+      checkpointNotice: '',
     })
     expect(Object.isFrozen(resolved)).toBe(true)
   })
@@ -514,6 +515,8 @@ describe('compact configuration and defaults', () => {
       [{ compactionRetries: -1 }, /compactionRetries/],
       [{ maxOverflowRetries: -1 }, /maxOverflowRetries/],
       [{ auto: 'yes' }, /auto must be a boolean/],
+      [{ checkpointNotice: 7 }, /checkpointNotice must be a string/],
+      [{ checkpointNotice: 'carry <compacted-summary>' }, /must not contain/],
       [{ summarizationProvider: 1 }, /summarizationProvider must be a string/],
       [{ summarizationModel: 1 }, /summarizationModel must be a string/],
       [{ summarizationProvider: MODEL }, /must be set together/],
@@ -1409,6 +1412,44 @@ describe('default one-shot summarizer', () => {
     expect(Object.isFrozen(instruction?.content[0])).toBe(true)
     expect(result.shadowedSeqs).toEqual(nodes.slice(start, start + 2))
     if (system !== undefined) expect(session.surface.nodes[0]).toBe(nodes[0])
+  })
+
+  it('appends only the supplied notice to the checkpoint preamble', () => {
+    const framed = frameSummary([{ type: 'text', text: 'carried fact' }])
+    expect(framed).toHaveLength(3)
+    const preamble = framed[0]
+    if (preamble?.type !== 'text') throw new Error('expected a text checkpoint preamble')
+    expect(preamble.text).toBe(
+      'This is an automatically generated checkpoint condensing an earlier span of the conversation to free up '
+      + 'context. Treat the captured context as established background and build on it without restating it. '
+      + 'Continue the task directly from the messages that follow, without acknowledging this checkpoint.'
+      + '\n\n<compacted-summary>',
+    )
+
+    const notice = 'Compaction is unlimited; never narrow the work because of context.'
+    const appended = frameSummary([{ type: 'text', text: 'carried fact' }], { notice })[0]
+    if (appended?.type !== 'text') throw new Error('expected a text checkpoint preamble')
+    expect(appended.text).toBe(
+      'This is an automatically generated checkpoint condensing an earlier span of the conversation to free up '
+      + 'context. Treat the captured context as established background and build on it without restating it. '
+      + 'Continue the task directly from the messages that follow, without acknowledging this checkpoint. '
+      + notice
+      + '\n\n<compacted-summary>',
+    )
+  })
+
+  it('lands the configured notice on the replacement checkpoint', async () => {
+    const compact = service({ auto: false, checkpointNotice: 'You have no token budget to read or conserve' })
+    const session = conversation(3)
+    const before = [...session.surface.nodes]
+    await compact.compactRegion(before[0]!, before[3]!, agent(session, MODEL), SIGNAL)
+
+    const checkpoint = session.deriveMessages().find(message => message.content.some(
+      block => block.type === 'text' && block.text.includes('<compacted-summary>'),
+    ))
+    const block = checkpoint?.content[0]
+    if (block?.type !== 'text') throw new Error('expected a text checkpoint preamble')
+    expect(block.text).toContain('You have no token budget to read or conserve')
   })
 
   it('requires complete raw output when a subclass marks one local LLM stream call', () => {
@@ -2529,19 +2570,21 @@ describe('route-priced image pressure', () => {
     const ctx = pricedContext(1_000)
     const session = imageConversation()
     const before = ctx.tokenMeter.measure(session)
+    // Retaining one recent turn leaves room below the 800-token threshold for
+    // the framed checkpoint, so the shrink comparison settles in one pass.
     const compact = new TestCompactionEngine(ctx, {
       headroomTokens: 0,
       maxTokens: 8192,
       auto: false,
       thresholdRatio: 0.8,
-      retainTokens: 350,
+      retainTokens: 200,
     })
 
     // The same history stays below the 800-token threshold without pricing.
     const neutralResult = await compactIfNeeded(service({
       auto: false,
       thresholdRatio: 0.8,
-      retainTokens: 350,
+      retainTokens: 200,
     }), session)
     expect(neutralResult).toBeNull()
 

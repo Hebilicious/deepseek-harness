@@ -1,0 +1,6 @@
+# Bilingual-pair consistency record (docs/i18n/README.md): the git blob hash of each
+# side as of the last confirmed-consistent state. Both languages carry equal authority;
+# after editing either side, bring the other along and re-record with:
+#   pnpm run verify-translation-pairing --write .agents/notes/implemented/feature/2026-09-19-no-self-capacity-blockers.md
+2026-09-19-no-self-capacity-blockers.md: e7c125df4f6f45ec2a7cba7c5b1bfc0c87aa3b7a
+2026-09-19-no-self-capacity-blockers.zh.md: 7a784c6de1427364abb8670d3304685f611eaacc
