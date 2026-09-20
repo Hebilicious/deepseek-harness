@@ -9,7 +9,7 @@ kind: "package-reference"
 
 ## 概述
 
-`dsh-tool-goal` 让模型读取持久 goal，并根据人类直接请求推断和创建长期 goal。创建、编辑、暂停或恢复要求该直接请求出现在顶层 agent（智能体）轮次中；完成或阻塞也可以在自主 Goal Round 中执行。更新必须使用先前读取到的精确 goal id 和 revision。`resume` 会重新启用 active-but-disarmed 或 blocked 的 goal，而持久的 paused goal 由用户通过 Web 或 `/goal resume` 恢复。自主阻塞要求同一条件持续达到可配置阈值，默认是连续三个 Round。
+`dsh-tool-goal` 让模型读取持久 goal，并根据人类直接请求推断和创建长期 goal。创建、编辑、暂停或恢复要求该直接请求出现在顶层 agent（智能体）轮次中；完成或阻塞也可以在自主 Goal Round 中执行。更新必须使用先前读取到的精确 id 和 revision。`resume` 会重新启用 active-but-disarmed 或 blocked 的 goal，而持久的 paused goal 由用户通过 Web 或 `/goal resume` 恢复。自主阻塞要求同一条件持续达到可配置阈值，默认是连续三个 Round；部署提供的策略文本可以追加执行器会强制执行的允许理由规则。
 
 ## 目录
 
@@ -46,15 +46,23 @@ kind: "package-reference"
   name: '@deepseek-ai/dsh-tool-goal'
   config:
     blockedAfterConsecutiveRounds: 3
+    blockedReasonPolicy: |
+      A blocked_reason must name a condition external to you that is reproducible from the workspace: access the
+      environment denies, a credential or decision only a human can supply, or a product requirement that cannot
+      be satisfied. Your own capacity is never a blocker, and neither are context or token budget, session length,
+      difficulty, change size, remaining work, or a request for a fresh session. If the only obstacle is the size
+      of a change, start it and shrink the first step.
 ```
 
-该值必须是正的安全整数。它既提供模型自行报告阻塞的硬下限，也决定模型指引中指明的数值。生成的[配置目录](../../../docs/config-catalog.zh.md#deepseek-aidsh-tool-goal)是每个受支持字段的穷尽式真源。
+`blockedAfterConsecutiveRounds` 必须是正的安全整数。它既提供模型自行报告阻塞的硬下限，也决定模型指引中指明的数值。`blockedReasonPolicy` 是追加到该指引之后的策略文本，提供它同时会开启容量筛查：执行器会拒绝该策略不允许的理由。值为空或未提供时不追加任何内容，也不进行筛查。生成的[配置目录](../../../docs/config-catalog.zh.md#deepseek-aidsh-tool-goal)是每个受支持字段的穷尽式真源。
 
 ### 权限规则
 
 工具只为活跃驱动器内、处于开放轮次中的精确活跃调用 agent 执行。`create`、`edit`、`pause` 和 `resume` 还要求运行时根 agent 的当前轮次中存在人类直接消息——subagent 或非人类生产方不能创建或编辑 goal。`resume` 会在 goal 服务执行前拒绝持久的 paused goal；该状态只属于面向用户的恢复路径。`complete` 和 `blocked` 还接受完全一致的当前 Goal Round：来源为 goal 的 Round 可以立即完成 goal，但 `blocked` 调用在达到配置的连续 Round 数量之前会被机械拒绝——模型判断同一条件是否确实持续，并必须在 `blocked_reason` 中说明。人类直接请求可以立即停止 goal。
 
 成功报告 `complete` 或 `blocked` 的自主 Round 还会在该步骤后结束物理轮次，模型会收到一条结束指令，要求向用户写出最终消息。人类直接变更绝不会触发这种停止：assistant 可以确认变更，循环仍可接收并发的人类 steering（中途引导）。
+
+提供 `blockedReasonPolicy` 时，`blocked_reason` 如果只说明 agent 自身的容量——上下文、token、预算、压缩、会话长度、耗尽或重新开始会话——会以 `GOAL_TOOL_BLOCK_REASON_CAPACITY` 被拒绝，除非同一段文本还给出了 agent 外部的条件。该筛查基于词表：它只能证明措辞提到了什么，不能证明障碍是否真实，因此语义判断仍由模型负责；如果提供的策略不允许筛查接受的任何措辞，模型将无法报告阻塞。未提供该设置时，任何非空理由都会被接受。
 
 -----
 
@@ -70,7 +78,8 @@ kind: "package-reference"
 
 - **执行时权限。** 每次调用都解析精确活跃 agent、其继承的 `AgentRegistry` initiator、running 状态与开放轮次；`create`、`edit`、`pause` 和 `resume` 还要求运行时根 agent 的当前轮次中存在已接受的 `{ kind: 'user' }` 消息或 steering 事件。持久的 paused goal 会让 `resume` 以 `GOAL_TOOL_RESUME_PAUSED` 失败；面向用户的命令或 Web 控件拥有该转换。持久 fork 谱系不会降低已恢复根 agent 的等级；活跃 subagent 所有权会降低。
 - **人类输入的宿主证明。** `Agent.followup()` 与 `steer()` 会在调用方省略 source 时分配 `{ kind: 'user' }`，因此插件、调度器与其他非人类生产方必须传入自己的 source，不能继承人类权限。
-- **带配置阈值的系统提示词指引。** 本包注册一个 `tool:goal` 系统提示词章节，其固定文本插入 `blockedAfterConsecutiveRounds`；同一数值就是执行时强制执行的硬下限。
+- **带配置阈值的系统提示词指引。** 本包注册一个 `tool:goal` 系统提示词章节，其固定文本插入 `blockedAfterConsecutiveRounds`；同一数值就是执行时强制执行的硬下限。`blockedReasonPolicy` 会原样追加到该文本之后。
+- **容量筛查先于 Round 阈值。** 提供 `blockedReasonPolicy` 时，`blocked_reason` 会同时匹配容量词表与外部条件词表；只提到容量而未提到外部条件的理由会在 Round 计数门槛之前以 `GOAL_TOOL_BLOCK_REASON_CAPACITY` 失败，因此自我容量借口会在报告它的那一轮就被纠正。
 - **终局 Round 的结束上下文。** 成功的自主 `complete` 或 `blocked` 会延后一条 `<goal_complete>` 或 `<goal_blocked>` 结束指令，让模型在轮次结束前向用户做一次交代；人类直接变更绝不会延后该上下文。
 
 ### 源码地图
@@ -79,6 +88,7 @@ kind: "package-reference"
 |---|---|
 | [`src/index.ts`](src/index.ts) | 插件入口：工具注册、配置、系统提示词章节、结果渲染 |
 | [`src/authority.ts`](src/authority.ts) | 执行时权限检查与 Goal Round 接受 |
+| [`src/blocker.ts`](src/blocker.ts) | `blocked_reason` 的容量与外部条件词表 |
 | [`src/wrapup.ts`](src/wrapup.ts) | 终局自主更新的结束消息指令 |
 | — | 不发布运行时不变式伴生入口；此面向模型的适配器不拥有独立状态或事件协议；已接受的变更由 goal 领域检查，权限行为则由本包测试验证。 |
 
@@ -99,6 +109,7 @@ kind: "package-reference"
 - [goal 组地图](../README.zh.md)——goal 各包及其组合方式。
 - [生成的工具目录](../../../docs/tool-catalog.zh.md#deepseek-aidsh-tool-goal)——模型接收的精确 schema。
 - [goal 工具 Agent Note](../../../.agents/notes/implemented/feature/2026-07-19-model-facing-goal-tools.zh.md)——权限拆分与 UX 决策。
+- [不存在以自身容量为由的阻塞 Agent Note](../../../.agents/notes/implemented/feature/2026-09-19-no-self-capacity-blockers.zh.md)——被允许的阻塞理由与容量筛查。
 
 -----
 
@@ -109,12 +120,18 @@ kind: "package-reference"
 
 #### 模型看到的内容
 
-固定 goal 策略说明何种用户语义意图值得创建 goal，要求更新前先精确读取 ref，解释会话 resume／fork 后如何重新启用续行，并限制完成／阻塞声明。持久 paused 的 resume 会在执行时以 `GOAL_TOOL_RESUME_PAUSED` 拒绝；面向用户的 goal 控件拥有该转换。配置的阈值会插入该指引。
+固定 goal 策略说明何种用户语义意图值得创建 goal，要求更新前先精确读取 ref，解释会话 resume／fork 后如何重新启用续行，并限制完成／阻塞声明。`blockedReasonPolicy` 会在该策略后继续给出部署自己的允许理由规则。持久 paused 的 resume 会在执行时以 `GOAL_TOOL_RESUME_PAUSED` 拒绝；面向用户的 goal 控件拥有该转换。配置的阈值会插入该指引。
 
 ##### Goal 策略
 
 ```markdown
 Use goal tools for one long-running completion objective in the current session. create_goal may infer goal intent from a direct human request in any language; do not create a goal for routine single-turn work. Call get_goal before update_goal and copy its exact goal_id and revision. After session resume or fork, an active goal is disarmed: when a human asks to continue or resume in any wording or language, use update_goal action resume to rearm it. Mark complete only when the objective is actually achieved. Mark blocked only after the same blocking condition persists for at least 3 consecutive goal rounds, and report that concrete condition in blocked_reason; difficulty, uncertainty, or useful remaining work is not blocked.
+```
+
+##### 允许的阻塞理由（blockedReasonPolicy）
+
+```markdown
+A blocked_reason must name a condition external to you that is reproducible from the workspace: access the environment denies, a credential or decision only a human can supply, or a product requirement that cannot be satisfied. Your own capacity is never a blocker, and neither are context or token budget, session length, difficulty, change size, remaining work, or a request for a fresh session. If the only obstacle is the size of a change, start it and shrink the first step.
 ```
 
 #### Token 影响
@@ -148,6 +165,7 @@ schema 的定义与可见性不变时，前缀保持稳定。调用和结果会�
 
 - **语义意图仍由模型判断**——执行只能证明当前轮次包含一条人类直接发送的消息，无法证明请求是否足够重大而值得创建 goal。
 - **阻塞条件是否相同仍由模型判断**——运行时强制统计互不重复的已准入 Goal Round，而不判断障碍在语义上是否等价；独立评估器的实现暂缓。
+- **容量筛查随提供的策略生效且基于词表**——未提供 `blockedReasonPolicy` 时，部署接受任何非空理由。提供文本后，该筛查只能证明被拒绝理由的措辞提到了容量而未提到外部条件；同时提到容量与听起来像外部条件的短语的理由会通过，而以容量词汇表述的真实障碍可能被拒绝，直到模型用外部条件重新表述。策略文本与词表彼此独立：文本是给模型的说明，词表才是执行时强制执行的部分。
 - **不负责调度或直接面向人类呈现**——这些工具只变更状态；同会话驱动器与 `dsh-command-goal` 是同一领域的独立消费方。
 - **Goal Round 权限需要驱动器**——除非续行驱动器准入 goal 来源的用户轮次，否则自主 `complete`／`blocked` 路径不会启用；只挂载这个包不会创建这些轮次。
 - **提示词注册与过滤相互独立**——某个范围可能隐藏工具，却保留指引，除非部署将两项注册限定在同一范围。

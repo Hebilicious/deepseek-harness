@@ -40,6 +40,12 @@ export interface BasicCompactionConfig extends CompactionPolicyConfig {
   modelPolicies?: ModelCompactPolicyConfig[]
   /** Enable automatic step-boundary pressure and overflow-recovery listeners. Defaults to `true`. */
   auto?: boolean
+  /**
+   * Text appended to every checkpoint preamble. Empty or absent appends
+   * nothing, leaving the default framing. The text must not contain the
+   * summary framing tags.
+   */
+  checkpointNotice?: string
 }
 
 /** Exactly one validated retention form. */
@@ -61,6 +67,8 @@ interface ResolvedPolicyFields {
 export type ResolvedConfig = ResolvedPolicyFields & ResolvedRetention & {
   readonly modelPolicies: readonly Readonly<ModelCompactPolicyConfig>[]
   readonly auto: boolean
+  /** Checkpoint framing policy, not part of any per-target compaction budget; empty appends nothing. */
+  readonly checkpointNotice: string
 }
 
 /** Fully merged policy for one routed conversation target, before capacity scaling. */

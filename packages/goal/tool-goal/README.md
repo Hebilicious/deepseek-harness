@@ -9,7 +9,7 @@ English | [中文](README.zh.md)
 
 ## Summary
 
-`dsh-tool-goal` lets a model read persisted goals and infer and create a long-running goal from a direct human request. Creating, editing, pausing, or resuming requires that direct request in a top-level agent turn; completing or blocking also works in an autonomous goal round. Updates require the exact goal id and revision returned by a prior read. `resume` rearms active-but-disarmed or blocked goals, while users resume durable paused goals through Web or `/goal resume`. Autonomous blocking requires the same condition for a configurable threshold of three consecutive rounds by default.
+`dsh-tool-goal` lets a model read persisted goals and infer and create a long-running goal from a direct human request. Creating, editing, pausing, or resuming requires that direct request in a top-level agent turn; completing or blocking also works in an autonomous goal round. Updates require the exact id and revision from a prior read. `resume` rearms active-but-disarmed or blocked goals, while users resume durable paused goals through Web or `/goal resume`. Autonomous blocking requires the same condition for a configurable threshold of three consecutive rounds by default, and a deployment-supplied policy text can add permitted-reason rules that the executor enforces.
 
 ## Table of Contents
 
@@ -46,15 +46,23 @@ Call `get_goal` before `update_goal` and copy the exact `goal_id` and `revision`
   name: '@deepseek-ai/dsh-tool-goal'
   config:
     blockedAfterConsecutiveRounds: 3
+    blockedReasonPolicy: |
+      A blocked_reason must name a condition external to you that is reproducible from the workspace: access the
+      environment denies, a credential or decision only a human can supply, or a product requirement that cannot
+      be satisfied. Your own capacity is never a blocker, and neither are context or token budget, session length,
+      difficulty, change size, remaining work, or a request for a fresh session. If the only obstacle is the size
+      of a change, start it and shrink the first step.
 ```
 
-The value must be a positive safe integer. It supplies both the hard lower bound on model self-blocking and the number named in model guidance. The generated [configuration catalog](../../../docs/config-catalog.md#deepseek-aidsh-tool-goal) is the exhaustive source for every accepted field.
+`blockedAfterConsecutiveRounds` must be a positive safe integer. It supplies both the hard lower bound on model self-blocking and the number named in model guidance. `blockedReasonPolicy` is the policy text appended to that guidance, and supplying it also turns on the capacity screen: the executor refuses a reason the policy does not permit. An empty or absent value appends nothing and screens nothing. The generated [configuration catalog](../../../docs/config-catalog.md#deepseek-aidsh-tool-goal) is the exhaustive source for every accepted field.
 
 ### Authority rules
 
 The tools execute only for the exact live calling agent inside its active driver with an open turn. `create`, `edit`, `pause`, and `resume` additionally require a direct human message in a runtime-root agent's current turn — a subagent or a non-human producer cannot create or edit goals. `resume` rejects a durable paused goal before the goal service runs; that state belongs to the user-facing resume path. `complete` and `blocked` also accept the exact current goal round: a goal-sourced round may complete the goal immediately, but a blocked call is mechanically rejected until the configured number of consecutive rounds has passed — the model judges whether the same condition actually persisted and must describe it in `blocked_reason`. A direct human request may stop a goal immediately.
 
 An autonomous round that successfully reports `complete` or `blocked` also ends the physical turn after that step, and the model receives a closing instruction to write the final message to the user. Direct-human mutations never trigger that stop: the assistant may acknowledge the change and the loop keeps concurrent human steering available.
+
+With `blockedReasonPolicy`, a `blocked_reason` that names the agent's own capacity — context, tokens, budget, compaction, session length, exhaustion, or a fresh session — is rejected with `GOAL_TOOL_BLOCK_REASON_CAPACITY` unless the same text also names a condition external to the agent. The screen is vocabulary-based: it proves what the wording names, not whether the obstacle is real, so semantic judgment stays with the model, and a policy that permits nothing the screen accepts leaves the model unable to block. Without the setting, any non-empty reason is accepted.
 
 -----
 
@@ -70,7 +78,8 @@ This section explains how the tools enforce authority and render output; the obs
 
 - **Authority at execution.** Every call resolves the exact live agent, its inherited `AgentRegistry` initiator, running status, and an open turn; `create`, `edit`, `pause`, and `resume` additionally require an accepted `{ kind: 'user' }` message or steering event in a runtime-root agent's current turn. A durable paused goal fails the `resume` action with `GOAL_TOOL_RESUME_PAUSED`; the user-facing command or Web control owns that transition. Durable fork lineage does not demote a resumed root; live subagent ownership does.
 - **Host attestation of human input.** `{ kind: 'user' }` is assigned by `Agent.followup()` and `steer()` when their caller omits a source, so plugins, schedulers, and other non-human producers must pass their own source rather than inheriting human authority.
-- **System-prompt guidance with the configured threshold.** The package registers one `tool:goal` system-prompt section whose fixed text interpolates `blockedAfterConsecutiveRounds`; the same value is the hard lower bound enforced at execution.
+- **System-prompt guidance with the configured threshold.** The package registers one `tool:goal` system-prompt section whose fixed text interpolates `blockedAfterConsecutiveRounds`; the same value is the hard lower bound enforced at execution. `blockedReasonPolicy` is appended verbatim to that text.
+- **Capacity screening before the round threshold.** With `blockedReasonPolicy`, `blocked_reason` is matched against a capacity vocabulary and against external-condition vocabulary; a reason that names capacity without naming an external condition fails with `GOAL_TOOL_BLOCK_REASON_CAPACITY` before the round-count gate, so a self-capacity excuse is corrected in the round that reports it.
 - **Wrap-up context for terminal rounds.** A successful autonomous `complete` or `blocked` defers a closing `<goal_complete>` or `<goal_blocked>` instruction so the model addresses the user once before the turn ends; direct-human mutations never defer this context.
 
 ### Source map
@@ -79,6 +88,7 @@ This section explains how the tools enforce authority and render output; the obs
 |---|---|
 | [`src/index.ts`](src/index.ts) | Plugin entry: tool registration, config, system-prompt section, result rendering |
 | [`src/authority.ts`](src/authority.ts) | Execution-time authority checks and goal-round acceptance |
+| [`src/blocker.ts`](src/blocker.ts) | Capacity and external-condition vocabulary for `blocked_reason` |
 | [`src/wrapup.ts`](src/wrapup.ts) | Closing-message instruction for terminal autonomous updates |
 | — | No runtime invariant companion is published; this model-facing adapter owns no independent state or event protocol; accepted mutations are checked by the goal domain and authority behavior is package-tested. |
 
@@ -99,6 +109,7 @@ The tools are the model-facing half of the goal surface; read these pages for th
 - [Goal group map](../README.md) — the goal packages and how they compose.
 - [Generated tool catalog](../../../docs/tool-catalog.md#deepseek-aidsh-tool-goal) — the exact schemas the model receives.
 - [Goal-tool Agent Note](../../../.agents/notes/implemented/feature/2026-07-19-model-facing-goal-tools.md) — the authority split and UX decisions.
+- [No self-capacity blockers Agent Note](../../../.agents/notes/implemented/feature/2026-09-19-no-self-capacity-blockers.md) — the permitted blocker reasons and the capacity screen.
 
 -----
 
@@ -109,12 +120,18 @@ The tools are the model-facing half of the goal surface; read these pages for th
 
 #### What the model sees
 
-A fixed goal policy says when semantic human intent warrants creation, requires exact read-before-update refs, explains rearming after resume/fork, and limits completion/blocking claims. Durable paused resume is rejected at execution with `GOAL_TOOL_RESUME_PAUSED`; the user-facing goal control owns that transition. The configured threshold is interpolated into that guidance.
+A fixed goal policy says when semantic human intent warrants creation, requires exact read-before-update refs, explains rearming after resume/fork, and limits completion/blocking claims. `blockedReasonPolicy` continues that policy with the deployment's own permitted-reason rules. Durable paused resume is rejected at execution with `GOAL_TOOL_RESUME_PAUSED`; the user-facing goal control owns that transition. The configured threshold is interpolated into that guidance.
 
 ##### Goal policy
 
 ```markdown
 Use goal tools for one long-running completion objective in the current session. create_goal may infer goal intent from a direct human request in any language; do not create a goal for routine single-turn work. Call get_goal before update_goal and copy its exact goal_id and revision. After session resume or fork, an active goal is disarmed: when a human asks to continue or resume in any wording or language, use update_goal action resume to rearm it. Mark complete only when the objective is actually achieved. Mark blocked only after the same blocking condition persists for at least 3 consecutive goal rounds, and report that concrete condition in blocked_reason; difficulty, uncertainty, or useful remaining work is not blocked.
+```
+
+##### Permitted blocker reasons (blockedReasonPolicy)
+
+```markdown
+A blocked_reason must name a condition external to you that is reproducible from the workspace: access the environment denies, a credential or decision only a human can supply, or a product requirement that cannot be satisfied. Your own capacity is never a blocker, and neither are context or token budget, session length, difficulty, change size, remaining work, or a request for a fresh session. If the only obstacle is the size of a change, start it and shrink the first step.
 ```
 
 #### Token effect
@@ -148,6 +165,7 @@ These limits define when the goal tools are a poor fit or need special care. The
 
 - **Semantic intent remains model judgment** — execution can prove that the current turn contains a direct human message, not whether the request is substantial enough to merit a goal.
 - **Same-condition blocking remains model judgment** — the runtime enforces distinct admitted-round count, not semantic equivalence of obstacles; an independent evaluator is deferred.
+- **Capacity screening follows the supplied policy and is vocabulary-based** — without `blockedReasonPolicy` a deployment accepts any non-empty reason. When text is supplied, the screen proves that a rejected reason's wording names capacity without naming an external condition; a reason that mentions capacity beside an external-sounding phrase passes, and a genuine blocker phrased with capacity vocabulary can be refused until the model re-reports it in external terms. The policy text and the vocabulary are independent: the text is documentation for the model, the vocabulary is what execution enforces.
 - **No scheduling or direct human rendering** — these tools mutate state only; the same-session driver and `dsh-command-goal` are independent consumers of the same domain.
 - **Goal-round authority requires a driver** — the autonomous `complete`/`blocked` path is dormant unless a continuation driver admits goal-sourced user turns; mounting this tool package alone does not create them.
 - **Prompt registration is independent of filtering** — a scope may hide the tools while retaining their guidance unless the deployment scopes both registrations together.

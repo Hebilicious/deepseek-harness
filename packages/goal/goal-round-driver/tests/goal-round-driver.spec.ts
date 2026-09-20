@@ -85,12 +85,12 @@ afterEach(async () => {
 })
 
 /** Mount a real loop with only its model scripted. */
-async function harness(script: ScriptEntry[]): Promise<Harness> {
+async function harness(script: ScriptEntry[], config: goalSession.Config = {}): Promise<Harness> {
   const ctx = new Context()
   contexts.push(ctx)
   await mountAgentLoopTestDependencies(ctx)
   await ctx.plugin(GoalService)
-  const driver = await ctx.plugin(goalSession)
+  const driver = await ctx.plugin(goalSession, config)
   await ctx.plugin(AgentLoop, { agents: [] })
   const adapter = new ScriptedAdapter(script)
   ctx.llm.registerAdapter(['mock'], adapter)
@@ -162,6 +162,56 @@ describe('goal-round outcome policy', () => {
     expect(block.text).toMatch(
       /<goal_round>\nObjective: "Ship verified support"\nRound: 3\/9[\s\S]*current workspace[\s\S]*verify[\s\S]*mark it complete/,
     )
+    expect(block.text).toContain(goalSession.STANDARD_PROTOCOL.trim())
+    expect(block.text).not.toContain('keep working rather than reporting')
+  })
+
+  it('queues the supplied protocol text when configured', async () => {
+    const goal: GoalView = {
+      id: GoalId('goal-prompt-strict'),
+      revision: 4,
+      objective: 'Ship verified support',
+      phase: 'active',
+      maxGoalRounds: 9,
+      roundsStarted: 2,
+      createdAt: 1,
+      updatedAt: 2,
+      activation: 'armed',
+    }
+    const protocol = 'goal, and mark it complete. Keep working while work remains. Your own capacity is never a reason to stop.\n'
+    const rendered = goalSession.renderGoalRoundPrompt(goal, 3, { protocol })[0]
+    if (rendered?.type !== 'text') throw new Error('expected a text goal-round prompt')
+    expect(rendered.text).toContain('Your own capacity is never a reason to stop.')
+    expect(rendered.text).not.toContain('leave the goal active')
+
+    const test = await harness([textResponse('round one')], { roundProtocol: protocol })
+    const queued: string[] = []
+    onInboxMessage(test.ctx, test.agent, (message) => {
+      if (message.source.kind !== 'goal') return
+      queued.push(message.content
+        .flatMap(block => block.type === 'text' ? [block.text] : [])
+        .join(''))
+    })
+    test.ctx.goals.create(test.agent, { objective: 'strict round', maxGoalRounds: 1 })
+
+    await vi.waitFor(() => {
+      expect(queued.join('\n')).toContain('Your own capacity is never a reason to stop.')
+    })
+
+    expect(queued.join('\n')).not.toContain('leave the goal active')
+  })
+
+  it('fails invalid direct config and resolves the default before installing listeners', async () => {
+    const ctx = new Context()
+    contexts.push(ctx)
+    await mountAgentLoopTestDependencies(ctx)
+    await ctx.plugin(GoalService)
+    expect(() => {
+      goalSession.apply(ctx, { roundProtocol: 42 as unknown as string })
+    }).toThrow('roundProtocol must be a string')
+    expect(() => {
+      goalSession.apply(ctx, {})
+    }).not.toThrow()
   })
 
   it('quotes multiline or tag-like objective text as one unambiguous data value', () => {

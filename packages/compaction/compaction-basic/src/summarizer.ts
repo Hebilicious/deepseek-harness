@@ -17,9 +17,10 @@ interface SummaryConfig {
   readonly maxTokens: number
 }
 
-/** Tags wrapping the structured summary inside the landed checkpoint node. */
-const SUMMARY_OPEN_TAG = '<compacted-summary>'
-const SUMMARY_CLOSE_TAG = '</compacted-summary>'
+/** Opening tag wrapping the structured summary inside the landed checkpoint node. */
+export const SUMMARY_OPEN_TAG = '<compacted-summary>'
+/** Closing tag wrapping the structured summary inside the landed checkpoint node. */
+export const SUMMARY_CLOSE_TAG = '</compacted-summary>'
 
 /**
  * The summarization directive, delivered as the FINAL user message after the
@@ -68,6 +69,15 @@ const COMPACTION_INSTRUCTION = [
 /** Framing that makes the replacement user message established context. */
 const CHECKPOINT_PREAMBLE =
   'This is an automatically generated checkpoint condensing an earlier span of the conversation to free up context. Treat the captured context as established background and build on it without restating it. Continue the task directly from the messages that follow, without acknowledging this checkpoint.'
+
+/** Checkpoint framing policy resolved from plugin configuration. */
+export interface CheckpointFraming {
+  /**
+   * Deployment-supplied text appended to the preamble. Empty appends nothing,
+   * leaving the default framing.
+   */
+  readonly notice?: string
+}
 
 /**
  * The replayed conversation surface the summarizer condenses. Reproducing the
@@ -181,11 +191,17 @@ export async function summarizeWithLlm(
 /**
  * Wrap raw summary blocks in the durable checkpoint framing.
  * @param summary - safe text-only model output.
+ * @param framing - checkpoint framing policy; the default frames the summary alone.
  * @returns content for the synthesized replacement user message.
  */
-export function frameSummary(summary: readonly ContentBlock[]): ContentBlock[] {
+export function frameSummary(
+  summary: readonly ContentBlock[],
+  framing: CheckpointFraming = {},
+): ContentBlock[] {
+  const notice = framing.notice ?? ''
+  const preamble = notice === '' ? CHECKPOINT_PREAMBLE : `${CHECKPOINT_PREAMBLE} ${notice}`
   return [
-    { type: 'text', text: `${CHECKPOINT_PREAMBLE}\n\n${SUMMARY_OPEN_TAG}` },
+    { type: 'text', text: `${preamble}\n\n${SUMMARY_OPEN_TAG}` },
     ...summary,
     { type: 'text', text: SUMMARY_CLOSE_TAG },
   ]

@@ -44,13 +44,16 @@ function appendRound(session: Session, turn: number, content = renderGoalRoundPr
   session.append('turn/end', { turn, reason: { kind: 'completed' } })
 }
 
-async function mount(sessionFirst = false): Promise<{ ctx: Context; session: Session }> {
+async function mount(
+  sessionFirst = false,
+  config: GoalSessionInvariant.Config = {},
+): Promise<{ ctx: Context; session: Session }> {
   const ctx = new Context()
   await ctx.plugin(SessionStore)
   const session = ctx.sessions.create(SessionId('goal-round-driver-invariant'))
   if (!sessionFirst) {
     await ctx.plugin(InvariantRegistry, { enabled: true })
-    await ctx.plugin(GoalSessionInvariant)
+    await ctx.plugin(GoalSessionInvariant, config)
   }
   return { ctx, session }
 }
@@ -85,6 +88,27 @@ describe('goal-round-driver prompt invariants', () => {
         source: stateSource,
       }), { surfaceOp: 'append' })
     }).not.toThrow()
+  })
+
+  it('accepts the configured protocol and rejects the default one', async () => {
+    const protocol = 'goal, and mark it complete. Keep working while work remains.\n'
+    const configured = await mount(false, { roundProtocol: protocol })
+    appendChange(configured.session)
+    expect(() => {
+      appendRound(configured.session, 2, renderGoalRoundPrompt(view(0), 1, { protocol }))
+    }).not.toThrow()
+    expect(() => {
+      appendRound(configured.session, 3)
+    }).toThrow(expect.objectContaining<Partial<InvariantError>>({ packageName: '@deepseek-ai/dsh-goal-round-driver' }))
+  })
+
+  it('fails invalid direct config before registering', async () => {
+    const ctx = new Context()
+    await ctx.plugin(SessionStore)
+    await ctx.plugin(InvariantRegistry, { enabled: true })
+    expect(() => {
+      void GoalSessionInvariant.apply(ctx, { roundProtocol: 42 as unknown as string })
+    }).toThrow('roundProtocol must be a string')
   })
 
   it('rejects a continuation whose content differs from the package renderer', async () => {

@@ -9,7 +9,7 @@ kind: "package-reference"
 
 ## 概述
 
-`dsh-goal-round-driver` 会在同一会话内自动继续 active goal，但前提是 agent（智能体）已空闲、续行已启用且配置的 Round 额度仍有剩余。每个 Round 都让模型获得另一次推进目标的机会；只有进入模型历史的 goal Round 才消耗额度，额度耗尽时会记录 blocker。驱动器本身没有配置：goal 定义 Round 上限，`dsh-tool-goal` 定义重复受阻后何时停止续行。若任务需要无人值守的多轮推进，应与 `dsh-goal` 和 `dsh-tool-goal` 一起挂载；若每一步都需要人工 steering（中途引导），则不要挂载。
+`dsh-goal-round-driver` 会在同一会话内自动继续 active goal，但前提是 agent（智能体）已空闲、续行已启用且配置的 Round 额度仍有剩余。每个 Round 都让模型获得另一次推进目标的机会；只有进入模型历史的 goal Round 才消耗额度，额度耗尽时会记录 blocker。它唯一的设置 `roundProtocol` 提供本轮的完成协议文本。goal 定义 Round 上限，`dsh-tool-goal` 定义重复受阻后何时停止续行。若任务需要无人值守的多轮推进，应与 `dsh-goal` 和 `dsh-tool-goal` 一起挂载；若每一步都需要人工 steering（中途引导），则不要挂载。
 
 ## 目录
 
@@ -42,11 +42,22 @@ kind: "package-reference"
   name: '@deepseek-ai/dsh-goal-round-driver'
 ```
 
-`maxGoalRounds` 属于 goal 定义，面向模型的阻塞阈值属于 `dsh-tool-goal`；在驱动器中重复任一数值都可能产生分歧策略。
+`maxGoalRounds` 属于 goal 定义，面向模型的阻塞阈值属于 `dsh-tool-goal`；在驱动器中重复任一数值都可能产生分歧策略。`roundProtocol` 属于本包，因为它只改变 Round 提示词。它会替换默认协议，因此需要给出完整文本；如果希望保留「先遵循 goal 工具策略」的指示，也要写进去：
+
+```yaml
+- id: goal-round-driver
+  name: '@deepseek-ai/dsh-goal-round-driver'
+  config:
+    roundProtocol: |
+      goal, and mark it complete. If work remains, keep working rather than reporting. End the round only when the
+      objective holds or a permitted blocker exists, and make each round's progress a commit or a measurement
+      rather than a narrative. Your own capacity is never a reason to stop. Follow the configured goal-tool policy
+      before reporting a blocker.
+```
 
 ### 每轮做什么
 
-当对应的活跃 agent 处于 idle，且存在 active、已启用续行、仍有容量的 goal 时，驱动器会排入一条 goal-round 提示词。它点明以 JSON 引用的目标、Round 编号与上限，并告诉模型以当前工作区、工具结果和持久状态为准。被接纳的 Round 会开启独立请求序列，因此 Chat 会在 goal 消息之前渲染其自包含请求 header。该 Round 以 goal 来源的用户消息进入历史；只有进入步骤的 goal 消息消耗上限，人类消息和陈旧预留不会消耗。goal 生命周期变更仍必须通过 `dsh-tool-goal` 的独立权限检查。
+当对应的活跃 agent 处于 idle，且存在 active、已启用续行、仍有容量的 goal 时，驱动器会排入一条 goal-round 提示词。它点明以 JSON 引用的目标、Round 编号与上限，并告诉模型以当前工作区、工具结果和持久状态为准。默认协议在还有工作时让 goal 保持活动以进入下一轮。`roundProtocol` 会用部署的文本替换该协议，因此部署可以改为封闭本轮的出口——例如要求模型在还有工作时继续做，并且只有目标达成或存在被允许的 blocker 时才结束本轮。被接纳的 Round 会开启独立请求序列，因此 Chat 会在 goal 消息之前渲染其自包含请求 header。该 Round 以 goal 来源的用户消息进入历史；只有进入步骤的 goal 消息消耗上限，人类消息和陈旧预留不会消耗。goal 生命周期变更仍必须通过 `dsh-tool-goal` 的独立权限检查。
 
 ### 何时停止续行
 
@@ -96,6 +107,7 @@ Round 只在整个 agent 进入 idle 时启动；完成、暂停和阻塞会阻�
 
 - [goal 服务](../goal/README.zh.md)——本驱动器继续推进的 goal 状态与生命周期。
 - [goal 工具](../tool-goal/README.zh.md)——面向模型的工具及其执行时权限检查。
+- [不存在以自身容量为由的阻塞 Agent Note](../../../.agents/notes/implemented/feature/2026-09-19-no-self-capacity-blockers.zh.md)——一轮为何只在目标达成或存在被允许的 blocker 时结束。
 
 -----
 
@@ -106,7 +118,7 @@ Round 只在整个 agent 进入 idle 时启动；完成、暂停和阻塞会阻�
 
 #### 模型看到的内容
 
-每个已准入 Round 都是一段保留的用户角色 `<goal_round>` 块，其中点明完整目标与正数 Round 编号。更早的用户消息、goal 状态快照、assistant 输出与工具记录仍保留在同一会话历史中。
+每个已准入 Round 都是一段保留的用户角色 `<goal_round>` 块，其中点明完整目标与正数 Round 编号，后面跟随完成协议：默认是本包文本——标记目标完成，在还有工作时让 goal 保持活动以进入下一轮，并在报告 blocker 之前遵循 goal 工具策略；或者部署通过 `roundProtocol` 提供的文本。更早的用户消息、goal 状态快照、assistant 输出与工具记录仍保留在同一会话历史中。
 
 #### Token 影响
 
