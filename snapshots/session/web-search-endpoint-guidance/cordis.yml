@@ -3,6 +3,13 @@
     - id: web-search-error-fixture
       name: './web-search-error-fixture.mjs'
 
+# This scenario records the DeepSeek route, so it pins that provider rather than
+# inheriting the base's shipped selection.
+- id: web
+  config:
+    searchProvider: deepseek-official
+    fetchProvider: http
+
 - id: web-search-deepseek
   name: '@deepseek-ai/dsh-web-search-deepseek'
   config:
