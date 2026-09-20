@@ -2769,12 +2769,18 @@ Source: [`packages/subagent/subagent-claude-code/src/index.ts:38`](../packages/s
 Requires: `subagents` · `subprocess`
 
 ```ts config-catalog
-/** Deployment-owned model, permission, environment, and process-release settings. */
+/** Deployment-owned model, reasoning, permission, environment, and process-release settings. */
 export interface Config {
   /** Provider name on `ctx.subagents` (default `codex`). */
   providerName?: string
   /** Native Codex model fixed for this instance; omitted to inherit Codex settings. */
   model?: string
+  /**
+   * Reasoning effort fixed for every turn from this instance, as the model
+   * advertises it (`low`, `medium`, `high`, `xhigh`, `max` for `gpt-6-astra`);
+   * omitted to inherit the effort Codex resolves from its own configuration.
+   */
+  reasoningEffort?: string
   /**
    * Explicit environment entries layered over the subprocess seam's
    * credential-scrubbed parent environment.
