@@ -1011,6 +1011,26 @@ export const IconShieldOutline16 = ({ size = 16, className }: IconProps) => (
   </svg>
 )
 
+/** Five-point favourite star on the 16 grid: the outer contour both marks share. */
+const STAR_CONTOUR = 'M8 1.4L9.48 5.96L14.28 5.96L10.4 8.78L11.88 13.34L8 10.52L4.12 13.34L5.6 8.78L1.72 5.96L6.52 5.96Z'
+
+/** {@link STAR_CONTOUR} inset to the ring's inner edge, cut out for the outline mark. */
+const STAR_INNER_CONTOUR = 'M8 3L9.12 6.46L12.76 6.45L9.81 8.59L10.94 12.05L8 9.9L5.06 12.05L6.19 8.59L3.24 6.45L6.88 6.46Z'
+
+/** Favourite toggle in its unset state: the star's outline ring. */
+export const IconStarOutline16 = ({ size = 16, className }: IconProps) => (
+  <svg width={size} height={size} className={className} viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
+    <path d={`${STAR_CONTOUR}${STAR_INNER_CONTOUR}`} fillRule="evenodd" clipRule="evenodd" fill="currentColor" />
+  </svg>
+)
+
+/** Favourite toggle in its set state: the same star, filled. */
+export const IconStarFill16 = ({ size = 16, className }: IconProps) => (
+  <svg width={size} height={size} className={className} viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
+    <path d={STAR_CONTOUR} fill="currentColor" />
+  </svg>
+)
+
 /** Plugin pinwheel (design handoff for the plugin manager): four interleaved arcs on the 16 grid. */
 export const IconPluginPinwheelOutline16 = ({ size = 16, className }: IconProps) => (
   <svg width={size} height={size} className={className} viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">

@@ -242,6 +242,21 @@ describe('ui-model-selection dual entry', () => {
       .toBe('DeepSeek · Stronger agentic coding, knowledge, and difficult reasoning; suited to complex or quality-critical tasks at higher cost.')
   })
 
+  it('shares one browser-wide pin store across sessions', async () => {
+    const b = await bench()
+    b.mint('a')
+    b.mint('b')
+    const faceA = b.seat().inject!(sid('a'))
+    const faceB = b.seat().inject!(sid('b'))
+    expect(faceA.hooks.modelPins).toBe(faceB.hooks.modelPins)
+    expect(faceA.hooks.modelPins.getSnapshot().pinned).toEqual([])
+
+    faceA.togglePin('opencode-go', 'qwen3.8-flash')
+    expect(faceA.hooks.modelPins.getSnapshot().pinned).toEqual(['opencode-go/qwen3.8-flash'])
+    faceB.togglePin('opencode-go', 'qwen3.8-flash')
+    expect(faceA.hooks.modelPins.getSnapshot().pinned).toEqual([])
+  })
+
   it('a seat selection is the current the popup marks active next — one shared state', async () => {
     const b = await bench()
     b.mint('s1')

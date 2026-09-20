@@ -1,7 +1,13 @@
 - menu "模型与推理等级":
+  - img
+  - searchbox "搜索模型"
   - group "DeepSeek":
     - text: DeepSeek
     - menuitemradio "Messages Flash" [checked]:
       - text: Messages Flash
       - img
+    - button "固定 Messages Flash":
+      - img
     - menuitemradio "DeepSeek-V4-Pro"
+    - button "固定 DeepSeek-V4-Pro":
+      - img

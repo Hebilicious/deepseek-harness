@@ -27,6 +27,7 @@ import type { ModelDirectoryState } from './directory.ts'
 import { ModelDirectoryResolver } from './service.ts'
 import type { ModelSelectInjected } from './slots.ts'
 import { ModelSelect } from './ModelSelect.tsx'
+import { createModelPinsStore, modelPinKey, toggleModelPin } from './pins.ts'
 import { en, zh, type ModelKey } from './locales.ts'
 
 export { ModelDirectory } from './directory.ts'
@@ -174,7 +175,10 @@ export function apply(ctx: ClientContext): void {
     }), 'ui-model-selection: /model contribution')
   })
 
-  // Entry 2: the composer's named model seat over the SAME directory.
+  // Entry 2: the composer's named model seat over the SAME directory. Pins are
+  // a browser-wide preference rather than session state, so one store created
+  // here serves every session's seat and leaves with this plugin fiber.
+  const pins = createModelPinsStore()
   ctx.inject(['slots', 'modelDirectories'], (scope: ClientContext) => {
     const models = scope.modelDirectories
     const sessions = scope.sessions
@@ -187,12 +191,16 @@ export function apply(ctx: ClientContext): void {
         return {
           available,
           directory: directory.store,
+          hooks: { modelPins: pins },
           load: () => {
             if (available) directory.load().catch(() => { /* surfaced on the store */ })
           },
           select: (selection: ModelSelection) => available
             ? directory.select(selection)
             : Promise.resolve(undefined),
+          togglePin: (providerId: string, modelId: string) => {
+            toggleModelPin(pins, modelPinKey(providerId, modelId))
+          },
         }
       },
     }, ModelSelect))

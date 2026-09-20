@@ -5,7 +5,8 @@
  * separate key: the visible fallback label and the accessible name of
  * an unset trigger are free to diverge per locale, and folding it into
  * `trigger.aria` would announce the degenerate "Select model, current Select
- * model".
+ * model". `search.label` and `search.placeholder` are separate for the same
+ * reason, and `pin.add`/`pin.remove` name the action each state performs.
  */
 
 /** Simplified Chinese dictionary (the key-set source of truth). */
@@ -23,6 +24,12 @@ export const zh = {
   'menu.aria': '模型与推理等级',
   'menu.model': '模型',
   'menu.effort': '推理等级',
+  'search.label': '搜索模型',
+  'search.placeholder': '搜索模型',
+  'group.pinned': '已固定',
+  'option.providerAria': '{model}，提供方 {provider}',
+  'pin.add': '固定 {model}',
+  'pin.remove': '取消固定 {model}',
   'effort.providerDefault': 'Default',
   'status.loading': '正在刷新模型列表…',
   'error.action': '模型操作失败：{message}',
@@ -30,6 +37,7 @@ export const zh = {
   'action.reload': '重新加载',
   'warning.groupLoad': '{name} 加载失败：{message}',
   'empty.models': '没有可用的模型。',
+  'empty.search': '没有匹配“{query}”的模型。',
   'blocked.composer': '当前模型不可用，请先选择模型',
   'empty.efforts': '当前模型未提供推理等级。',
 } satisfies Record<string, string>
@@ -52,6 +60,12 @@ export const en = {
   'menu.aria': 'Model and reasoning effort',
   'menu.model': 'Model',
   'menu.effort': 'Effort',
+  'search.label': 'Search models',
+  'search.placeholder': 'Search models',
+  'group.pinned': 'Pinned',
+  'option.providerAria': '{model}, provider {provider}',
+  'pin.add': 'Pin {model}',
+  'pin.remove': 'Unpin {model}',
   'effort.providerDefault': 'Default',
   'status.loading': 'Refreshing model list…',
   'error.action': 'Model operation failed: {message}',
@@ -59,6 +73,7 @@ export const en = {
   'action.reload': 'Reload',
   'warning.groupLoad': '{name} failed to load: {message}',
   'empty.models': 'No models available.',
+  'empty.search': 'No models match "{query}".',
   'blocked.composer': 'This model is unavailable — select one to continue',
   'empty.efforts': 'This model provides no reasoning effort levels.',
 } satisfies Record<ModelKey, string>

@@ -128,8 +128,19 @@
   --dsh-scrollbar-thumb-hover: var(--dsw-alias-scrollbar-hover-l2);
 }
 
+/* The model pane sizes to the card, not to the rows it happens to show: the
+   card hangs off the trigger, so a width or height that followed the filter
+   would move the rows out from under the pointer on every keystroke. */
+.menuModel {
+  width: min(360px, calc(100vw - 32px));
+  height: min(360px, calc(100vh - 96px));
+}
+
 .status,
 .empty {
+  /* Only the row list absorbs the model card's fixed height; every other
+     child keeps its own size in the column flex layout. */
+  flex: none;
   padding: 10px;
   color: var(--dsw-alias-label-tertiary);
   font-size: 13px;
@@ -139,6 +150,7 @@
 .error,
 .warning {
   display: flex;
+  flex: none;
   align-items: flex-start;
   justify-content: space-between;
   gap: 8px;
@@ -172,6 +184,57 @@
   overflow-y: auto;
 }
 
+/* Filter field above the scrolling rows. Metrics follow the client's other
+   catalog filters (ui-settings-plugin-inventory): 36px field, 10px radius
+   matching the rows, icon inset 10px and the text column 32px from the edge,
+   with the input's own right padding clearing the native clear button. */
+.search {
+  position: relative;
+  display: flex;
+  flex: none;
+  align-items: center;
+  box-sizing: border-box;
+  height: 36px;
+  margin: 0 0 4px;
+  border: 0.5px solid var(--dsw-alias-border-l4);
+  border-radius: 10px;
+  color: var(--dsw-alias-label-caption);
+  background: var(--dsw-alias-bg-layer-1);
+}
+
+.search:hover {
+  border-color: var(--dsw-alias-label-caption);
+}
+
+.search:focus-within {
+  border-color: var(--dsw-alias-state-business-primary);
+}
+
+.searchIcon {
+  position: absolute;
+  left: 10px;
+  pointer-events: none;
+}
+
+.searchInput {
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  padding: 0 30px;
+  border: 0;
+  outline: 0;
+  border-radius: inherit;
+  color: var(--dsw-alias-label-primary);
+  background: transparent;
+  font: inherit;
+  font-size: 13px;
+  line-height: 20px;
+}
+
+.searchInput::placeholder {
+  color: var(--dsw-alias-label-caption);
+}
+
 .group + .group {
   margin-top: 4px;
 }
@@ -188,13 +251,22 @@
   font-weight: 500;
 }
 
+/* One model row and its favourite toggle: the option keeps the row's full
+   hit area while the toggle sits outside it (a button cannot nest in the
+   option button), so a pin click never selects the model. */
+.optionRow {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
 .option {
   box-sizing: border-box;
   display: flex;
+  flex: 1 1 auto;
   align-items: center;
   gap: 8px;
-  width: auto;
-  min-width: 100%;
+  min-width: 0;
   min-height: 38px;
   padding: 6px 8px;
   border: none;
@@ -237,6 +309,49 @@
   font-weight: 500;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/* Provider under the name, for the Pinned section's mixed-provider rows. */
+.optionProvider {
+  overflow: hidden;
+  color: var(--dsw-alias-label-caption);
+  font-size: 12px;
+  line-height: 16px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Favourite toggle: quiet at rest so the rows stay scannable, filled and
+   accented once pinned. */
+.pin {
+  display: grid;
+  place-items: center;
+  flex: 0 0 24px;
+  height: 24px;
+  padding: 0;
+  border: none;
+  border-radius: 6px;
+  outline: none;
+  background: transparent;
+  color: var(--dsw-alias-label-caption);
+  cursor: pointer;
+}
+
+.pin:hover {
+  background: var(--dsw-alias-interactive-bg-hover);
+  color: var(--dsw-alias-label-secondary);
+}
+
+.pin:focus-visible {
+  box-shadow: 0 0 0 2px var(--dsw-alias-border-l3);
+}
+
+.pinSet {
+  color: var(--dsw-alias-state-business-primary);
+}
+
+.pinSet:hover {
+  color: var(--dsw-alias-state-business-primary);
 }
 
 .check {
