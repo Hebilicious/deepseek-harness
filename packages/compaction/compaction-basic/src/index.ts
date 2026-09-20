@@ -111,6 +111,7 @@ export class BasicCompactionEngine extends CompactionEngine {
     maxOverflowRetries: maxOverflowRetriesSchema,
     modelPolicies: z.array(modelPolicy),
     auto: z.boolean(),
+    checkpointNotice: z.string(),
   })
 
   /** Resolved and validated compaction configuration. */
@@ -420,6 +421,7 @@ export class BasicCompactionEngine extends CompactionEngine {
   private regionDependencies(): Parameters<typeof compactSurfaceRegion>[0] {
     return {
       meter: this.ctx.tokenMeter,
+      checkpointFraming: { notice: this.config.checkpointNotice },
       summarize: (input, owner, abort) => this.summarize(input, owner, abort),
       recover: (error, agent, sourceEventSeqs, signal) => this.ctx.waterfall('compaction/summary-error', {
         session: agent.session,

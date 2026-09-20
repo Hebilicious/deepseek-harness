@@ -73,6 +73,7 @@ All settings are optional. The defaults start condensing at 80% of the routed mo
 | `maxOverflowRetries` | `1` | Maximum retries after a confirmed context-window overflow; `0` disables recovery only. |
 | `modelPolicies` | `[]` | Exact `{ provider, model, ...partialPolicy }` overrides for individual model routes. |
 | `auto` | `true` | Enable automatic condensation and overflow recovery; set `false` for manual-only operation. |
+| `checkpointNotice` | `''` | Text appended to every checkpoint preamble; must not contain `<compacted-summary>` or `</compacted-summary>`. |
 
 Misconfiguration fails fast: an unknown setting, a duplicate per-model override, both retention forms together, or a ratio retention that is not below the threshold all reject the plugin at load. An absolute `retainTokens` budget — top-level or per-model — that is not below its threshold fails when that model is first used, because the comparison needs the model's context size.
 
@@ -152,6 +153,7 @@ Read these pages when the package-level contract is not enough; they move from t
 - [Tool-result pruner](../compaction-tool-result-pruner/README.md) — the optional companion that trims oversized tool outputs first.
 - [Human /compact command](../command-compact/README.md) — on-demand condensation without waiting for pressure.
 - [Token meter](../../llm/token-meter/README.md) — the measurement service that decides when to condense.
+- [No self-capacity blockers Agent Note](../../../.agents/notes/implemented/feature/2026-09-19-no-self-capacity-blockers.md) — why the checkpoint states there is no budget to conserve.
 - [Generated configuration catalog](../../../docs/config-catalog.md#deepseek-aidsh-compaction-basic) — every accepted config field and its source declaration.
 
 -----
@@ -163,12 +165,18 @@ Read these pages when the package-level contract is not enough; they move from t
 
 #### What the model sees
 
-After a successful step crosses the threshold, oversized tool results are first rewritten when the optional pruner is loaded. If summarization remains necessary, the next request receives the checkpoint preamble below, a blank line, `<compacted-summary>`, the data-dependent summary, and `</compacted-summary>`. Overflow recovery rebuilds the immediate retry from whatever replacement advanced the surface. A checkpoint replaces the selected older range and is followed by the retained recent units.
+After a successful step crosses the threshold, oversized tool results are first rewritten when the optional pruner is loaded. If summarization remains necessary, the next request receives the checkpoint preamble below, a blank line, `<compacted-summary>`, the data-dependent summary, and `</compacted-summary>`. A configured `checkpointNotice` is appended to that preamble. Overflow recovery rebuilds the immediate retry from whatever replacement advanced the surface. A checkpoint replaces the selected older range and is followed by the retained recent units.
 
 ##### Conversation checkpoint preamble
 
 ```markdown
 This is an automatically generated checkpoint condensing an earlier span of the conversation to free up context. Treat the captured context as established background and build on it without restating it. Continue the task directly from the messages that follow, without acknowledging this checkpoint.
+```
+
+##### Checkpoint notice (checkpointNotice)
+
+```markdown
+You have no token budget to read or conserve: compaction is automatic and unlimited. Never stop, hedge, shorten, or narrow the work, and never ask for a fresh session, because of context. If a detail is missing from this summary, re-read it from the workspace.
 ```
 
 #### Token effect

@@ -73,6 +73,7 @@ kind: "package-reference"
 | `maxOverflowRetries` | `1` | 已确认上下文窗口溢出后的最大重试次数；`0` 只禁用恢复。 |
 | `modelPolicies` | `[]` | 针对个别模型路由的精确 `{ provider, model, ...partialPolicy }` 覆盖。 |
 | `auto` | `true` | 启用自动压缩与溢出恢复；设为 `false` 则仅手动执行。 |
+| `checkpointNotice` | `''` | 追加到每个检查点前导的文本；不得包含 `<compacted-summary>` 或 `</compacted-summary>`。 |
 
 配置错误会快速失败：未知设置、重复的按模型覆盖、两种保留形式同时出现，或比例保留量不低于阈值，都会在加载时拒绝插件。任何绝对 `retainTokens` 预算——顶层或按模型——不低于其阈值时，都会在该模型首次使用时失败，因为该比较需要模型的上下文大小。
 
@@ -152,6 +153,7 @@ kind: "package-reference"
 - [工具结果修剪器](../compaction-tool-result-pruner/README.zh.md)——先修剪超大工具输出的可选配套工具。
 - [人类 /compact 命令](../command-compact/README.zh.md)——无需等待压力的按需压缩。
 - [Token meter](../../llm/token-meter/README.zh.md)——决定何时压缩的测量服务。
+- [不存在以自身容量为由的阻塞 Agent Note](../../../.agents/notes/implemented/feature/2026-09-19-no-self-capacity-blockers.zh.md)——检查点为何声明没有需要节省的预算。
 - [生成配置目录](../../../docs/config-catalog.zh.md#deepseek-aidsh-compaction-basic)——每个受支持配置字段及其源声明。
 
 -----
@@ -163,12 +165,18 @@ kind: "package-reference"
 
 #### 模型看到的内容
 
-成功步骤越过阈值后，如果已加载可选修剪器，超大工具结果会先被改写。如果仍需摘要，下一个请求会收到下方检查点前导、一个空行、`<compacted-summary>`、根据数据生成的摘要以及 `</compacted-summary>`。溢出恢复会根据使表层前进的任何替换重建立即重试。检查点会替换已选较早范围，后面跟随已保留的近期单元。
+成功步骤越过阈值后，如果已加载可选修剪器，超大工具结果会先被改写。如果仍需摘要，下一个请求会收到下方检查点前导、一个空行、`<compacted-summary>`、根据数据生成的摘要以及 `</compacted-summary>`。配置的 `checkpointNotice` 会追加到该前导之后。溢出恢复会根据使表层前进的任何替换重建立即重试。检查点会替换已选较早范围，后面跟随已保留的近期单元。
 
 ##### 会话检查点前导
 
 ```markdown
 This is an automatically generated checkpoint condensing an earlier span of the conversation to free up context. Treat the captured context as established background and build on it without restating it. Continue the task directly from the messages that follow, without acknowledging this checkpoint.
+```
+
+##### 检查点声明（checkpointNotice）
+
+```markdown
+You have no token budget to read or conserve: compaction is automatic and unlimited. Never stop, hedge, shorten, or narrow the work, and never ask for a fresh session, because of context. If a detail is missing from this summary, re-read it from the workspace.
 ```
 
 #### Token 影响

@@ -9,7 +9,7 @@ English | [中文](README.zh.md)
 
 ## Summary
 
-`dsh-goal-round-driver` automatically continues an active goal in the same session while the agent is idle, continuation is armed, and the configured round allowance remains. Each round gives the model another turn toward the objective; only goal rounds that reach model history consume the allowance, and exhaustion records a blocker. The driver has no configuration: the goal defines the round limit, and `dsh-tool-goal` defines when repeated blocking stops continuation. Mount it with `dsh-goal` and `dsh-tool-goal` for unattended multi-round progress; omit it when each step requires human steering.
+`dsh-goal-round-driver` automatically continues an active goal in the same session while the agent is idle, continuation is armed, and the configured round allowance remains. Each round gives the model another turn toward the objective; only goal rounds that reach model history consume the allowance, and exhaustion records a blocker. Its one setting, `roundProtocol`, supplies the round's completion protocol text. The goal defines the round limit, and `dsh-tool-goal` defines when repeated blocking stops continuation. Mount it with `dsh-goal` and `dsh-tool-goal` for unattended multi-round progress; omit it when each step requires human steering.
 
 ## Table of Contents
 
@@ -42,11 +42,22 @@ Mount the driver beside the goal service and the goal tools; the driver itself t
   name: '@deepseek-ai/dsh-goal-round-driver'
 ```
 
-`maxGoalRounds` belongs to the goal definition, while the model-facing blocked threshold belongs to `dsh-tool-goal`; duplicating either value in the driver could produce divergent policy.
+`maxGoalRounds` belongs to the goal definition, while the model-facing blocked threshold belongs to `dsh-tool-goal`; duplicating either value in the driver could produce divergent policy. `roundProtocol` belongs here because it changes only the round prompt. It replaces the default protocol, so supply the complete text, including the instruction to follow the goal-tool policy if you want it:
+
+```yaml
+- id: goal-round-driver
+  name: '@deepseek-ai/dsh-goal-round-driver'
+  config:
+    roundProtocol: |
+      goal, and mark it complete. If work remains, keep working rather than reporting. End the round only when the
+      objective holds or a permitted blocker exists, and make each round's progress a commit or a measurement
+      rather than a narrative. Your own capacity is never a reason to stop. Follow the configured goal-tool policy
+      before reporting a blocker.
+```
 
 ### What each round does
 
-With an exact live agent idle, an active armed goal, and remaining capacity, the driver queues one goal-round prompt. It names the JSON-quoted objective, round number, and cap, and tells the model to use current workspace, tool results, and durable state as authority. An accepted round starts a distinct request series, so Chat renders its self-contained request header before the goal message. The round enters history as a goal-sourced user message; only an entered goal message consumes the cap, while human messages and stale reservations do not. Goal lifecycle mutations still require the independent authority checks in `dsh-tool-goal`.
+With an exact live agent idle, an active armed goal, and remaining capacity, the driver queues one goal-round prompt. It names the JSON-quoted objective, round number, and cap, and tells the model to use current workspace, tool results, and durable state as authority. The default protocol leaves the goal active for the next round when work remains. `roundProtocol` replaces that protocol with the deployment's text, so a deployment can close the round's exits instead — for example by requiring the model to keep working while work remains and to end the round only on an achieved objective or a permitted blocker. An accepted round starts a distinct request series, so Chat renders its self-contained request header before the goal message. The round enters history as a goal-sourced user message; only an entered goal message consumes the cap, while human messages and stale reservations do not. Goal lifecycle mutations still require the independent authority checks in `dsh-tool-goal`.
 
 ### When continuation stops
 
@@ -96,6 +107,7 @@ The driver consumes the goal state and defers policy to the goal tools; read the
 
 - [Goal service](../goal/README.md) — the goal state and lifecycle this driver continues.
 - [Goal tools](../tool-goal/README.md) — the model-facing tools and their execution-time authority checks.
+- [No self-capacity blockers Agent Note](../../../.agents/notes/implemented/feature/2026-09-19-no-self-capacity-blockers.md) — why a round ends only on the objective or a permitted blocker.
 
 -----
 
@@ -106,7 +118,7 @@ The driver consumes the goal state and defers policy to the goal tools; read the
 
 #### What the model sees
 
-Each admitted round is one retained user-role `<goal_round>` block naming the full objective and positive round number. Earlier human messages, goal-state snapshots, assistant output, and tool records remain in the same session history.
+Each admitted round is one retained user-role `<goal_round>` block naming the full objective and positive round number, followed by the completion protocol: by default the package text that marks the objective complete, leaves the goal active for the next round while work remains, and defers to the goal-tool policy before reporting a blocker, or the `roundProtocol` text the deployment supplied. Earlier human messages, goal-state snapshots, assistant output, and tool records remain in the same session history.
 
 #### Token effect
 

@@ -16,6 +16,7 @@ import {
   goalToolExecution,
   requireDirectHuman,
 } from './authority.ts'
+import { capacityExcuse } from './blocker.ts'
 import { renderWrapupContext } from './wrapup.ts'
 
 export const name = 'tool-goal'
@@ -25,16 +26,26 @@ export const inject = ['agents', 'goals', 'tools', 'systemPrompt', 'sessionProje
 export interface Config {
   /** Minimum admitted goal rounds before the model may self-report `blocked`. */
   blockedAfterConsecutiveRounds?: number
+  /**
+   * Permitted-reason policy appended to the `tool:goal` guidance. Supplying it
+   * also enables the capacity screen, so the executor refuses a `blocked_reason`
+   * that the supplied policy does not permit. Empty or absent appends nothing
+   * and screens nothing.
+   */
+  blockedReasonPolicy?: string
 }
 
 /** Schemastery config for the goal-tool policy. */
 export const Config: z<Config> = z.object({
   blockedAfterConsecutiveRounds: z.number().step(1).min(1).default(3),
+  blockedReasonPolicy: z.string(),
 })
 
 /** Fully materialized tool policy. */
 interface ResolvedConfig {
   readonly blockedAfterConsecutiveRounds: number
+  /** Empty when the deployment supplied no policy text. */
+  readonly blockedReasonPolicy: string
 }
 
 type UpdateAction = 'edit' | 'pause' | 'resume' | 'complete' | 'blocked'
@@ -108,9 +119,9 @@ const GOAL_VALUE_SCHEMA = {
   ],
 } as const
 
-/** Render policy guidance with its deployment-selected blocked threshold. */
-function guidance(blockedAfter: number): string {
-  return 'Use goal tools for one long-running completion objective in the current session. '
+/** Render policy guidance with its deployment-selected blocked threshold and reason policy. */
+function guidance(blockedAfter: number, blockedReasonPolicy: string): string {
+  const base = 'Use goal tools for one long-running completion objective in the current session. '
     + 'create_goal may infer goal intent from a direct human request in any language; do not '
     + 'create a goal for routine single-turn work. Call get_goal before update_goal and copy its '
     + 'exact goal_id and revision. After session resume or fork, an active goal is disarmed: when '
@@ -119,6 +130,7 @@ function guidance(blockedAfter: number): string {
     + `blocked only after the same blocking condition persists for at least ${blockedAfter} `
     + 'consecutive goal rounds, and report that concrete condition in blocked_reason; difficulty, uncertainty, '
     + 'or useful remaining work is not blocked.'
+  return blockedReasonPolicy === '' ? base : `${base} ${blockedReasonPolicy}`
 }
 
 /** Validate config even when apply is called directly outside Loader normalization. */
@@ -127,7 +139,11 @@ function resolveConfig(config: Config): ResolvedConfig {
   if (!Number.isSafeInteger(blockedAfter) || blockedAfter < 1) {
     throw new TypeError('blockedAfterConsecutiveRounds must be a positive safe integer')
   }
-  return { blockedAfterConsecutiveRounds: blockedAfter }
+  const blockedReasonPolicy = config.blockedReasonPolicy ?? ''
+  if (typeof blockedReasonPolicy !== 'string') {
+    throw new TypeError('blockedReasonPolicy must be a string')
+  }
+  return { blockedAfterConsecutiveRounds: blockedAfter, blockedReasonPolicy }
 }
 
 /** Whether optional text is meaningful rather than a strict-schema empty filler. */
@@ -188,7 +204,7 @@ export function apply(ctx: Context, config: Config): void {
   ctx.systemPrompt.section({
     name: 'tool:goal',
     order: ctx.systemPrompt.getSectionOrder('TOOL_GOAL'),
-    text: guidance(resolved.blockedAfterConsecutiveRounds),
+    text: guidance(resolved.blockedAfterConsecutiveRounds, resolved.blockedReasonPolicy),
   })
 
   ctx.tools.register(defineTool({
@@ -299,9 +315,22 @@ export function apply(ctx: Context, config: Config): void {
       if (args.action === 'complete' && hasText(args.blocked_reason)) {
         throw new HarnessError('blocked_reason is valid only with action blocked', 'GOAL_TOOL_INVALID_UPDATE')
       }
-      if (args.action === 'blocked'
-        && (args.blocked_reason === undefined || args.blocked_reason.trim().length === 0)) {
-        throw new HarnessError('blocked_reason is required with action blocked', 'GOAL_TOOL_INVALID_UPDATE')
+      if (args.action === 'blocked') {
+        if (args.blocked_reason === undefined || args.blocked_reason.trim().length === 0) {
+          throw new HarnessError('blocked_reason is required with action blocked', 'GOAL_TOOL_INVALID_UPDATE')
+        }
+        const capacity = resolved.blockedReasonPolicy === ''
+          ? undefined
+          : capacityExcuse(args.blocked_reason)
+        if (capacity !== undefined) {
+          throw new HarnessError(
+            `blocked_reason reports your own capacity (${capacity.join(', ')}), which is never a blocker: name a `
+            + 'condition external to you that is reproducible from the workspace, such as access the environment '
+            + 'denies, a credential or decision only a human can supply, or a product requirement that cannot be '
+            + 'satisfied. If the only obstacle is the size of the change, start it and shrink the first step.',
+            'GOAL_TOOL_BLOCK_REASON_CAPACITY',
+          )
+        }
       }
       if (args.action === 'blocked' && authority.kind === 'goal-round'
         && authority.goal.roundsStarted < resolved.blockedAfterConsecutiveRounds) {

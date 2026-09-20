@@ -6,6 +6,7 @@
 import { isDeepStrictEqual } from 'node:util'
 import { FiberState } from '@deepseek-ai/cordis'
 import type { Context } from '@deepseek-ai/cordis'
+import z from '@deepseek-ai/schemastery'
 import type { Agent, PreStepDecision } from '@deepseek-ai/dsh-agent'
 import type { GoalMessageSource, GoalRef, GoalView } from '@deepseek-ai/dsh-goal'
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
@@ -13,10 +14,40 @@ import type { ContentBlock, MessageId, MessageSource } from '@deepseek-ai/dsh-ll
 import type { Session, SessionEvent, UserMessage } from '@deepseek-ai/dsh-session'
 import { renderGoalRoundPrompt } from './prompt.ts'
 
-export { renderGoalRoundPrompt } from './prompt.ts'
+export { renderGoalRoundPrompt, STANDARD_PROTOCOL } from './prompt.ts'
 
 export const name = 'goal-round-driver'
 export const inject = ['agents', 'goals', 'sessions']
+
+/** Model-visible round policy. */
+export interface Config {
+  /**
+   * Completion-protocol text placed in every round prompt after the shared
+   * instruction body. Empty or absent uses the default protocol, which leaves
+   * the goal active for the next round while work remains.
+   */
+  roundProtocol?: string
+}
+
+/** Schemastery config for the goal-round policy. */
+export const Config: z<Config> = z.object({
+  roundProtocol: z.string(),
+})
+
+/** Fully materialized round policy. */
+interface ResolvedConfig {
+  /** Empty when the deployment supplied no protocol text. */
+  readonly roundProtocol: string
+}
+
+/** Validate config even when apply is called directly outside Loader normalization. */
+function resolveConfig(config: Config): ResolvedConfig {
+  const roundProtocol = config.roundProtocol ?? ''
+  if (typeof roundProtocol !== 'string') {
+    throw new TypeError('roundProtocol must be a string')
+  }
+  return { roundProtocol }
+}
 
 /** Identity reserved before a goal continuation enters the agent inbox. */
 interface RoundIdentity {
@@ -73,7 +104,8 @@ function renderThrown(value: unknown): string {
 }
 
 /** Install automatic same-session continuation and its race fences. */
-export function apply(ctx: Context): void {
+export function apply(ctx: Context, config: Config): void {
+  const resolved = resolveConfig(config)
   const states = new Map<Agent, DriverState>()
 
   /** Create state for an exact currently live agent. */
@@ -172,7 +204,9 @@ export function apply(ctx: Context): void {
     }
 
     const round = goal.roundsStarted + 1
-    const content = renderGoalRoundPrompt(goal, round)
+    const content = renderGoalRoundPrompt(goal, round, {
+      ...resolved.roundProtocol === '' ? {} : { protocol: resolved.roundProtocol },
+    })
     const message = createUserMessage({
       content,
       source: { kind: 'goal', goalId: goal.id, revision: goal.revision, round },
