@@ -457,10 +457,14 @@ export interface ToolRuntimeScheduler {
 }
 
 /**
- * Scheduler entry point omitted from the generated named service API.
+ * Scheduler entry point omitted from the generated named service API. The key
+ * comes from the global symbol registry, so a module copy loaded after a
+ * rebuild reaches the slot the registered service already carries instead of
+ * reading an undefined property. `Symbol.for` returns a plain `symbol`, and
+ * the cast restores the property-key type this declaration owns.
  * @internal
  */
-export const TOOL_RUNTIME_SCHEDULER: unique symbol = Symbol('@deepseek-ai/dsh-tools.scheduler')
+export const TOOL_RUNTIME_SCHEDULER: unique symbol = Symbol.for('@deepseek-ai/dsh-tools.scheduler') as never
 
 /** Canonical error code for cancellation after a tool body was invoked. */
 export const TOOL_ABORTED = 'ABORTED'
