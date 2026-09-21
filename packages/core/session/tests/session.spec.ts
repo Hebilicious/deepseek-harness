@@ -571,6 +571,16 @@ describe('Session', () => {
     session.append('user/message', createUserMessage({
       content: [{ type: 'text', text: 'original' }], source: { kind: 'user' },
     }), { surfaceOp: 'append' })
+    // The result needs its call: an unmatched one is not part of derived history.
+    session.append('assistant/message', {
+      stream: [],
+      turn: 1, step: 1,
+      message: createMessage({
+        role: 'assistant',
+        content: [{ type: 'tool-call', id: ToolCallId('c1'), name: 'read', arguments: '{}' }],
+        source: { kind: 'model', ...{ provider: 'mock', model: 'mock' } },
+      }),
+    }, { surfaceOp: 'append' })
     session.append('tool/result', {
       turn: 1, step: 1,
       message: createToolResultMessage({
@@ -585,7 +595,7 @@ describe('Session', () => {
     const messages = session.deriveMessages()
     const userBlock = messages[0]!.content[0]!
     expect(() => { if (userBlock.type === 'text') userBlock.text = 'HACKED' }).toThrow(TypeError)
-    const toolBlock = messages[1]!.content[0]!
+    const toolBlock = messages[2]!.content[0]!
     expect(() => {
       if (toolBlock.type === 'tool-result') toolBlock.content.push({ type: 'text', text: 'injected' })
     }).toThrow(TypeError)

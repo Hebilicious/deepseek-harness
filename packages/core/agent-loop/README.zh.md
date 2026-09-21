@@ -122,7 +122,7 @@ const handle = await ctx.agents.create({
 
 ### 失败与取消
 
-最终适配器选择、分发与迭代失败以终止结束的形式到达并进入 `agent/request-error`；处理该失败的监听器返回 `{ kind: 'retry' }` 且不调用 `next()`，未被处理的失败则是终态。Middleware、结果处理、工具及其他扩展失败仍会抛出并直接关闭轮次——插件失败结束的是轮次，不是循环。取消后未分发的模型工具调用会收到合成的 `tool/call` 加 `ABORTED_BEFORE_DISPATCH` 结果对。[显式取消决策](../../../.agents/notes/implemented/architecture/2026-07-16-explicit-turn-cancellation.zh.md)拥有信号生命周期。
+最终适配器选择、分发与迭代失败以终止结束的形式到达并进入 `agent/request-error`；处理该失败的监听器返回 `{ kind: 'retry' }` 且不调用 `next()`，未被处理的失败则是终态。Middleware、结果处理、工具及其他扩展失败仍会抛出并直接关闭轮次——插件失败结束的是轮次，不是循环。取消后未分发的模型工具调用会收到合成的 `tool/call` 加 `ABORTED_BEFORE_DISPATCH` 结果对。工具调度器的终止性失败会为其遗留的每个未应答调用记录恢复结果——已记录的调用为 `TOOL_OUTCOME_UNKNOWN`，从未分发的调用为 `TOOL_NOT_STARTED`——因此关闭的步骤不会留下提供方 transcript（文本记录）无法表示的 assistant 调用（[决策](../../../.agents/notes/implemented/architecture/2026-09-21-unanswered-tool-call-recovery.zh.md)）。[显式取消决策](../../../.agents/notes/implemented/architecture/2026-07-16-explicit-turn-cancellation.zh.md)拥有信号生命周期。
 
 </details>
 

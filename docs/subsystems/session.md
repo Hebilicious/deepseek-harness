@@ -624,7 +624,8 @@ declare class Session {
    * turn boundary) is correctly absent, and a compaction `replace` deletes the
    * shadowed nodes from the derivation. The projection rules are
    * {@link deriveEventMessage}, with logged message projections applied
-   * without changing node membership or message identity.
+   * without changing node membership or message identity, and
+   * {@link representableHistory} applied to the resulting history.
    *
    * CACHED: pure tail growth costs O(new nodes); a replacement or message projection
    * ({@link SessionSurface.contentGeneration}) rebuilds. The returned array is
@@ -647,7 +648,7 @@ declare class Session {
 
 ## Derived history: `deriveMessages()` and `deriveEventMessage()`
 
-`Session.deriveMessages()` projects the event log into the `Message[]` the model sees — cached (each surface node projected once, when first seen; a surface rewrite rebuilds) and frozen (a fresh array per call over shared, deep-frozen messages, so mutating logged history through a projection is unrepresentable). `deriveEventMessage(event)` is the per-node pure function the fold applies — public so external reconstructors and the dev invariant project a log prefix with exactly the same rules and cannot disagree with the cache. The projection rules:
+`Session.deriveMessages()` projects the event log into the `Message[]` the model sees — cached (each surface node projected once, when first seen; a surface rewrite rebuilds) and frozen (a fresh array per call over shared, deep-frozen messages, so mutating logged history through a projection is unrepresentable). `deriveEventMessage(event)` is the per-node pure function the fold applies — public so external reconstructors and the dev invariant project a log prefix with exactly the same rules and cannot disagree with the cache. One history-level rule runs after the fold: an assistant tool call that no user turn answers is omitted, along with its message when nothing else remains ([decision](../../.agents/notes/implemented/architecture/2026-09-21-unanswered-tool-call-recovery.md)). The projection rules:
 
 - `user/message` → a user message carrying exact `content`; an optional envelope remains log-only display metadata.
 - `assistant/message` → an assistant message with the provider and model that produced it plus optional adapter-private replay state. Its embedded compact stream is replay, usage, and UI evidence rather than a second message. An **empty-content** `assistant/message` is also skipped — a max-tokens step cut off with no content still records an `assistant/message` to hold its stream, usage, provider, and model, but a content-less assistant turn must not enter the provider transcript.

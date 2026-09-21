@@ -3,10 +3,10 @@
  * ACP expected outputs own transcript-facing coverage.
  */
 
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'
 import { createUserMessage, ToolCallId, StreamChunk  } from '@deepseek-ai/dsh-llm'
-import SessionStore, { SessionEvent, SessionId } from '@deepseek-ai/dsh-session'
+import SessionStore, { SessionEvent, SessionId, TOOL_NOT_STARTED, TOOL_OUTCOME_UNKNOWN } from '@deepseek-ai/dsh-session'
 import SystemPrompt from '@deepseek-ai/dsh-system-prompt'
 import LlmRuntime from '@deepseek-ai/dsh-llm'
 import ToolRuntime, { defineContentToolFixture, TOOL_ABORTED_BEFORE_DISPATCH, TOOL_RUNTIME_SCHEDULER, type PostToolDecision, type PreToolDecision } from '@deepseek-ai/dsh-tools'
@@ -702,6 +702,102 @@ describe('tool-call scheduler: failure quiescence', () => {
     expect(events(agent).findLast(event => event.type === 'turn/end')).toMatchObject({
       data: { reason: { kind: 'error', error: { message: schedulerError.message, code: 'UNKNOWN' } } },
     })
+  })
+
+  it('closes every call the failure left unanswered so the transcript stays representable', async () => {
+    const adapter = new MockAdapter([
+      multiCall([{ id: 'c1', name: 'p', args: { id: '1' } }, { id: 'c2', name: 'p', args: { id: '2' } }]),
+    ])
+    const ctx = await harness(adapter)
+    ctx.tools.register(gatedExclusiveTool('p').tool)
+    const scheduler = ctx.tools[TOOL_RUNTIME_SCHEDULER]
+    const prepare = scheduler.prepare.bind(scheduler)
+    const schedulerError = new Error('scheduler exploded')
+    scheduler.prepare = async (exec) => {
+      if (exec.callId === ToolCallId('c1')) throw schedulerError
+      return prepare(exec)
+    }
+    const agent = await ctx.agentLoop.create(SessionId('scheduler-recovery'), { provider: 'mock', model: 'mock' })
+
+    agent.followup(createUserMessage({ content: [{ type: 'text', text: 'go' }], source: { kind: 'user' } }))
+    await waitForIdle(ctx, agent)
+
+    // c1 was recorded before its prepare failed; c2 never reached a group.
+    const results = events(agent).filter(event => event.type === 'tool/result')
+    expect(results.map(result => [result.data.message.source.callId, result.data.error?.code])).toEqual([
+      [ToolCallId('c1'), TOOL_OUTCOME_UNKNOWN],
+      [ToolCallId('c2'), TOOL_NOT_STARTED],
+    ])
+    const recoveryText = (result: (typeof results)[number]): string => {
+      const block = result.data.message.content[0].content[0]
+      return block?.type === 'text' ? block.text : ''
+    }
+    expect(recoveryText(results[0]!)).toContain('outcome is unknown')
+    expect(recoveryText(results[1]!)).toContain('before the Harness recorded it as started')
+    // Every assistant call now has a result, so a strict provider protocol can
+    // represent the resumed history.
+    const messages = agent.session.deriveMessages()
+    const pending = new Set<string>()
+    for (const message of messages) {
+      if (message.role === 'assistant') {
+        pending.clear()
+        for (const block of message.content) if (block.type === 'tool-call') pending.add(block.id)
+      } else if (message.role === 'user') {
+        for (const block of message.content) if (block.type === 'tool-result') pending.delete(block.toolCallId)
+      }
+    }
+    expect([...pending]).toEqual([])
+  })
+
+  it('closes the unstarted siblings of a failing parallel group', async () => {
+    const adapter = new MockAdapter([
+      multiCall([{ id: 'c1', name: 'p', args: { id: '1' } }, { id: 'c2', name: 'p', args: { id: '2' } }]),
+    ])
+    const ctx = await harness(adapter)
+    ctx.tools.register(gatedParallelTool('p').tool)
+    const scheduler = ctx.tools[TOOL_RUNTIME_SCHEDULER]
+    const schedulerError = new Error('scheduler exploded')
+    scheduler.prepare = async (exec) => {
+      if (exec.callId === ToolCallId('c1')) throw schedulerError
+      throw new Error('c2 must never reach prepare')
+    }
+    const agent = await ctx.agentLoop.create(SessionId('scheduler-parallel-recovery'), { provider: 'mock', model: 'mock' })
+
+    agent.followup(createUserMessage({ content: [{ type: 'text', text: 'go' }], source: { kind: 'user' } }))
+    await waitForIdle(ctx, agent)
+
+    // c1 was recorded before its prepare failed; c2 never started.
+    expect(events(agent).filter(event => event.type === 'tool/result').map(result => [
+      result.data.message.source.callId, result.data.error?.code,
+    ])).toEqual([
+      [ToolCallId('c1'), TOOL_OUTCOME_UNKNOWN],
+      [ToolCallId('c2'), TOOL_NOT_STARTED],
+    ])
+  })
+
+  it('keeps the scheduler failure when the recovery append is refused', async () => {
+    const adapter = new MockAdapter([
+      multiCall([{ id: 'c1', name: 'p', args: { id: '1' } }]),
+    ])
+    const ctx = await harness(adapter)
+    ctx.tools.register(gatedExclusiveTool('p').tool)
+    const scheduler = ctx.tools[TOOL_RUNTIME_SCHEDULER]
+    const schedulerError = new Error('scheduler exploded')
+    scheduler.prepare = async () => { throw schedulerError }
+    const agent = await ctx.agentLoop.create(SessionId('scheduler-recovery-refused'), { provider: 'mock', model: 'mock' })
+    const append = agent.session.append.bind(agent.session)
+    vi.spyOn(agent.session, 'append').mockImplementation(((type: string, ...rest: never[]) => {
+      if (type === 'tool/result') throw new Error('recovery rejected')
+      return (append as (...args: never[]) => unknown)(type as never, ...rest)
+    }) as never)
+
+    agent.followup(createUserMessage({ content: [{ type: 'text', text: 'go' }], source: { kind: 'user' } }))
+    await waitForIdle(ctx, agent)
+
+    expect(events(agent).findLast(event => event.type === 'turn/end')).toMatchObject({
+      data: { reason: { kind: 'error', error: { message: schedulerError.message, code: 'UNKNOWN' } } },
+    })
+    vi.restoreAllMocks()
   })
 })
 

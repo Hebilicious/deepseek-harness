@@ -98,7 +98,7 @@ The package is built on event sourcing: a `Session` is an append-only log of typ
 | [`src/surface.ts`](src/surface.ts) | Ordered surface projection, replacement validation, `deriveEventMessage` |
 | [`src/request-header.ts`](src/request-header.ts) | `request/header` folding and reconstruction |
 | [`dsh-util-values`](../../util/values/README.md) | Shared lossless JSON validation and detached snapshots |
-| [`src/repair.ts`](src/repair.ts) | Cold repair of crash-orphaned logs |
+| [`src/repair.ts`](src/repair.ts) | Cold repair of crash-orphaned logs and the canonical tool-call recovery result |
 | [`src/invariant.ts`](src/invariant.ts) | Invariant companion: seq, turn/step enclosure, tool call/result pairing |
 
 ### Append validation
@@ -107,7 +107,7 @@ Every append uses the shared iterative `snapshotJsonValue()` pass, which reads, 
 
 ### Derived history
 
-`deriveMessages()` caches deep-frozen projections and returns a fresh array per call. The four surface event types (`system/message`, `user/message`, `assistant/message`, `tool/result`) supply their recorded message identities and content; an empty-content system node projects to no message. Plugin-owned projections change derived content without mutating recorded messages. Replacements and projection decisions invalidate the cache. Embedded Assistant streams and `assistant/attempt` events remain replay and diagnostic data only.
+`deriveMessages()` caches deep-frozen projections and returns a fresh array per call. The four surface event types (`system/message`, `user/message`, `assistant/message`, `tool/result`) supply their recorded message identities and content; an empty-content system node projects to no message. Plugin-owned projections change derived content without mutating recorded messages. Replacements and projection decisions invalidate the cache. Embedded Assistant streams and `assistant/attempt` events remain replay and diagnostic data only. An assistant tool call that no user turn answers is omitted from the result: providers reject a transcript where a call carries no result, while the durable log keeps the call for the human transcript. The loop records the canonical recovery result when a step fails after committing a call, so only history written before it did loses one from the model's view.
 
 ### The request header
 

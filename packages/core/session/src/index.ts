@@ -12,7 +12,7 @@ import { brandString } from '@deepseek-ai/dsh-brand'
 import { assertNever, deepFreeze, snapshotJsonValue } from '@deepseek-ai/dsh-util-values'
 import { scopeOf, scopeTarget } from '@deepseek-ai/dsh-scope'
 import type { Scoped } from '@deepseek-ai/dsh-scope'
-import type { Message } from '@deepseek-ai/dsh-llm'
+import type { Message, ToolCallId } from '@deepseek-ai/dsh-llm'
 import { SESSION_FORMAT_VERSION, SessionLogOffset, SessionSeq } from './types.ts'
 import type { TypertLookup } from '@deepseek-ai/dsh-typert-protocol'
 import type { CreateSessionOptions, EpochHeader, PrepareSessionOptions, RequestContext, SessionEvent, SessionEventMap, SessionEventType, SessionHeader, SessionId, SessionSeedEventState, SurfaceIntent, SurfaceEventType } from './types.ts'
@@ -24,7 +24,8 @@ export * from './types.ts'
 export { SessionPreparation } from './preparation.ts'
 export type { SessionPreparationOptions } from './preparation.ts'
 export type { AssistantMessage, SystemMessage, ToolResultMessage, UserMessage } from '@deepseek-ai/dsh-llm'
-export { interruptedTurnClosers, TOOL_NOT_STARTED, TOOL_OUTCOME_UNKNOWN } from './repair.ts'
+export { interruptedTurnClosers, toolCallRecovery, TOOL_NOT_STARTED, TOOL_OUTCOME_UNKNOWN } from './repair.ts'
+export type { ToolCallRecovery, UnresolvedToolCall } from './repair.ts'
 export type { SessionSurface, SurfaceFoldReplacement, SurfaceFoldResult, SessionMessageProjection, SessionMessageProjectionContext } from './surface.ts'
 export { deriveEventMessage, foldSurface, isAppendSurfaceEvent, isReplacementSurfaceEvent, isSurfaceEvent, isSurfaceEligibleType } from './surface.ts'
 export { canonicalHeader, foldRequestHeader, headerEquals } from './request-header.ts'
@@ -819,6 +820,8 @@ export class Session {
   private derivedNodes = 0
   /** {@link SurfaceManager.contentGeneration} the cache was built under. */
   private derivedGeneration = 0
+  /** Tool-block-free history reuse, keyed by the unanswered-call set and cache length it was built for. */
+  private representable: { signature: string; messages: readonly Message[] } | undefined
 
   /**
    * Derive the LLM message history by walking the ordered sequences of
@@ -828,7 +831,8 @@ export class Session {
    * turn boundary) is correctly absent, and a compaction `replace` deletes the
    * shadowed nodes from the derivation. The projection rules are
    * {@link deriveEventMessage}, with logged message projections applied
-   * without changing node membership or message identity.
+   * without changing node membership or message identity, and
+   * {@link representableHistory} applied to the resulting history.
    *
    * CACHED: pure tail growth costs O(new nodes); a replacement or message projection
    * ({@link SessionSurface.contentGeneration}) rebuilds. The returned array is
@@ -846,6 +850,7 @@ export class Session {
       this.derived = []
       this.derivedNodes = 0
       this.derivedGeneration = generation
+      this.representable = undefined
     }
     for (const seq of nodes.slice(this.derivedNodes)) {
       // Surface sequences are built from this.log — seq is always a valid
@@ -858,7 +863,51 @@ export class Session {
       if (msg) this.derived.push(msg)
     }
     this.derivedNodes = nodes.length
-    return [...this.derived]
+    return this.representableHistory()
+  }
+
+  /**
+   * Remove assistant tool calls that no user turn answers. Every provider
+   * protocol requires each call to carry its result in the user turn that
+   * follows, so an unanswered call left in the derived history makes the whole
+   * session unusable on any provider that enforces that rule. The durable log
+   * keeps the call: the agent loop records a canonical recovery result when a
+   * step fails after committing one, and this projection covers histories
+   * written before it did.
+   * @returns the derived history without unanswered calls.
+   */
+  private representableHistory(): Message[] {
+    const unanswered = new Set<ToolCallId>()
+    let pending = new Set<ToolCallId>()
+    for (const message of this.derived) {
+      if (message.role === 'assistant') {
+        // The next assistant turn ends the previous calls' answer window.
+        for (const callId of pending) unanswered.add(callId)
+        pending = new Set(message.content.flatMap(block => block.type === 'tool-call' ? [block.id] : []))
+      } else if (message.role === 'user') {
+        for (const block of message.content) {
+          if (block.type === 'tool-result') pending.delete(block.toolCallId)
+        }
+      }
+    }
+    for (const callId of pending) unanswered.add(callId)
+    if (unanswered.size === 0) {
+      this.representable = undefined
+      return [...this.derived]
+    }
+    const signature = `${this.derived.length}:${[...unanswered].sort().join(',')}`
+    if (this.representable?.signature === signature) return [...this.representable.messages]
+    const messages: Message[] = []
+    for (const message of this.derived) {
+      const kept = message.content.filter(block => !(block.type === 'tool-call' && unanswered.has(block.id)))
+      if (kept.length === message.content.length) {
+        messages.push(message)
+      } else if (kept.length > 0) {
+        messages.push(deepFreeze({ ...message, content: kept }))
+      }
+    }
+    this.representable = { signature, messages }
+    return [...messages]
   }
 
   /**
