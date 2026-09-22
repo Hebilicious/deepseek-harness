@@ -16,7 +16,7 @@ import type { Message, ToolCallId } from '@deepseek-ai/dsh-llm'
 import { SESSION_FORMAT_VERSION, SessionLogOffset, SessionSeq } from './types.ts'
 import type { TypertLookup } from '@deepseek-ai/dsh-typert-protocol'
 import type { CreateSessionOptions, EpochHeader, PrepareSessionOptions, RequestContext, SessionEvent, SessionEventMap, SessionEventType, SessionHeader, SessionId, SessionSeedEventState, SurfaceIntent, SurfaceEventType } from './types.ts'
-import { SurfaceManager, validateSessionEventData, validateSurfaceMetadata } from './surface.ts'
+import { SurfaceManager, validateSessionEventData, validateSurfaceMetadata, withoutUnanswerableToolCalls } from './surface.ts'
 import type { SessionSurface, SessionMessageProjection } from './surface.ts'
 import { foldRequestHeader } from './request-header.ts'
 
@@ -27,7 +27,7 @@ export type { AssistantMessage, SystemMessage, ToolResultMessage, UserMessage } 
 export { interruptedTurnClosers, toolCallRecovery, TOOL_NOT_STARTED, TOOL_OUTCOME_UNKNOWN } from './repair.ts'
 export type { ToolCallRecovery, UnresolvedToolCall } from './repair.ts'
 export type { SessionSurface, SurfaceFoldReplacement, SurfaceFoldResult, SessionMessageProjection, SessionMessageProjectionContext } from './surface.ts'
-export { deriveEventMessage, foldSurface, isAppendSurfaceEvent, isReplacementSurfaceEvent, isSurfaceEvent, isSurfaceEligibleType } from './surface.ts'
+export { deriveEventMessage, foldSurface, isAppendSurfaceEvent, isReplacementSurfaceEvent, isSurfaceEvent, isSurfaceEligibleType, withoutUnanswerableToolCalls } from './surface.ts'
 export { canonicalHeader, foldRequestHeader, headerEquals } from './request-header.ts'
 export { KNOWN_SESSION_EVENT_TYPES } from './known-event-types.ts'
 
@@ -951,12 +951,8 @@ export class Session {
     if (this.representable?.signature === signature) return [...this.representable.messages]
     const messages: Message[] = []
     for (const message of this.derived) {
-      const kept = message.content.filter(block => !(block.type === 'tool-call' && unanswered.has(block.id)))
-      if (kept.length === message.content.length) {
-        messages.push(message)
-      } else if (kept.length > 0) {
-        messages.push(deepFreeze({ ...message, content: kept }))
-      }
+      const projected = withoutUnanswerableToolCalls(message, unanswered)
+      if (projected !== null) messages.push(projected)
     }
     this.representable = { signature, messages }
     return [...messages]

@@ -644,8 +644,9 @@ describe('pressure measurement and retention', () => {
     expect(session.surface.nodes.length).toBeLessThan(8)
   })
 
-  it('selects past a call whose closed step never answered it', () => {
+  it('selects past a call whose closed step never answered it', async () => {
     const ctx = createContext()
+    const compact = service({ auto: false, thresholdRatio: 0.5, retainTokens: 0 }, ctx)
     const session = Session.create(SessionId('abandoned-call-range'))
     // One step failed after committing its assistant message, so the recorded
     // call sits in a closed step that can never answer it. Derived history
@@ -709,6 +710,13 @@ describe('pressure measurement and retention', () => {
     // Treating the abandoned call as a pair would stop the range before it.
     expect(nodes[endIdx]!).toBeGreaterThan(abandoned.seq)
     expect(endIdx - startIdx + 1).toBeGreaterThan(10)
+
+    // The summarized prefix is a provider request, so it carries the same
+    // projection: the call no step can answer is absent from it.
+    const result = await compactIfNeeded(compact, session, 'context-overflow')
+    expect(result).not.toBeNull()
+    const summarized = compact.calls[0]!.input.messages.flatMap(message => message.content)
+    expect(summarized.some(block => block.type === 'tool-call' && block.id === ToolCallId('abandoned'))).toBe(false)
   })
 
   it('starts the range after a system head and keeps that node at surface position 0', async () => {

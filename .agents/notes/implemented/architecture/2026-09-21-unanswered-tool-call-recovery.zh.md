@@ -20,7 +20,7 @@ Status: implemented
 
 `Session.deriveMessages()` 省略没有任何用户轮次应答、且没有任何打开步骤仍能应答的 assistant 工具调用，并在该调用是其唯一内容时省略整条消息。步骤仍打开的调用属于待处理：该步骤会应答它，因此它保持可见。`Session.unanswerableToolCalls()` 报告被省略的集合，并按表层与步骤状态缓存。
 
-该规则与协议要求一致，因此由更早版本写入的历史会在下一次请求时自行修复，而不是拒绝运行。持久日志保留该调用，人类可见的 transcript 仍然显示它。压缩读取同一集合：其切分点配平折叠只统计仍由某个答案或某个打开步骤负责的调用，因为被省略的调用没有可拆分的配对。在此之前，这类调用使其之后的每个切分点都不配平，范围选择只能遮蔽它之前的节点；损坏靠近头部的会话会永远重新摘要自己的检查点，再也无法装回其窗口。
+该规则与协议要求一致，因此由更早版本写入的历史会在下一次请求时自行修复，而不是拒绝运行。持久日志保留该调用，人类可见的 transcript 仍然显示它。`withoutUnanswerableToolCalls` 把同一投影应用到单条消息，压缩用它构造回放给摘要器的前缀——那同样是一个提供方请求。压缩还读取同一集合用于其切分点配平折叠，该折叠只统计仍由某个答案或某个打开步骤负责的调用，因为被省略的调用没有可拆分的配对。在此之前，这类调用使其之后的每个切分点都不配平，范围选择只能遮蔽它之前的节点；损坏靠近头部的会话会永远重新摘要自己的检查点，再也无法装回其窗口。
 
 ## Alternatives considered
 
@@ -46,4 +46,4 @@ Status: implemented
 
 `packages/core/agent-loop/tests/tool-calls.spec.ts` 固定写方行为：失败的独占分组用 `TOOL_OUTCOME_UNKNOWN` 关闭其已记录的调用、用 `TOOL_NOT_STARTED` 关闭从未启动的调用；失败的并行分组关闭其未启动的同组成员；之后的派生历史没有未应答调用；被拒绝的恢复追加仍会上报调度器失败。
 
-`packages/compaction/compaction/tests/tool-pairing.spec.ts` 固定：已关闭步骤从未应答的调用不约束任何切分点，而打开的调用仍然约束。`packages/compaction/compaction-basic/tests/compaction-basic.spec.ts` 固定范围选择会越过这类调用，而不是停在它之前。
+`packages/compaction/compaction/tests/tool-pairing.spec.ts` 固定：已关闭步骤从未应答的调用不约束任何切分点，而打开的调用仍然约束。`packages/compaction/compaction-basic/tests/compaction-basic.spec.ts` 固定范围选择会越过这类调用，而不是停在它之前，并固定摘要前缀会省略它。

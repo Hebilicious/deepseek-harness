@@ -2,5 +2,5 @@
 # side as of the last confirmed-consistent state. Both languages carry equal authority;
 # after editing either side, bring the other along and re-record with:
 #   pnpm run verify-translation-pairing --write .agents/notes/implemented/architecture/2026-09-21-unanswered-tool-call-recovery.md
-2026-09-21-unanswered-tool-call-recovery.md: da02516206a83825071fe3effb0d608446879944
-2026-09-21-unanswered-tool-call-recovery.zh.md: 3be33f3c6e94f0c3349598259c85e768241cfab7
+2026-09-21-unanswered-tool-call-recovery.md: c3a641e482ff8012266238e4866b597c22ecf4c9
+2026-09-21-unanswered-tool-call-recovery.zh.md: 8ee92967ea8c72c6b29014e74624188de0d083fd

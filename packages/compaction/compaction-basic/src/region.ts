@@ -19,7 +19,7 @@ import type { CommandId } from '@deepseek-ai/dsh-commands/brand'
 import { createUserMessage, errorChain } from '@deepseek-ai/dsh-llm'
 import type { Message, UserMessage } from '@deepseek-ai/dsh-llm'
 import type { TokenMeasurement, TokenMeter } from '@deepseek-ai/dsh-token-meter'
-import { SessionSeq, type Session, type SessionEvent } from '@deepseek-ai/dsh-session'
+import { SessionSeq, withoutUnanswerableToolCalls, type Session, type SessionEvent } from '@deepseek-ai/dsh-session'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import { frameSummary } from './summarizer.ts'
 import type { CheckpointFraming, SummarizationInput, SummaryResult } from './summarizer.ts'
@@ -549,15 +549,21 @@ function buildSummarizationInput(
   shadowedSeqs: readonly SessionSeq[],
 ): SummarizationInput {
   const header = session.requestHeader()
+  // The summarized prefix must be a request a provider accepts, so it carries
+  // the same projection as derived history: a call no user turn answers and no
+  // open step can answer is absent from it.
+  const unanswerable = session.unanswerableToolCalls()
+  const project = (message: Message | null): Message | null =>
+    message === null ? null : withoutUnanswerableToolCalls(message, unanswerable)
   // shadowedSeqs are current surface seqs, so the surface has a node 0.
   // oxlint-disable-next-line typescript/no-non-null-assertion
   const head = systemHead(session, session.surface.nodes[0]!)
-  const system = head === undefined ? null : session.deriveEventMessage(head)
+  const system = project(head === undefined ? null : session.deriveEventMessage(head))
   const regionMessages = shadowedSeqs
     // shadowedSeqs are current surface seqs, so each is a valid log index.
     // Existing Session history read; migration deferred.
     // oxlint-disable-next-line typescript/no-non-null-assertion, typescript/no-deprecated
-    .map(seq => session.deriveEventMessage(session.eventAt(seq)!))
+    .map(seq => project(session.deriveEventMessage(session.eventAt(seq)!)))
     .filter((message): message is Message => message !== null)
   return {
     ...header?.tools === undefined ? {} : { tools: header.tools },

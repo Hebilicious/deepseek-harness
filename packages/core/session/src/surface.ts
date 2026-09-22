@@ -8,7 +8,8 @@
  * @module @deepseek-ai/dsh-session/surface
  */
 
-import type { Message } from '@deepseek-ai/dsh-llm'
+import type { Message, ToolCallId } from '@deepseek-ai/dsh-llm'
+import { deepFreeze } from '@deepseek-ai/dsh-util-values'
 import { SessionLogOffset, SessionSeq } from './types.ts'
 import { KNOWN_SESSION_EVENT_TYPES, MESSAGE_PROJECTION_EVENT_TYPES } from './known-event-types.ts'
 import type {
@@ -160,6 +161,25 @@ export function deriveEventMessage(
 /** Whether a payload field is a JSON object rather than an array or scalar. */
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+/**
+ * Project one node's message for a history whose answered calls are known. A
+ * tool call that no user turn answers is absent from every request, including
+ * the replayed prefix a compaction summarizes, because providers require each
+ * call to carry its result in the user turn that follows.
+ * @param message - message projected for one surface node.
+ * @param unanswerable - call ids from `Session.unanswerableToolCalls()`.
+ * @returns the message without those calls, or null when nothing else remains.
+ */
+export function withoutUnanswerableToolCalls(
+  message: Message,
+  unanswerable: ReadonlySet<ToolCallId>,
+): Message | null {
+  if (unanswerable.size === 0) return message
+  const kept = message.content.filter(block => block.type !== 'tool-call' || !unanswerable.has(block.id))
+  if (kept.length === message.content.length) return message
+  return kept.length === 0 ? null : deepFreeze({ ...message, content: kept })
 }
 
 /**
