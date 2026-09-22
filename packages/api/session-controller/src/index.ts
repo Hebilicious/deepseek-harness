@@ -21,6 +21,7 @@ import { SessionHistoryController } from './history.ts'
 import { SessionFileReferences } from './file-references.ts'
 import { ApiSessionList } from './list.ts'
 import { buildModelCatalog } from './catalog.ts'
+import type { SessionHarnessCatalog } from './types.ts'
 import { installModelSelectionProjection } from './model-selection-projection.ts'
 import { SessionSkillCatalog } from './skill-catalog.ts'
 import { SessionMediaReferences } from './media-references.ts'
@@ -263,6 +264,15 @@ export class SessionController extends TypertRemoteService {
   @Remote('modelCatalog')
   modelCatalog(): Promise<ModelCatalog> {
     return buildModelCatalog(this.ctx)
+  }
+
+  /**
+   * Describe every agent harness this deployment can create sessions with.
+   * @returns the mounted harnesses, in registration order.
+   */
+  @Remote('harnessCatalog')
+  harnessCatalog(): SessionHarnessCatalog {
+    return { harnesses: this.ctx.agents.harnesses().map(entry => ({ ...entry })) }
   }
 
   /**

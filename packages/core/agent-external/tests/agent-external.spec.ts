@@ -13,6 +13,7 @@ import { PassThrough } from 'node:stream'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { Context, Service } from '@deepseek-ai/cordis'
 import AgentRegistry, {
+  HarnessId,
   type Agent,
   type AgentHandle,
   type AgentOptions,
@@ -140,7 +141,9 @@ class FakeHarness extends Service {
 
   constructor(ctx: Context) {
     super(ctx, 'fakeHarness')
-    this.host = new FakeHost(ctx, 'fake')
+    this.host = new FakeHost(ctx, 'fake', {
+      harness: { id: HarnessId('fake'), name: 'Fake harness' },
+    })
   }
 }
 
@@ -336,6 +339,7 @@ describe('ExternalAgent turn drive', () => {
 
     expect(agent.driven.map(batch => batch.map(textOf))).toEqual([['one']])
     expect(types(agent)).toEqual([
+      'agent/harness',
       'agent/inbox/spliced',
       'turn/start',
       'agent/inbox/spliced',
@@ -981,7 +985,8 @@ describe('ExternalAgentHost transaction', () => {
 
     expect(agent.bound).toBe(true)
     const stored = persistence.stores.get(SessionId('old'))!
-    // The crash tail receives step/turn closers; the restore marker follows.
+    // The crash tail receives step/turn closers; the restore marker and the
+    // harness record the resume wrote follow.
     expect(stored.map(event => event.type)).toEqual([
       'turn/start',
       'step/start',
@@ -989,8 +994,9 @@ describe('ExternalAgentHost transaction', () => {
       'step/end',
       'turn/end',
       'session/end-seed',
+      'agent/harness',
     ])
-    const closer = stored.at(-2)
+    const closer = stored.at(-3)
     expect(closer?.type === 'turn/end' && closer.data.reason).toEqual({ kind: 'interrupted' })
 
     send(agent, 'again')
@@ -1028,6 +1034,26 @@ describe('ExternalAgentHost transaction', () => {
     bench = await harness({ persistence: true })
     await expect(bench.ctx.agents.resume({ resumeSessionId: SessionId('gone') }))
       .rejects.toThrow('no stored session')
+  })
+
+  it('refuses to resume a session another harness recorded', async () => {
+    bench = await harness({ persistence: true })
+    const persistence = bench.persistence!
+    persistence.seed(SessionId('old'), [{
+      type: 'agent/harness',
+      seq: SessionSeq(0),
+      time: 1,
+      data: { harness: 'other' },
+    }])
+
+    // Ownership precedes publication: the refusal names both harnesses and
+    // publishes neither an agent nor a session.
+    await expect(bench.ctx.agents.resume({ resumeSessionId: SessionId('old') }))
+      .rejects.toThrow('session "old" belongs to agent harness "other", not "fake"')
+    expect(bench.ctx.agents.get(SessionId('old'))).toBeUndefined()
+    expect(bench.ctx.sessions.get(SessionId('old'))).toBeUndefined()
+    // The refused resume released the write claim it opened to read the log.
+    expect(persistence.closedHandles.map(handle => handle.id)).toEqual([SessionId('old')])
   })
 
   it('closes a handle that finishes opening after resume was cancelled', async () => {
@@ -1310,7 +1336,7 @@ describe('shared driver defaults', () => {
     agent.inject(msg('accepted'))
     await flushForwards()
     // The accepted row leaves the queue and becomes a durable user message.
-    expect(types(agent)).toEqual(['agent/inbox/spliced', 'agent/inbox/spliced', 'user/message'])
+    expect(types(agent)).toEqual(['agent/harness', 'agent/inbox/spliced', 'agent/inbox/spliced', 'user/message'])
     expect(agent.inbox.nextStep).toEqual([])
 
     const failure = new Error('inject transport failed')

@@ -46,10 +46,10 @@ In-box bundles resolve from the dsh installation; the launcher activates this la
 
 | Target row | Change |
 |---|---|
-| `agent-loop` | Disabled, because `ctx.agents.setFactory()` accepts exactly one factory and the ACP driver takes that slot |
+| `agent-loop` | Disabled, so the in-process loop's `dsh` harness stays out of this Devin-driven surface |
 | `agent-default-model` | `provider: devin`, `model: ''`, so a new session carries no model until the picker or a `model/selection` chooses one |
 | `session-title-llm` | Pinned to `deepseek-official` / `deepseek-flash`, because the session's logged route is the catalog-only `devin` adapter, which serves no streams |
-| `agent-acp` | Inserted: one shared `devin acp` process per profile, one ACP session per session |
+| `agent-acp` | Inserted with one `devin` harness entry: one shared `devin acp` process for that entry, one ACP session per session |
 
 The driver's own contract, configuration, and limitations live in [`dsh-agent-acp`](../../core/agent-acp/README.md).
 
@@ -67,7 +67,7 @@ A patch replaces the targeted row's whole `config`, and an `insert` list appends
 
 ### Why the loop leaves the composition
 
-`AgentRegistry.setFactory()` throws `an agent factory is already registered` on a second registration. Both `dsh-agent-loop` and `dsh-agent-acp` register themselves as that factory, so the profile composes exactly one of them: this layer disables the base's `agent-loop` row and inserts the driver.
+`ctx.agents` dispatches create and resume by harness id, and `dsh-agent-loop` registers itself as the `dsh` harness while the driver registers one harness per configured entry. This layer offers the ACP-driven surface alone, so it disables the base's `agent-loop` row; a profile that keeps the loop composes both and every caller names the harness it wants.
 
 ### Why the title request moves
 
@@ -135,11 +135,11 @@ Independent of the session's Devin turns; the title request has its own short pr
 
 These limits define when this profile is the wrong choice or needs operational care. They are current package constraints, not a task backlog.
 
-- **The profile runs one driver** — `ctx.agents.setFactory()` accepts exactly one factory, so this layer disables `agent-loop` for the whole profile instead of composing the in-process loop beside Devin.
+- **The profile offers the Devin harness alone** — this layer disables `agent-loop`, so a caller that names the `dsh` harness finds none mounted; add further entries (or keep the loop) to offer more harnesses.
 - **A read-only expectation cannot be enforced** — the ACP session modes Devin advertises (`accept-edits`, `smart`, `ask`, `plan`, `bypass`) express approval behavior only, so a session that logs a `read-only` sandbox still runs a mode that can edit; the driver logs a warning naming the mode it actually runs.
 - **Devin owns the turn, dsh owns the shell** — the loop, prompt, tools, MCP servers, and config live in Devin; dsh keeps the durable session, transcript, approvals, notifications, and model picker, and forwards the picker's selection per turn.
 - **A Devin login is required and not provided** — the driver cannot serve sessions until `devin auth login` has run for the account the CLI uses; dsh neither stores nor provisions Devin credentials.
-- **The model picker depends on the CLI** — entries come from `devin models list --format json`, so an unreachable, unauthenticated, or slow CLI leaves the picker empty.
+- **The model picker needs a bound session** — the `devin` route answers from what a live session advertises, so the picker stays empty until the profile's first session binds; configure `catalogArgs` on the entry to also list models from the CLI.
 - **Titles stay on the DeepSeek route** — the layer pins `session-title-llm` to `deepseek-official` / `deepseek-flash`; a deployment that removes or renames that route must repoint the row, because the `devin` route serves no streams.
 
 <a id="dev-note"></a>

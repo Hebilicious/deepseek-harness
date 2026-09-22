@@ -84,23 +84,23 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
   {
     key: 'acpHarness',
     summary: 'The `acpHarness` service (`acp` Remote namespace).',
-    description: 'The `acpHarness` service (`acp` Remote namespace). Owns the shared `devin acp` process and connection, the agent-factory host, the `devin` catalog adapter, and every auth operation — none of which belong to a session.',
+    description: 'The `acpHarness` service (`acp` Remote namespace). Owns one ACP runtime, one agent-factory host, and one catalog adapter per configured harness, plus every auth operation — none of which belong to a session.',
     methods: [
       {
-        signature: '@Remote async status(signal: AbortSignal): Promise<DevinAccountSnapshot>',
-        description: 'Read the Devin account state: the agent\'s advertised auth methods plus the `devin auth status` CLI verdict.',
-        parameters: [{ name: 'signal', description: 'caller lifetime.' }],
+        signature: '@Remote async status(request: { harness: string }, signal: AbortSignal): Promise<AcpAccountSnapshot>',
+        description: 'Read one harness\'s account state: the agent\'s advertised auth methods plus the harness\'s own auth-status CLI verdict.',
+        parameters: [{ name: 'request', description: '`{harness}` naming a mounted harness.' }, { name: 'signal', description: 'caller lifetime.' }],
         returns: 'normalized account facts.',
       },
       {
-        signature: '@Remote(\'login\') async login(request: { methodId?: string }, signal: AbortSignal): Promise<void>',
-        description: 'Start the agent\'s browser authentication flow (`devin-browser`).',
-        parameters: [{ name: 'request', description: '`{methodId}`; defaults to the first advertised method.' }, { name: 'signal', description: 'caller lifetime.' }],
+        signature: '@Remote(\'login\') async login(request: { harness: string; methodId?: string }, signal: AbortSignal): Promise<void>',
+        description: 'Start one harness\'s browser authentication flow (`devin-browser` on Devin).',
+        parameters: [{ name: 'request', description: '`{harness, methodId}`; the method defaults to the first one the harness advertised.' }, { name: 'signal', description: 'caller lifetime.' }],
       },
       {
-        signature: '@Remote async logout(signal: AbortSignal): Promise<void>',
-        description: 'Sign the Devin account out — the ACP `logout` request when the agent advertises it, the `devin auth logout` CLI otherwise.',
-        parameters: [{ name: 'signal', description: 'caller lifetime.' }],
+        signature: '@Remote async logout(request: { harness: string }, signal: AbortSignal): Promise<void>',
+        description: 'Sign one harness\'s account out — the ACP `logout` request when the agent advertises it, the harness\'s auth-logout CLI otherwise.',
+        parameters: [{ name: 'request', description: '`{harness}` naming a mounted harness.' }, { name: 'signal', description: 'caller lifetime.' }],
       },
     ],
   },
@@ -306,10 +306,22 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
         throws: ['when the initiator scope is closing/disposed, or when `operation` throws.'],
       },
       {
+        signature: 'registerHarness(registration: AgentHarnessRegistration): () => void',
+        description: 'Register one harness\'s agent-creation factory (a driver calls this on construction, effect-scoped). A traced Cordis service is canonicalized to its concrete target; each create/resume call is then traced through that caller\'s context so ownership follows the caller without stacking proxy layers. Throws when the id is already registered. Returns the disposer; on dispose the harness leaves the registry.',
+        parameters: [{ name: 'registration', description: 'the harness identity and the factory that owns it.' }],
+        returns: 'the disposer that removes the harness. The exact Cordis effect disposer (single-shot): composite (generator) effects may yield it directly — exact identity nests the teardown in order.',
+      },
+      {
         signature: 'setFactory(factory: AgentFactory): () => void',
-        description: 'Register the agent-creation factory (the loop calls this on construction, effect-scoped). A traced Cordis service is canonicalized to its concrete target; each create/resume call is then traced through that caller\'s context so ownership follows the caller without stacking proxy layers. Throws if a factory is already registered. Returns the disposer; on dispose the factory slot is cleared.',
-        parameters: [{ name: 'factory', description: 'the loop-owned factory {@link create}/{@link resume} delegate to.' }],
-        returns: 'the disposer that clears the factory slot. The exact Cordis effect disposer (single-shot): composite (generator) effects may yield it directly — exact identity nests the teardown in order.',
+        description: 'Register the sole agent-creation factory under the default harness id. Deployments that mount one harness use this; a deployment that offers a choice registers each harness with registerHarness.',
+        parameters: [{ name: 'factory', description: 'the factory {@link create}/{@link resume} delegate to.' }],
+        returns: 'the disposer that removes the harness.',
+      },
+      {
+        signature: 'harnesses(): readonly AgentHarness[]',
+        description: 'Every harness this process can create sessions with, in registration order.',
+        parameters: [],
+        returns: 'the harness identities and their display names.',
       },
       {
         signature: 'async create(options: CreateAgentOptions): Promise<AgentHandle>',
@@ -1775,6 +1787,12 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
         description: 'Describe every currently routable model for Host-generation selectors.',
         parameters: [],
         returns: 'provider-grouped models, the deployment default, and isolated provider failures.',
+      },
+      {
+        signature: '@Remote(\'harnessCatalog\') harnessCatalog(): SessionHarnessCatalog',
+        description: 'Describe every agent harness this deployment can create sessions with.',
+        parameters: [],
+        returns: 'the mounted harnesses, in registration order.',
       },
       {
         signature: '@Remote canOpenWorkspacePath(): boolean',
@@ -4059,6 +4077,14 @@ export const EVENT_API: readonly EventApiEntry[] = [
 /** Shapes of every exported type the Service and Event signatures reference (transitively), sorted by name. */
 export const TYPE_API: readonly TypeApiEntry[] = [
   {
+    name: 'AcpAccountSnapshot',
+    declaration: 'export interface AcpAccountSnapshot {\n    readonly connected: boolean;\n    readonly authMethods: readonly AcpAuthMethod[];\n    readonly cliLoggedIn?: boolean;\n    readonly cliDetail?: string;\n    readonly agentInfo?: {\n        readonly name: string;\n        readonly title?: string;\n        readonly version: string;\n    };\n}',
+  },
+  {
+    name: 'AcpAuthMethod',
+    declaration: 'export interface AcpAuthMethod {\n    readonly id: string;\n    readonly name: string;\n    readonly description?: string;\n}',
+  },
+  {
     name: 'AdapterRegistrationHandle',
     declaration: 'export interface AdapterRegistrationHandle {\n    (): void;\n    replace(providers: string[]): void;\n}',
   },
@@ -4081,6 +4107,14 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   {
     name: 'AgentHandle',
     declaration: 'export interface AgentHandle {\n    agent: Agent;\n    dispose(): Promise<void>;\n}',
+  },
+  {
+    name: 'AgentHarness',
+    declaration: 'export interface AgentHarness {\n    readonly id: HarnessId;\n    readonly name: string;\n    readonly description?: string;\n}',
+  },
+  {
+    name: 'AgentHarnessRegistration',
+    declaration: 'export interface AgentHarnessRegistration extends AgentHarness {\n    readonly factory: AgentFactory;\n}',
   },
   {
     name: 'AgentOptions',
@@ -4572,7 +4606,7 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   },
   {
     name: 'CreateAgentOptions',
-    declaration: 'export interface CreateAgentOptions {\n    readonly sessionId: SessionId;\n    readonly parentAgent?: Agent;\n    readonly meta?: {\n        readonly cwd?: string;\n        readonly parentSession?: SessionId;\n        readonly isSeeded?: boolean;\n        readonly origin?: \'subagent\';\n        readonly delegationDepth?: number;\n        readonly agentPreset?: string;\n    };\n    readonly inheritedEventCount?: SessionLogOffset;\n    readonly seed?: readonly SessionEvent[];\n    readonly agentOptions?: AgentOptions;\n    readonly signal?: AbortSignal;\n    readonly setup?: AgentSetup;\n}',
+    declaration: 'export interface CreateAgentOptions {\n    readonly sessionId: SessionId;\n    readonly harness?: HarnessId;\n    readonly parentAgent?: Agent;\n    readonly meta?: {\n        readonly cwd?: string;\n        readonly parentSession?: SessionId;\n        readonly isSeeded?: boolean;\n        readonly origin?: \'subagent\';\n        readonly delegationDepth?: number;\n        readonly agentPreset?: string;\n    };\n    readonly inheritedEventCount?: SessionLogOffset;\n    readonly seed?: readonly SessionEvent[];\n    readonly agentOptions?: AgentOptions;\n    readonly signal?: AbortSignal;\n    readonly setup?: AgentSetup;\n}',
   },
   {
     name: 'CreateGoalRequest',
@@ -4629,14 +4663,6 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   {
     name: 'DeepSeekLlmApiJson',
     declaration: 'export type DeepSeekLlmApiJson = null | boolean | number | string | DeepSeekLlmApiJson[] | {\n    [key: string]: DeepSeekLlmApiJson;\n};',
-  },
-  {
-    name: 'DevinAccountSnapshot',
-    declaration: 'export interface DevinAccountSnapshot {\n    readonly connected: boolean;\n    readonly authMethods: readonly DevinAuthMethod[];\n    readonly cliLoggedIn?: boolean;\n    readonly cliDetail?: string;\n    readonly agentInfo?: {\n        readonly name: string;\n        readonly title?: string;\n        readonly version: string;\n    };\n}',
-  },
-  {
-    name: 'DevinAuthMethod',
-    declaration: 'export interface DevinAuthMethod {\n    readonly id: string;\n    readonly name: string;\n    readonly description?: string;\n}',
   },
   {
     name: 'DiffCallView',
@@ -4905,6 +4931,10 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   {
     name: 'GrantRecord',
     declaration: 'export interface GrantRecord {\n    readonly kind: \'grant\';\n    readonly payload: unknown;\n}',
+  },
+  {
+    name: 'HarnessId',
+    declaration: 'export type HarnessId = Branded<\'HarnessId\'>;',
   },
   {
     name: 'HostConnectionFetch',
@@ -5672,7 +5702,7 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   },
   {
     name: 'ResumeAgentOptions',
-    declaration: 'export interface ResumeAgentOptions {\n    readonly resumeSessionId: SessionId;\n    readonly parentAgent?: Agent;\n    readonly agentOptions?: AgentOptions;\n    readonly signal?: AbortSignal;\n    readonly setup?: AgentSetup;\n}',
+    declaration: 'export interface ResumeAgentOptions {\n    readonly resumeSessionId: SessionId;\n    readonly harness?: HarnessId;\n    readonly parentAgent?: Agent;\n    readonly agentOptions?: AgentOptions;\n    readonly signal?: AbortSignal;\n    readonly setup?: AgentSetup;\n}',
   },
   {
     name: 'RpcId',
@@ -5820,7 +5850,7 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   },
   {
     name: 'SessionCreateRequest',
-    declaration: 'export interface SessionCreateRequest {\n    readonly workspaceId?: WorkspaceId;\n    readonly cwd?: string;\n    readonly sessionId?: SessionId;\n    readonly agentPreset?: string;\n}',
+    declaration: 'export interface SessionCreateRequest {\n    readonly workspaceId?: WorkspaceId;\n    readonly cwd?: string;\n    readonly sessionId?: SessionId;\n    readonly agentPreset?: string;\n    readonly harness?: HarnessId;\n}',
   },
   {
     name: 'SessionCreateValue',
@@ -5949,6 +5979,14 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   {
     name: 'SessionHandleReadResult',
     declaration: 'export interface SessionHandleReadResult {\n    readonly eventState: SessionSeedEventState;\n    readonly events: readonly SessionEvent[];\n}',
+  },
+  {
+    name: 'SessionHarnessCatalog',
+    declaration: 'export interface SessionHarnessCatalog {\n    readonly harnesses: readonly SessionHarnessOption[];\n}',
+  },
+  {
+    name: 'SessionHarnessOption',
+    declaration: 'export interface SessionHarnessOption {\n    readonly id: HarnessId;\n    readonly name: string;\n    readonly description?: string;\n}',
   },
   {
     name: 'SessionHeader',

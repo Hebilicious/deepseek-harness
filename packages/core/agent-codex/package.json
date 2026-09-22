@@ -1,7 +1,7 @@
 {
   "name": "@deepseek-ai/dsh-agent-codex",
   "description": "Codex session driver: shared app-server process, per-session thread binding, and the Codex agent factory",
-  "version": "0.1.5-rc.2",
+  "version": "0.1.6-alpha.2",
   "publishConfig": {
     "access": "public"
   },

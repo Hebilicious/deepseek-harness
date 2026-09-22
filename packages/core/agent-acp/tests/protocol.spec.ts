@@ -13,13 +13,17 @@ import type {
 import { AttachmentId } from '@deepseek-ai/dsh-attachment'
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import {
+  acpAdvertisedModels,
   acpBlockToContent,
   acpModeOption,
   acpModelOption,
   acpPermissionOutcome,
+  acpReasoningOption,
+  acpSelectEntries,
   acpToolContent,
   acpTurnEnding,
   toAcpPromptBlocks,
+  type AcpSelectOption,
 } from '../src/protocol.ts'
 
 function selectOption(id: string, values: readonly string[]): SessionConfigOption {
@@ -165,10 +169,16 @@ describe('acpPermissionOutcome', () => {
 })
 
 describe('config-option readers', () => {
-  it('finds the advertised model and mode select options', () => {
+  it('finds the advertised model, mode, and reasoning-effort select options', () => {
     const options = [selectOption('model', ['swe-2']), selectOption('mode', ['ask'])]
     expect(acpModelOption(options)?.currentValue).toBe('swe-2')
     expect(acpModeOption(options)?.currentValue).toBe('ask')
+    expect(acpReasoningOption([selectOption('reasoning_effort', ['high'])])?.id).toBe('reasoning_effort')
+    expect(acpReasoningOption([selectOption('thought_level', ['max'])])?.id).toBe('thought_level')
+    // A harness that renames the option still maps through the ACP category.
+    expect(acpReasoningOption([{ ...selectOption('effort', ['high']), category: 'thought_level' }])?.id)
+      .toBe('effort')
+    expect(acpReasoningOption([selectOption('mode', ['ask'])])).toBeUndefined()
     expect(acpModelOption(undefined)).toBeUndefined()
     expect(acpModelOption(null)).toBeUndefined()
     expect(acpModeOption([selectOption('other', ['x'])])).toBeUndefined()
@@ -178,5 +188,78 @@ describe('config-option readers', () => {
       type: 'boolean',
       currentValue: true,
     }])).toBeUndefined()
+  })
+})
+
+describe('acpAdvertisedModels', () => {
+  it('prefers the session model state and skips entries it cannot name', () => {
+    expect(acpAdvertisedModels({
+      models: {
+        currentModelId: 'swe-2',
+        availableModels: [
+          null,
+          'not-a-model',
+          { name: 'no id' },
+          { modelId: '', name: 'empty id' },
+          { modelId: 'swe-3' },
+          { modelId: 'swe-3', name: '' },
+          { modelId: 'swe-2', name: 'SWE 2', description: 'standard' },
+          { modelId: 'swe-1', name: 'SWE 1' },
+        ],
+      },
+      configOptions: [selectOption('model', ['ignored'])],
+    })).toEqual([
+      { id: 'swe-2', name: 'SWE 2', description: 'standard' },
+      { id: 'swe-1', name: 'SWE 1' },
+    ])
+  })
+
+  it('falls back to the model option when the session sends no usable model state', () => {
+    expect(acpAdvertisedModels({
+      models: { currentModelId: 'swe-1' },
+      configOptions: [selectOption('model', ['swe-1'])],
+    })).toEqual([{ id: 'swe-1', name: 'swe-1' }])
+    expect(acpAdvertisedModels({ configOptions: [selectOption('model', ['swe-1'])] }))
+      .toEqual([{ id: 'swe-1', name: 'swe-1' }])
+    // A model state that is not an object, and a session with neither source.
+    expect(acpAdvertisedModels({ models: 'none', configOptions: [] })).toEqual([])
+    expect(acpAdvertisedModels({ models: {}, configOptions: [selectOption('mode', ['ask'])] })).toEqual([])
+    expect(acpAdvertisedModels({})).toEqual([])
+  })
+})
+
+describe('acpSelectEntries', () => {
+  it('flattens flat and grouped values and skips entries that carry no value', () => {
+    const grouped = {
+      id: 'model',
+      name: 'Model',
+      type: 'select',
+      currentValue: 'a',
+      options: [
+        { value: 'a', name: 'A', description: 'first' },
+        { value: 'b', name: 'B', description: '' },
+        null,
+        'not-a-value',
+        { value: 7, name: 'seven' },
+        { value: 'c' },
+        { group: 'g', name: 'G', options: [{ value: 'd', name: 'D', description: 'grouped' }] },
+      ],
+    } as unknown as AcpSelectOption
+    expect(acpSelectEntries(grouped)).toEqual([
+      { value: 'a', name: 'A', description: 'first' },
+      { value: 'b', name: 'B' },
+      { value: 'd', name: 'D', description: 'grouped' },
+    ])
+  })
+
+  it('reads an option with no value list, and no option at all, as offering none', () => {
+    expect(acpSelectEntries(undefined)).toEqual([])
+    expect(acpSelectEntries({
+      id: 'model',
+      name: 'Model',
+      type: 'select',
+      currentValue: 'a',
+      options: 'not-a-list',
+    } as unknown as AcpSelectOption)).toEqual([])
   })
 })

@@ -3,7 +3,7 @@ import { createUserMessage, LlmAdapter, ReasoningEffortId } from '@deepseek-ai/d
 import type { GenerateOptions, LlmResolvedModelInfo, StreamChunk } from '@deepseek-ai/dsh-llm'
 import { createServer } from 'node:http'
 import type { IncomingMessage, Server, ServerResponse } from 'node:http'
-import { mkdtemp, rm } from 'node:fs/promises'
+import { mkdtemp, readdir, rm } from 'node:fs/promises'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -66,6 +66,18 @@ async function makeHarness(storageDir: string) {
   await ctx.plugin(JsonlSessionPersistence, { root: storageDir })
   await new Promise(resolve => setTimeout(resolve, 50))
   return ctx
+}
+
+/**
+ * Remove one stored session's artifact tree so its id can be created again.
+ * Every published session now materializes a stored log, so a disposed
+ * session's id stays taken until its artifact is gone.
+ */
+async function removeStoredSession(root: string, id: SessionId): Promise<void> {
+  for (const entry of await readdir(root, { recursive: true, withFileTypes: true })) {
+    if (!entry.isDirectory() || entry.name !== id) continue
+    await rm(join(entry.parentPath, entry.name), { recursive: true, force: true })
+  }
 }
 
 /** Drive the owning service so test lifecycle events carry the real parent scope. */
@@ -631,6 +643,7 @@ describe('HarnessSdkJsonRpcServer', () => {
       sameLifetime.resolve({ output: [{ type: 'text', text: 'same lifetime' }], stopReason: 'completed' })
       await sameLifetimeRun.result
       await oldChild.dispose()
+      await removeStoredSession(storageDir, SessionId('reused-child'))
       const newParent = await ctx.agents.create({
         sessionId: SessionId('new-parent'),
         meta: { cwd: storageDir },

@@ -1,8 +1,10 @@
 /**
  * ACP wire helpers for the session driver: stop-reason and tool-content
- * mapping, prompt-block conversion, and permission-option selection. The SDK
- * validates inbound frames with generated schemas before dispatch; these
- * helpers translate typed frames into the driver's durable vocabulary.
+ * mapping, prompt-block conversion, permission-option selection, and the
+ * session advert (config options and advertised models) the driver reads.
+ * Config options arrive as unvalidated response data, so each helper reads
+ * them defensively; these helpers translate typed frames into the driver's
+ * durable vocabulary.
  *
  * @module @deepseek-ai/dsh-agent-acp/protocol
  */
@@ -18,12 +20,41 @@ import type {
 import type { ApprovalOutcome } from '@deepseek-ai/dsh-user-approval'
 import type { ContentBlock } from '@deepseek-ai/dsh-llm'
 import type { TurnEndReason } from '@deepseek-ai/dsh-session'
+import type { AcpCatalogModel } from './types.ts'
 
 /** Diagnostic prefix for every error this driver raises. */
 export const ACP_PREFIX = 'agent-acp'
 
-/** The `ctx.llm` provider id feeding the picker's Devin catalog. */
-export const ACP_PROVIDER = 'devin'
+/**
+ * Diagnostic prefix for one harness's messages, so a process driving several
+ * harnesses never reports an unattributable failure.
+ * @param harness - the harness id.
+ * @returns the prefixed diagnostic tag.
+ */
+export function acpPrefix(harness: string): string {
+  return `${ACP_PREFIX}[${harness}]`
+}
+
+/** The session advert fields the driver reads from `session/new` and `session/load`. */
+export interface AcpSessionAdvert {
+  /** Session model state when the agent sends it; preferred over the config option. */
+  readonly models?: unknown
+  /** The session's reported configuration options. */
+  readonly configOptions?: SessionConfigOption[] | null
+}
+
+/** One selectable value of an advertised config option, with groups flattened. */
+export interface AcpSelectEntry {
+  /** Value the `session/set_config_option` request carries. */
+  readonly value: string
+  /** Human-readable label. */
+  readonly name: string
+  /** What the value does, when the agent described it. */
+  readonly description?: string
+}
+
+/** An advertised select option. */
+export type AcpSelectOption = Extract<SessionConfigOption, { type: 'select' }>
 
 /** A wire fact the driver cannot satisfy; fails the turn, not the connection. */
 export class AcpProtocolError extends Error {
@@ -176,12 +207,9 @@ export function acpPermissionOutcome(
  * @returns the model option, or undefined when the agent advertises none.
  */
 export function acpModelOption(options: readonly SessionConfigOption[] | null | undefined):
-  | Extract<SessionConfigOption, { type: 'select' }>
+  | AcpSelectOption
   | undefined {
-  return options?.find(
-    (option): option is Extract<SessionConfigOption, { type: 'select' }> =>
-      option.id === 'model' && option.type === 'select',
-  )
+  return selectOption(options, option => option.id === 'model')
 }
 
 /**
@@ -190,12 +218,106 @@ export function acpModelOption(options: readonly SessionConfigOption[] | null | 
  * @returns the mode option, or undefined when the agent advertises none.
  */
 export function acpModeOption(options: readonly SessionConfigOption[] | null | undefined):
-  | Extract<SessionConfigOption, { type: 'select' }>
+  | AcpSelectOption
   | undefined {
-  return options?.find(
-    (option): option is Extract<SessionConfigOption, { type: 'select' }> =>
-      option.id === 'mode' && option.type === 'select',
+  return selectOption(options, option => option.id === 'mode')
+}
+
+/**
+ * Read the advertised reasoning-effort select option, named `thought_level`
+ * by Devin and `reasoning_effort` by Grok Build. The ACP `thought_level`
+ * category wins over the id so a harness that renames the option still maps.
+ * @param options - the session's reported configuration options.
+ * @returns the reasoning-effort option, or undefined when the agent advertises none.
+ */
+export function acpReasoningOption(options: readonly SessionConfigOption[] | null | undefined):
+  | AcpSelectOption
+  | undefined {
+  return selectOption(
+    options,
+    option => option.category === 'thought_level'
+      || option.id === 'thought_level'
+      || option.id === 'reasoning_effort',
   )
+}
+
+/**
+ * Flatten one advertised select option's values, groups included. Response
+ * data is read defensively: an option that carries no array of values offers
+ * none rather than failing the turn.
+ * @param option - the advertised select option, when one was found.
+ * @returns selectable values in advert order.
+ */
+export function acpSelectEntries(option: AcpSelectOption | undefined): AcpSelectEntry[] {
+  return selectEntries(option === undefined ? undefined : option.options)
+}
+
+/**
+ * Read the model catalog one session advertised. The newer
+ * `models.availableModels` list wins when the agent sends one; otherwise the
+ * `model` config option's selectable values are the catalog. Both arrive as
+ * unvalidated response data.
+ * @param advert - the `session/new` or `session/load` response fields.
+ * @returns catalog entries in advert order.
+ */
+export function acpAdvertisedModels(advert: AcpSessionAdvert): AcpCatalogModel[] {
+  const listed = advertisedModelList(advert.models)
+  if (listed.length > 0) return listed
+  return acpSelectEntries(acpModelOption(advert.configOptions)).map(entry => ({
+    id: entry.value,
+    name: entry.name,
+    ...entry.description === undefined ? {} : { description: entry.description },
+  }))
+}
+
+/** Find one advertised select option by predicate. */
+function selectOption(
+  options: readonly SessionConfigOption[] | null | undefined,
+  matches: (option: AcpSelectOption) => boolean,
+): AcpSelectOption | undefined {
+  return options?.find(
+    (option): option is AcpSelectOption => option.type === 'select' && matches(option),
+  )
+}
+
+/** Flatten a select option's value list, accepting flat and grouped wire forms. */
+function selectEntries(options: unknown): AcpSelectEntry[] {
+  if (!Array.isArray(options)) return []
+  const entries: AcpSelectEntry[] = []
+  for (const raw of options) {
+    if (typeof raw !== 'object' || raw === null) continue
+    const record = raw as Record<string, unknown>
+    if (Array.isArray(record.options)) {
+      entries.push(...selectEntries(record.options))
+      continue
+    }
+    const { value, name } = record
+    if (typeof value !== 'string' || typeof name !== 'string') continue
+    const description = typeof record.description === 'string' && record.description !== ''
+      ? record.description
+      : undefined
+    entries.push({ value, name, ...description === undefined ? {} : { description } })
+  }
+  return entries
+}
+
+/** Read the `models.availableModels` list an agent sent, if any. */
+function advertisedModelList(models: unknown): AcpCatalogModel[] {
+  if (typeof models !== 'object' || models === null) return []
+  const available = (models as { availableModels?: unknown }).availableModels
+  if (!Array.isArray(available)) return []
+  const entries: AcpCatalogModel[] = []
+  for (const raw of available) {
+    if (typeof raw !== 'object' || raw === null) continue
+    const record = raw as Record<string, unknown>
+    const { modelId, name } = record
+    if (typeof modelId !== 'string' || modelId === '' || typeof name !== 'string' || name === '') continue
+    const description = typeof record.description === 'string' && record.description !== ''
+      ? record.description
+      : undefined
+    entries.push({ id: modelId, name, ...description === undefined ? {} : { description } })
+  }
+  return entries
 }
 
 /** Serialize a tool result's raw output, falling back to its string form when it cannot be encoded. */

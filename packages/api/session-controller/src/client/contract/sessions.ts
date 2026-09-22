@@ -5,6 +5,7 @@
  * explicit act of widening what features may do to the sessions domain.
  */
 import type { Context } from '@deepseek-ai/cordis'
+import type { HarnessId } from '@deepseek-ai/dsh-agent/types'
 import type { SubagentAddress } from '@deepseek-ai/dsh-subagent/client'
 import type { SessionId } from '@deepseek-ai/dsh-session/types'
 import type { WorkspaceId } from '@deepseek-ai/dsh-workspace/types'
@@ -80,14 +81,28 @@ export interface ISessions {
   readonly searchResultLimit: number
   /**
    * Create or adopt a Session on the Host.
-   * @param opts - target workspace, directory, and optional preallocated identity.
+   * @param opts - target workspace, directory, optional preallocated identity,
+   *   and the agent harness the new Session runs (absent, the staged harness,
+   *   then the deployment's own resolution).
    * @returns the catalogued identity; retain it before borrowing its binding.
    */
   create(opts?: {
     workspaceId?: WorkspaceId
     cwd?: string
     sessionId?: SessionId
+    harness?: HarnessId
   }): Promise<SessionId>
+  /**
+   * Stage the agent harness the next created Session runs.
+   *
+   * A session's harness is fixed when it is created, so a surface asking for
+   * one stages the choice rather than applying it later. The stage reaches the
+   * next `create()` that names neither an explicit harness nor a stored
+   * identity, and stays until another pick replaces it: a deployment that
+   * mounts several harnesses refuses a create that names none.
+   * @param harness - mounted harness id the next new Session runs.
+   */
+  stageHarness(harness: HarnessId): void
   /**
    * Resolve an already discovered direct-parent address without opening it.
    * @param id - possible addressed child id.

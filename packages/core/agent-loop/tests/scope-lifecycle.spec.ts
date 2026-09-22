@@ -875,7 +875,9 @@ describe('agent scope lifecycle', () => {
     expect(statuses).toEqual([])
     expect(observerSawLive).toBe(true)
     expect(scopeDisposed).toBe(true)
-    expect(announced.session.snapshotEvents()).toEqual([])
+    // Nothing started the driver: the log holds only the harness record the
+    // pre-publication suffix wrote before the caller-liveness recheck failed.
+    expect(announced.session.snapshotEvents().map(event => event.type)).toEqual(['agent/harness'])
     expect(ctx.agents.get(SessionId('agent/created-dispose-s'))).toBeUndefined()
     expect(ctx.sessions.get(SessionId('agent/created-dispose-s'))).toBeUndefined()
     await ctx.fiber.dispose()

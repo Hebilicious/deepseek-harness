@@ -29,7 +29,7 @@ kind: "package-reference"
 
 dsh 中的每个驱动器都继承本包，而不是重新实现会话外壳。`dsh-agent-loop` 继承 `ManagedAgent` 并保留自己的步骤循环；`dsh-agent-codex` 与 `dsh-agent-acp` 继承 `ExternalAgent`，让 Codex 账号或 Devin CLI 拥有循环、提示词、工具、MCP 服务器与配置。驱动器自行调用 `ctx.llm` 与 `ctx.tools` 时选择 `ManagedAgent`；模型工作通过协议在其他进程中完成时，选择 `ExternalAgent` 加 `ExternalAgentHost`。
 
-驱动器把自身挂载为 `ctx.agents` 工厂。`AgentRegistry.setFactory()` 只接受一个工厂，第二次注册会抛出 `an agent factory is already registered`，因此一个 profile 同时只运行一个驱动器，组合中会禁用被替换的那个驱动器。
+驱动器把自身注册为一个 agent harness：`AgentRegistry.registerHarness({ id, name, factory })` 按 harness id 记录每次注册，因此多个驱动器可以共存于同一进程，`session.create`/`resume` 指定拥有该会话的 harness。独占整个 profile 的驱动器仍可使用 `ctx.agents.setFactory()`，它注册内置的 `dsh` id。
 
 ### 入口
 
@@ -157,7 +157,7 @@ class MyHost extends ExternalAgentHost<MyAgent> {
 
 这些限制说明本基座不为驱动器决定什么。它们是当前包约束，不是任务积压。
 
-- **每个 profile 只有一个驱动器**——`ctx.agents.setFactory()` 拒绝第二次注册，因此 harness 驱动器会在整个 profile 内取代进程内的 `dsh-agent-loop`；随包发布的 bundle 会禁用该配置行，而不是把两者组合起来。
+- **一个会话只由一个 harness 拥有**——会话以 `agent/harness` 事件记录其 harness，换用其他 harness 的 resume 会被拒绝，因此对话无法在驱动器之间迁移；挂载多个驱动器的 profile 改为在创建时选择 harness。
 - **轮次归 harness 所有**——对 `ExternalAgent` 而言，循环、提示词、工具、MCP 服务器与配置都位于外部进程中。DSH 保留持久会话、transcript、审批、通知与模型选择器；驱动器每轮转发一次模型选择，并上报 harness 自己当前的模型。
 - **harness 凭据在 DSH 之外**——Codex 会话需要 Codex 账号（`CODEX_HOME`、`codex login`），Devin 会话需要 `devin auth login`；DSH 既不保存也不提供任何一方。
 - **模型目录来自 harness**——若驱动器的选择器数据来自某条 CLI 调用，当该 CLI 不可达或缓慢时，选择器就没有条目。

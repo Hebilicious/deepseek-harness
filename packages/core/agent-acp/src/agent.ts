@@ -1,6 +1,6 @@
 /**
  * ACP session driver: one {@link ExternalAgent} bound to one ACP session on
- * the profile-shared `devin acp` connection. Owns the session lifecycle
+ * its harness's shared ACP connection. Owns the session lifecycle
  * (`session/new`/`session/load`), turn driving (`session/prompt` → its
  * response), session-update → durable-event projection, and approval /
  * elicitation routing into the DSH seams.
@@ -9,6 +9,7 @@
  */
 
 import type {
+  AgentHarness,
   AgentOptions,
 } from '@deepseek-ai/dsh-agent'
 import type { AssistantStreamAttempt } from '@deepseek-ai/dsh-agent-external'
@@ -39,22 +40,28 @@ import type {
 } from '@agentclientprotocol/sdk'
 import type { AcpClientConnection, AcpSessionPeer } from './connection.ts'
 import {
+  acpAdvertisedModels,
   acpBlockToContent,
   acpModeOption,
   acpModelOption,
   acpPermissionOutcome,
+  acpPrefix,
+  acpReasoningOption,
+  acpSelectEntries,
   acpToolContent,
   acpTurnEnding,
-  ACP_PREFIX,
-  ACP_PROVIDER,
   AcpProtocolError,
   toAcpPromptBlocks,
+  type AcpSelectOption,
+  type AcpSessionAdvert,
 } from './protocol.ts'
 import { acpSessionOf } from './session-state.ts'
 import type { AcpRuntime } from './runtime.ts'
 
 /** Deployment-level defaults the plugin resolves once per agent. */
 export interface AcpAgentConfig {
+  /** Harness that owns this agent: its id routes model selections, its name labels diagnostics. */
+  readonly harness: AgentHarness
   /** Workspace fallback when the session header carries no `cwd`. */
   readonly cwd?: string
   /** Filesystem sandbox when the session logs no `sandbox/mode` override. */
@@ -65,6 +72,8 @@ export interface AcpAgentConfig {
   readonly mode?: string
   /** Deployment default model value for the session's `model` config option. */
   readonly model?: string
+  /** Deployment default reasoning effort for the session's reasoning-effort config option. */
+  readonly reasoningEffort?: string
 }
 
 /** One assistant stream's block bookkeeping for a single ACP messageId. */
@@ -120,12 +129,17 @@ export class AcpAgent extends ExternalAgent implements AcpSessionPeer {
     super(hostCtx, id, options, session)
   }
 
+  /** Diagnostic tag naming this agent's harness in every message it raises. */
+  private get prefix(): string {
+    return acpPrefix(this.driverConfig.harness.id)
+  }
+
   // ---- ExternalAgent harness surface ----
 
   /**
-   * Join the profile's shared `devin acp` connection, then create a fresh ACP
-   * session or load the recorded one. Runs unpublished: any rejection rolls
-   * the whole create/resume back.
+   * Join this harness's shared connection, then create a fresh ACP session or
+   * load the recorded one. Runs unpublished: any rejection rolls the whole
+   * create/resume back.
    * @param signal - fused caller/lifecycle cancellation.
    */
   async bind(signal: AbortSignal): Promise<void> {
@@ -136,32 +150,45 @@ export class AcpAgent extends ExternalAgent implements AcpSessionPeer {
     const cwd = this.session.header.cwd ?? this.driverConfig.cwd ?? process.cwd()
     const existing = acpSessionOf(this.ctx.sessionProjections, this.session)
     if (existing === undefined) {
-      const response = await connection.request<{
-        sessionId?: string
-        configOptions?: SessionConfigOption[] | null
-      }>('session/new', { cwd, mcpServers: [] }, signal)
+      const response = await connection.request<AcpSessionAdvert & { sessionId?: string }>(
+        'session/new',
+        { cwd, mcpServers: [] },
+        signal,
+      )
       const sessionId = response.sessionId
       if (typeof sessionId !== 'string' || sessionId.length === 0) {
-        throw new AcpProtocolError(`${ACP_PREFIX}: session/new returned no session id`)
+        throw new AcpProtocolError(`${this.prefix}: session/new returned no session id`)
       }
       this.acpSessionId = sessionId
       this.session.append('agent-acp/session', { sessionId })
-      this.configOptions = response.configOptions ?? []
+      this.adoptAdvert(response)
     } else {
       if (capabilities?.loadSession !== true) {
         throw new AcpProtocolError(
-          `${ACP_PREFIX}: session "${existing}" cannot resume: the agent does not advertise loadSession`,
+          `${this.prefix}: session "${existing}" cannot resume: the agent does not advertise loadSession`,
         )
       }
       // session/load replays history as session/update notifications; the peer
       // registers only after the response so replayed frames never double-commit.
-      const response = await connection.request<{
-        configOptions?: SessionConfigOption[] | null
-      }>('session/load', { sessionId: existing, cwd, mcpServers: [] }, signal)
+      const response = await connection.request<AcpSessionAdvert>(
+        'session/load',
+        { sessionId: existing, cwd, mcpServers: [] },
+        signal,
+      )
       this.acpSessionId = existing
-      this.configOptions = response.configOptions ?? []
+      this.adoptAdvert(response)
     }
     this.detachSession = this.runtime.registerSession(this.acpSessionId, this)
+  }
+
+  /**
+   * Adopt the config options and model catalog one session response carried,
+   * and publish the catalog to the shared runtime so this harness's picker
+   * route answers from what the harness itself advertises.
+   */
+  private adoptAdvert(advert: AcpSessionAdvert): void {
+    this.configOptions = advert.configOptions ?? []
+    this.runtime.recordAdvert(acpAdvertisedModels(advert))
   }
 
   /**
@@ -177,7 +204,7 @@ export class AcpAgent extends ExternalAgent implements AcpSessionPeer {
       try {
         await connection.request('session/close', { sessionId })
       } catch (error: unknown) {
-        this.ctx.logger.warn(`${ACP_PREFIX}: session/close for "${sessionId}" failed: ${errorChain(error)}`)
+        this.ctx.logger.warn(`${this.prefix}: session/close for "${sessionId}" failed: ${errorChain(error)}`)
       }
     }
     detach?.()
@@ -201,14 +228,18 @@ export class AcpAgent extends ExternalAgent implements AcpSessionPeer {
     const sessionId = this.acpSessionId
     /* v8 ignore next -- the host binds before any turn can be driven */
     if (connection === undefined || sessionId === undefined) {
-      throw new Error(`${ACP_PREFIX}: turn without a bound session`)
+      throw new Error(`${this.prefix}: turn without a bound session`)
     }
     const selection = this.currentSelection()
-    // Only `devin`-routed selections drive this agent; a foreign-provider
-    // selection is not a value this harness's `model` option can carry.
-    const picked = selection.provider === ACP_PROVIDER ? selection.model : ''
+    // Only selections routed to this harness drive this agent; a
+    // foreign-provider selection is not a value this harness's `model` option
+    // can carry.
+    const picked = selection.provider === this.driverConfig.harness.id ? selection.model : ''
     const chosen = picked !== '' ? picked : this.driverConfig.model
-    await this.applyConfigSelection(connection, sessionId, chosen, drive.signal)
+    const chosenEffort = picked !== '' && selection.reasoningEffort !== undefined
+      ? selection.reasoningEffort
+      : this.driverConfig.reasoningEffort
+    await this.applyConfigSelection(connection, sessionId, chosen, chosenEffort, drive.signal)
     // Post-apply `currentValue` is the agent's own report of what will run;
     // when no model option exists the harness's model is opaque to DSH.
     const reported = acpModelOption(this.configOptions)?.currentValue
@@ -216,7 +247,7 @@ export class AcpAgent extends ExternalAgent implements AcpSessionPeer {
       ? reported
       : chosen ?? HARNESS_DEFAULT_MODEL
     drive.projector.noteRoute({
-      provider: ACP_PROVIDER,
+      provider: this.driverConfig.harness.id,
       model,
       ...picked !== '' && selection.reasoningEffort !== undefined
         ? { reasoningEffort: selection.reasoningEffort }
@@ -366,7 +397,7 @@ export class AcpAgent extends ExternalAgent implements AcpSessionPeer {
       })
       return { outcome: acpPermissionOutcome(params.options, outcome) }
     } catch (error: unknown) {
-      this.ctx.logger.warn(`${ACP_PREFIX}: permission request failed closed: ${errorChain(error)}`)
+      this.ctx.logger.warn(`${this.prefix}: permission request failed closed: ${errorChain(error)}`)
       return { outcome: { outcome: 'cancelled' } }
     }
   }
@@ -415,7 +446,7 @@ export class AcpAgent extends ExternalAgent implements AcpSessionPeer {
       }
       return { action: 'accept', content }
     } catch (error: unknown) {
-      this.ctx.logger.warn(`${ACP_PREFIX}: elicitation declined: ${errorChain(error)}`)
+      this.ctx.logger.warn(`${this.prefix}: elicitation declined: ${errorChain(error)}`)
       return decline
     }
   }
@@ -425,17 +456,21 @@ export class AcpAgent extends ExternalAgent implements AcpSessionPeer {
   /**
    * Apply the session's config-option selections before the prompt: the
    * `model` option carries the durable `model/selection` or deployment
-   * default, and the `mode` option carries the DSH permission knobs, each
-   * only when the session advertised the option and the value differs.
-   * A requested model or sandbox the harness cannot carry is logged, never
+   * default, the reasoning-effort option carries the selection's effort, and
+   * the `mode` option carries the DSH permission knobs — each only when the
+   * session advertised the option and the value differs. A requested value the
+   * harness cannot carry is logged with the value that will run instead, never
    * dropped silently.
    * @param chosenModel - the resolved model value, or undefined to leave the
    *   agent's `model` option untouched.
+   * @param chosenEffort - the resolved reasoning-effort value, or undefined to
+   *   leave the agent's reasoning-effort option untouched.
    */
   private async applyConfigSelection(
     connection: AcpClientConnection,
     sessionId: string,
     chosenModel: string | undefined,
+    chosenEffort: string | undefined,
     signal: AbortSignal,
   ): Promise<void> {
     const updates: { configId: string; value: string }[] = []
@@ -443,7 +478,7 @@ export class AcpAgent extends ExternalAgent implements AcpSessionPeer {
     if (chosenModel !== undefined && modelOption === undefined) {
       this.warnOnce(
         `model:${chosenModel}:unadvertised`,
-        `${ACP_PREFIX}: model "${chosenModel}" was not applied: the session advertises no model option`,
+        `${this.prefix}: model "${chosenModel}" was not applied: the session advertises no model option`,
       )
     } else if (modelOption !== undefined && chosenModel !== undefined && chosenModel !== modelOption.currentValue) {
       if (this.optionValues(modelOption).has(chosenModel)) {
@@ -451,16 +486,34 @@ export class AcpAgent extends ExternalAgent implements AcpSessionPeer {
       } else {
         this.warnOnce(
           `model:${chosenModel}:${modelOption.currentValue}`,
-          `${ACP_PREFIX}: model "${chosenModel}" was not applied: the session does not advertise it; the session runs model "${modelOption.currentValue}"`,
+          `${this.prefix}: model "${chosenModel}" was not applied: the session does not advertise it; the session runs model "${modelOption.currentValue}"`,
+        )
+      }
+    }
+    const effortOption = acpReasoningOption(this.configOptions)
+    if (chosenEffort !== undefined && effortOption === undefined) {
+      this.warnOnce(
+        `effort:${chosenEffort}:unadvertised`,
+        `${this.prefix}: reasoning effort "${chosenEffort}" was not applied: the session advertises no reasoning-effort option`,
+      )
+    } else if (effortOption !== undefined && chosenEffort !== undefined && chosenEffort !== effortOption.currentValue) {
+      if (this.optionValues(effortOption).has(chosenEffort)) {
+        updates.push({ configId: effortOption.id, value: chosenEffort })
+      } else {
+        this.warnOnce(
+          `effort:${chosenEffort}:${effortOption.currentValue}`,
+          `${this.prefix}: reasoning effort "${chosenEffort}" was not applied: the session does not advertise it; the session runs reasoning effort "${effortOption.currentValue}"`,
         )
       }
     }
     const modeOption = acpModeOption(this.configOptions)
-    if (modeOption !== undefined) {
-      const mode = this.chooseMode(modeOption)
-      if (mode !== undefined && mode !== modeOption.currentValue) {
-        updates.push({ configId: 'mode', value: mode })
-      }
+    const mode = this.chooseMode(modeOption)
+    if (mode === undefined) {
+      // A read-only session reports its own limitation below, which names the
+      // same request and effective mode; warning twice would say one thing.
+      if (!this.readOnlySandbox()) this.warnModeNotApplied(modeOption)
+    } else if (mode !== modeOption?.currentValue) {
+      updates.push({ configId: 'mode', value: mode })
     }
     for (const update of updates) {
       const response = await connection.request<{ configOptions?: SessionConfigOption[] }>(
@@ -470,40 +523,58 @@ export class AcpAgent extends ExternalAgent implements AcpSessionPeer {
       )
       this.configOptions = response.configOptions ?? this.configOptions
     }
-    // Devin's ACP mode ids express approval behavior only; none of them
-    // restricts the agent to reading, so a read-only session always reports
-    // the mode it actually runs.
+    // An ACP mode expresses approval behavior, not filesystem scope: no mode
+    // proves the harness confines its own tools to reading, so a read-only
+    // session always reports the mode it actually runs.
     if (this.readOnlySandbox()) {
       const inEffect = acpModeOption(this.configOptions)?.currentValue
       this.warnOnce(
         `read-only:${inEffect ?? 'unadvertised'}`,
         inEffect === undefined
-          ? `${ACP_PREFIX}: the session's read-only sandbox is not enforceable by Devin: the session advertises no mode option`
-          : `${ACP_PREFIX}: the session's read-only sandbox is not enforceable by Devin; the session runs mode "${inEffect}"`,
+          ? `${this.prefix}: the session's read-only sandbox is not enforceable by the harness: the session advertises no mode option`
+          : `${this.prefix}: the session's read-only sandbox is not enforceable by the harness; the session runs mode "${inEffect}"`,
       )
     }
   }
 
   /**
-   * The advertised Devin session mode value for the current DSH permission
-   * knobs: a `never` approval policy maps to the auto-approve mode
-   * (`bypass`), a read-only sandbox to the closest non-editing mode (`ask`),
-   * and `ask` over a writable sandbox to `accept-edits`. Real Devin
-   * advertises `accept-edits`, `smart`, `ask`, `plan`, and `bypass`. The
-   * deployment config `mode` overrides, and an unmatched candidate leaves the
-   * agent's own mode untouched.
+   * The advertised session mode value for the current DSH permission knobs: a
+   * `never` approval policy maps to the auto-approve mode (`bypass`), a
+   * read-only sandbox to the closest non-editing mode (`ask`), and `ask` over
+   * a writable sandbox to a tool-executing mode. Real Devin advertises
+   * `accept-edits`, `smart`, `ask`, `plan`, and `bypass`; opencode and
+   * mimocode advertise `build` and `plan`. The deployment config `mode`
+   * overrides, and a request no advertised value satisfies returns undefined
+   * so {@link warnModeNotApplied} names it.
    */
-  private chooseMode(modeOption: Extract<SessionConfigOption, { type: 'select' }>): string | undefined {
-    const values = this.optionValues(modeOption)
-    if (this.driverConfig.mode !== undefined && values.has(this.driverConfig.mode)) {
-      return this.driverConfig.mode
+  private chooseMode(modeOption: AcpSelectOption | undefined): string | undefined {
+    const values = new Set(modeOption === undefined ? [] : acpSelectEntries(modeOption).map(entry => entry.value))
+    if (this.driverConfig.mode !== undefined) {
+      return values.has(this.driverConfig.mode) ? this.driverConfig.mode : undefined
     }
     const pick = (candidates: readonly string[]): string | undefined =>
       candidates.find(candidate => values.has(candidate))
     const approval = this.ctx.get('approval')?.overrideOf(this.session) ?? this.driverConfig.approval
     if (approval === 'never') return pick(['bypass', 'smart'])
     if (this.readOnlySandbox()) return pick(['ask', 'plan'])
-    return pick(['accept-edits', 'smart'])
+    return pick(['accept-edits', 'build', 'smart'])
+  }
+
+  /**
+   * Report a requested mode that no advertised value satisfies, naming both
+   * the request and the mode in effect, once per distinct pair.
+   */
+  private warnModeNotApplied(modeOption: AcpSelectOption | undefined): void {
+    const requested = this.driverConfig.mode === undefined
+      ? `approval policy "${this.ctx.get('approval')?.overrideOf(this.session) ?? this.driverConfig.approval}"`
+      : `mode "${this.driverConfig.mode}"`
+    const inEffect = modeOption?.currentValue
+    this.warnOnce(
+      `mode:${requested}:${inEffect ?? 'unadvertised'}`,
+      inEffect === undefined
+        ? `${this.prefix}: the session's ${requested} was not applied: the session advertises no mode option`
+        : `${this.prefix}: the session's ${requested} was not applied: the session does not advertise a mode for it; the session runs mode "${inEffect}"`,
+    )
   }
 
   /** Whether the session's effective DSH sandbox is `read-only`. */
@@ -519,10 +590,8 @@ export class AcpAgent extends ExternalAgent implements AcpSessionPeer {
   }
 
   /** Every selectable value an advertised option offers, flat or grouped. */
-  private optionValues(option: Extract<SessionConfigOption, { type: 'select' }>): Set<string> {
-    const flat = (options: typeof option.options): string[] =>
-      options.flatMap(entry => 'value' in entry ? [entry.value] : entry.options.map(leaf => leaf.value))
-    return new Set(flat(option.options))
+  private optionValues(option: AcpSelectOption): Set<string> {
+    return new Set(acpSelectEntries(option).map(entry => entry.value))
   }
 
   /**
@@ -541,7 +610,7 @@ export class AcpAgent extends ExternalAgent implements AcpSessionPeer {
       } catch (error: unknown) {
         /* v8 ignore next -- containment arm: the projector rejects only when the
            durable append itself fails, which already fails the session. */
-        this.ctx.logger.warn(`${ACP_PREFIX}: tool result settlement failed: ${errorChain(error)}`)
+        this.ctx.logger.warn(`${this.prefix}: tool result settlement failed: ${errorChain(error)}`)
       }
     }
     active.openToolCalls.clear()
@@ -556,7 +625,7 @@ export class AcpAgent extends ExternalAgent implements AcpSessionPeer {
               : { kind: 'stop' },
           })
           active.drive.projector.commitAssistant(lane.attempt, {
-            provider: ACP_PROVIDER,
+            provider: this.driverConfig.harness.id,
             model: active.model,
           }, interrupted ? { interrupted: true } : {})
         } else {
@@ -565,7 +634,7 @@ export class AcpAgent extends ExternalAgent implements AcpSessionPeer {
       } catch (error: unknown) {
         /* v8 ignore next -- containment arm: the projector rejects only when the
            durable append itself fails, which already fails the session. */
-        this.ctx.logger.warn(`${ACP_PREFIX}: assistant stream settlement failed: ${errorChain(error)}`)
+        this.ctx.logger.warn(`${this.prefix}: assistant stream settlement failed: ${errorChain(error)}`)
       }
     }
     active.attempts.clear()
@@ -625,7 +694,7 @@ export class AcpAgent extends ExternalAgent implements AcpSessionPeer {
       }
       return attachments.fileHostPath(attachment as never)
     } catch (error: unknown) {
-      this.ctx.logger.warn(`${ACP_PREFIX}: attachment path resolution failed: ${errorChain(error)}`)
+      this.ctx.logger.warn(`${this.prefix}: attachment path resolution failed: ${errorChain(error)}`)
       return undefined
     }
   }

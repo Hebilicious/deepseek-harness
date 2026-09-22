@@ -9,7 +9,6 @@
 
 import { Context } from '@deepseek-ai/cordis'
 import z from '@deepseek-ai/schemastery'
-import { credentialRef } from '@deepseek-ai/dsh-credentials'
 import type {} from '@deepseek-ai/dsh-llm'
 import {
   Remote,
@@ -320,6 +319,9 @@ export class CodexAppServer extends TypertRemoteService {
     if (credentials === undefined) {
       throw new Error(`${CODEX_PREFIX}: apiKey login needs a credential provider (mount dsh-credentials)`)
     }
+    // Loaded here rather than at module scope: the credential seam is an
+    // optional peer, and only this login path needs its brand helper.
+    const { credentialRef } = await import('@deepseek-ai/dsh-credentials')
     const resolved = await credentials.resolve(credentialRef(refName))
     if (resolved === undefined) {
       throw new Error(`${CODEX_PREFIX}: credential "${refName}" is not configured`)

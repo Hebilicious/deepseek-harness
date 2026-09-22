@@ -1,6 +1,7 @@
 /** Host catalog, durable projection caches, and explicitly retained Client instances. */
 
 import type { SubagentAddress, SubagentCatalog } from '@deepseek-ai/dsh-subagent/client'
+import type { HarnessId } from '@deepseek-ai/dsh-agent/types'
 import { SessionSeq, type SessionId, type SessionSeqCursor } from '@deepseek-ai/dsh-session/types'
 import type { SessionProjectionMap } from '@deepseek-ai/dsh-session-projection/types'
 import type { WorkspaceId } from '@deepseek-ai/dsh-workspace/types'
@@ -118,6 +119,8 @@ export class SessionManager {
    * one representation.
    */
   private readonly jobsBySession = new Map<SessionId, readonly JobView[]>()
+  /** Harness a surface staged for the next created Session; absent until one stages. */
+  private stagedHarness: HarnessId | undefined
 
   private listSnapshotCache: SessionListSnapshot
   /** Entry-identity cache (reference stability): list rebuilds reuse the previous entry
@@ -481,20 +484,29 @@ export class SessionManager {
    * Contract session.create; on success merge into summaries immediately (no
    * wait for the next refresh). A created session is blank by definition
    * (entity birth precedes the first message).
-   * @param opts - target workspace or working directory, plus an optional caller-owned id.
+   * @param opts - target workspace or working directory, an optional
+   *   caller-owned id, and the harness the new Session runs.
    * @returns the create result.
-  */
+   */
   async create(
     opts: {
       workspaceId?: WorkspaceId
       cwd?: string
       sessionId?: SessionId
+      harness?: HarnessId
     } = {},
   ): Promise<RemoteResult<{ sessionId: SessionId }>> {
     const shared = opts.sessionId === undefined ? {} : { sessionId: opts.sessionId }
-    const payload = opts.workspaceId !== undefined
-      ? { workspaceId: opts.workspaceId, ...shared }
-      : { ...(opts.cwd === undefined ? {} : { cwd: opts.cwd }), ...shared }
+    // An adopted identity keeps the harness its own log records; only a new
+    // Session takes the staged choice.
+    const harness = opts.harness ?? (opts.sessionId === undefined ? this.stagedHarness : undefined)
+    const payload = {
+      ...opts.workspaceId !== undefined
+        ? { workspaceId: opts.workspaceId }
+        : { ...opts.cwd === undefined ? {} : { cwd: opts.cwd } },
+      ...shared,
+      ...harness === undefined ? {} : { harness },
+    }
     const result = await this.remote.session.create(payload)
     if (result.ok) {
       this.recordMutation({ kind: 'upsert', summary: {
@@ -516,6 +528,14 @@ export class SessionManager {
       }
     }
     return result
+  }
+
+  /**
+   * Stage the harness the next created Session runs.
+   * @param harness - mounted harness id.
+   */
+  stageHarness(harness: HarnessId): void {
+    this.stagedHarness = harness
   }
 
   /**

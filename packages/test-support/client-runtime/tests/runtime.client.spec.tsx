@@ -12,7 +12,7 @@ import { stubSettingsScope } from '../src/settings-scope.ts'
 import { act, cleanup } from '@testing-library/react'
 import { useSyncExternalStore } from 'react'
 import { createSnapshotStore, defineStore } from '@deepseek-ai/dsh-client-store'
-import { createScope, type SessionReference } from '@deepseek-ai/dsh-api-session-controller/client'
+import { createScope, type ISessions, type SessionReference } from '@deepseek-ai/dsh-api-session-controller/client'
 import type { WorkspaceId } from '@deepseek-ai/dsh-api-workspace-controller/client'
 import type { SessionId } from '@deepseek-ai/dsh-session/types'
 import type {
@@ -200,10 +200,14 @@ describe('sessions', () => {
     await expect(runtime.sessions.fork({
       sessionId: 's1' as SessionId, atSeq: 7, increaseTitle: true,
     })).resolves.toBe('s1')
+    // The stage a new-session surface asks for: recorded, never applied here,
+    // because a spec asserts what the surface requested.
+    runtime.sessions.stageHarness('codex' as Parameters<ISessions['stageHarness']>[0])
     expect(runtime.sessions.calls).toEqual([
       { method: 'setSubagentCatalogOpen', args: ['s2', true] },
       { method: 'refreshSubagents', args: ['s2'] },
       { method: 'fork', args: [{ sessionId: 's1', atSeq: 7, increaseTitle: true }] },
+      { method: 'stageHarness', args: ['codex'] },
     ])
     await runtime.dispose()
   })

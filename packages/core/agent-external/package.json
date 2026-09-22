@@ -1,7 +1,7 @@
 {
   "name": "@deepseek-ai/dsh-agent-external",
   "description": "External-harness agent base: durable inbox, session publication, assistant-stream settlement, and process lifecycle for agents driven by out-of-process harnesses",
-  "version": "0.1.5-rc.2",
+  "version": "0.1.6-alpha.2",
   "publishConfig": {
     "access": "public"
   },

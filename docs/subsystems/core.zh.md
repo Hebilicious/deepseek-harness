@@ -50,7 +50,7 @@ interface AgentHandle {
 
 `CreateAgentOptions` 携带共享标识以及新 agent 发布前所需的一切：可选的存活 `parentAgent`、会话元数据（`meta`——已校验的 `cwd`、fork 谱系、`isSeeded` 标记、来源分类、委派深度与 `agentPreset`）、同级字段 `inheritedEventCount` 所表示的精确 fork cut、可选的 `seed` 回放前缀、按 agent 的 `AgentOptions`、仅创建期有效的取消 `signal`，以及 `setup`。`ResumeAgentOptions` 是持久标识的对应项：`resumeSessionId`、`parentAgent`、`agentOptions`、`signal` 与 `setup`。`setup` 回调（`AgentSetup`）在两个 id 均未发布时接收 `(agentCtx, agent)`：上下文拥有作用域注册，显式 Agent 提供确切的子 Session，Context 无需反向属性。凡经 `agentCtx` 注册的内容都先于 `agent/created` 与第一次提示词组装存在。Setup 可以返回在发布前一刻调用的同步 commit；setup 拒绝、commit 抛出或所有者 dispose（资源释放）都会回滚事务，两个 id 均不发布。
 
-`AgentFactory` 是注册表背后的创建接口：循环经 `ctx.agents.setFactory()` 注册其工厂，因此消费方使用 `ctx.agents` 时无需依赖具体循环包。运行时子 Agent 的创建方设置 `options.parentAgent`；注册表把 options 与调用方 Context 传给工厂，不从其中一项推导另一项。确切的 `create`/`resume` 签名及回滚约定见下方[生成区块](#ctxagents--agentregistry)。
+`AgentFactory` 是注册表背后的创建接口：驱动器通过 `ctx.agents.registerHarness({ id, name, factory })` 注册一个 harness，进程内循环也以同样方式注册内置的 `dsh` harness，因此消费方使用 `ctx.agents` 时无需依赖具体的驱动器包。一次部署可以同时挂载多个 harness，并在 `create`/`resume` 时指定其中一个；每个会话都会以 `agent/harness` 事件记录拥有它的 harness，resume 依据该记录路由，因此一个会话不会由第二个 harness 继续。运行时子 Agent 的创建方设置 `options.parentAgent`；注册表把 options 与调用方 Context 传给工厂，不从其中一项推导另一项。确切的 `create`/`resume` 签名及回滚约定见下方[生成区块](#ctxagents--agentregistry)。
 
 <a id="the-agent-handle"></a>
 
@@ -431,30 +431,33 @@ Generated from source by `scripts/gen-cordis-catalog.ts` (verified fresh by `pnp
 
 ### `ctx.acpHarness` — `AcpHarness`
 
-The `acpHarness` service (`acp` Remote namespace). Owns the shared `devin acp` process and connection, the agent-factory host, the `devin` catalog adapter, and every auth operation — none of which belong to a session.
+The `acpHarness` service (`acp` Remote namespace). Owns one ACP runtime, one agent-factory host, and one catalog adapter per configured harness, plus every auth operation — none of which belong to a session.
 
 ```ts cordis-catalog
 /**
- * Read the Devin account state: the agent's advertised auth methods plus
- * the `devin auth status` CLI verdict.
+ * Read one harness's account state: the agent's advertised auth methods
+ * plus the harness's own auth-status CLI verdict.
+ * @param request - `{harness}` naming a mounted harness.
  * @param signal - caller lifetime.
  * @returns normalized account facts.
  */
-@Remote async status(signal: AbortSignal): Promise<DevinAccountSnapshot>
+@Remote async status(request: { harness: string }, signal: AbortSignal): Promise<AcpAccountSnapshot>
 
 /**
- * Start the agent's browser authentication flow (`devin-browser`).
- * @param request - `{methodId}`; defaults to the first advertised method.
+ * Start one harness's browser authentication flow (`devin-browser` on
+ * Devin).
+ * @param request - `{harness, methodId}`; the method defaults to the first one the harness advertised.
  * @param signal - caller lifetime.
  */
-@Remote('login') async login(request: { methodId?: string }, signal: AbortSignal): Promise<void>
+@Remote('login') async login(request: { harness: string; methodId?: string }, signal: AbortSignal): Promise<void>
 
 /**
- * Sign the Devin account out — the ACP `logout` request when the agent
- * advertises it, the `devin auth logout` CLI otherwise.
+ * Sign one harness's account out — the ACP `logout` request when the agent
+ * advertises it, the harness's auth-logout CLI otherwise.
+ * @param request - `{harness}` naming a mounted harness.
  * @param signal - caller lifetime.
  */
-@Remote async logout(signal: AbortSignal): Promise<void>
+@Remote async logout(request: { harness: string }, signal: AbortSignal): Promise<void>
 ```
 
 Source: [`packages/core/agent-acp/src/index.ts`](../../packages/core/agent-acp/src/index.ts)
@@ -827,18 +830,33 @@ withInitiator<T>(agent: Agent, operation: () => T): T
 withoutInitiator<T>(operation: () => T): T
 
 /**
- * Register the agent-creation factory (the loop calls this on construction,
- * effect-scoped). A traced Cordis service is canonicalized to its concrete
- * target; each create/resume call is then traced through that caller's
- * context so ownership follows the caller without stacking proxy layers.
- * Throws if a factory is already registered. Returns the disposer; on
- * dispose the factory slot is cleared.
- * @param factory - the loop-owned factory {@link create}/{@link resume} delegate to.
- * @returns the disposer that clears the factory slot. The exact
+ * Register one harness's agent-creation factory (a driver calls this on
+ * construction, effect-scoped). A traced Cordis service is canonicalized to
+ * its concrete target; each create/resume call is then traced through that
+ * caller's context so ownership follows the caller without stacking proxy
+ * layers. Throws when the id is already registered. Returns the disposer; on
+ * dispose the harness leaves the registry.
+ * @param registration - the harness identity and the factory that owns it.
+ * @returns the disposer that removes the harness. The exact
  *   Cordis effect disposer (single-shot): composite (generator) effects may
  *   yield it directly — exact identity nests the teardown in order.
  */
+registerHarness(registration: AgentHarnessRegistration): () => void
+
+/**
+ * Register the sole agent-creation factory under the default harness id.
+ * Deployments that mount one harness use this; a deployment that offers a
+ * choice registers each harness with {@link registerHarness}.
+ * @param factory - the factory {@link create}/{@link resume} delegate to.
+ * @returns the disposer that removes the harness.
+ */
 setFactory(factory: AgentFactory): () => void
+
+/**
+ * Every harness this process can create sessions with, in registration order.
+ * @returns the harness identities and their display names.
+ */
+harnesses(): readonly AgentHarness[]
 
 /**
  * Create and publish a new agent through the registered factory.

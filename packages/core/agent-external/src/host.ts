@@ -11,6 +11,7 @@
 import type { Context } from '@deepseek-ai/cordis'
 import {
   type Agent,
+  type AgentHarness,
   type AgentFactory,
   type AgentHandle,
   type AgentOptions,
@@ -28,6 +29,7 @@ import {
 } from '@deepseek-ai/dsh-session'
 import type { SessionHandle, SessionPersistence } from '@deepseek-ai/dsh-session-persistence'
 import type { ManagedAgent } from './base.ts'
+import { agentHarnessOf, recordedHarness } from '@deepseek-ai/dsh-agent'
 import { assertAgentOptions, FactoryOwnership, raceAbort, raceAbortCall } from './lifecycle.ts'
 import { inboxProjectionDefinition } from './inbox.ts'
 import { externalModelSelectionProjection } from './model-selection.ts'
@@ -64,6 +66,12 @@ interface PreparedAgent<TAgent extends ManagedAgent> {
 /** Host-wide choices a driver makes when it mounts the shared transaction. */
 export interface ExternalAgentHostOptions {
   /**
+   * Identity this driver registers under. Every session it creates records
+   * the id in its durable header, and resume reaches this host through the
+   * same id, so two drivers can never claim one session.
+   */
+  readonly harness: AgentHarness
+  /**
    * Register the durable `model/selection` fold this host's drivers read
    * through `ExternalAgent.currentSelection`. The in-process loop reads
    * selection through the session controller's own fold and opts out.
@@ -92,24 +100,30 @@ export abstract class ExternalAgentHost<TAgent extends ManagedAgent> implements 
   private readonly effectPrefix: string
   /** Driver name used in lifecycle abort reasons and inactive-factory errors. */
   private readonly label: string
+  /** Harness identity this host registers under and stamps on its sessions. */
+  private readonly harness: AgentHarness
 
   /**
    * @param ctx - the driver service's registration context (dependency origin for everything the host owns).
    * @param label - driver name used in lifecycle abort reasons (`"<label> is not active"`).
-   * @param options - host-wide choices; omitted, the model-selection fold is registered.
+   * @param options - host-wide choices: this driver's harness identity and, optionally, the model-selection fold.
    */
-  constructor(ctx: Context, label: string, options: ExternalAgentHostOptions = {}) {
+  constructor(ctx: Context, label: string, options: ExternalAgentHostOptions) {
     this.ownership = new FactoryOwnership(ctx.fiber, label)
     this.runtime = { ctx }
     this.effectPrefix = options.effectPrefix ?? 'externalAgentHost'
     this.label = label
+    this.harness = options.harness
     // One registration per profile, never per agent: the inbox and turn-boundary
     // folds are read by every session this factory owns.
     ctx.sessionProjections.register(inboxProjectionDefinition)
     ctx.sessionProjections.register(turnBoundaryProjectionDefinition)
     if (options.modelSelection !== false) ctx.sessionProjections.register(externalModelSelectionProjection)
     ctx.effect(() => () => this.ownership.dispose(), `${this.effectPrefix}.transactions()`)
-    ctx.effect(() => ctx.agents.setFactory(this), `${this.effectPrefix}.setFactory()`)
+    ctx.effect(
+      () => ctx.agents.registerHarness({ ...this.harness, factory: this }),
+      `${this.effectPrefix}.registerHarness(${this.harness.id})`,
+    )
   }
 
   /**
@@ -234,6 +248,16 @@ export abstract class ExternalAgentHost<TAgent extends ManagedAgent> implements 
           const coldRead = await handle.read(0, undefined, { signal: fused })
           fused.throwIfAborted()
           const persisted = coldRead.events
+          // Ownership precedes publication: a session whose durable record
+          // names another harness is not this host's to continue, and
+          // continuing it here would replay a conversation this driver cannot
+          // drive.
+          const recorded = recordedHarness(persisted)
+          if (recorded !== undefined && recorded !== this.harness.id) {
+            throw new Error(
+              `session "${id}" belongs to agent harness "${recorded}", not "${this.harness.id}"`,
+            )
+          }
           const closers = interruptedTurnClosers(persisted)
           if (closers.length > 0) await handle.append(closers)
           preparation = SessionPreparation.create(this.runtime.ctx.sessions.prepare(id, {
@@ -478,6 +502,7 @@ export abstract class ExternalAgentHost<TAgent extends ManagedAgent> implements 
           // thread, refused session) rolls the transaction back without ever
           // publishing either identity.
           await raceAbort(prepared.agent.bind(prepared.signal), prepared.signal, id)
+          this.recordHarness(session)
           await this.appendUnstoredSuffix(stored, session)
           return await prepared.publish(source)
         } catch (error: unknown) {
@@ -512,6 +537,18 @@ export abstract class ExternalAgentHost<TAgent extends ManagedAgent> implements 
       ...signal === undefined ? {} : { signal },
     })
     return { handle, storedCount: 0 }
+  }
+
+  /**
+   * Record which harness owns this session, once, inside the pre-publication
+   * suffix. A resumed session that already names its harness keeps the record
+   * it has: one session is never handed from one harness to another, and the
+   * resume check refused that case before publication.
+   * @param session - the unpublished session about to be published.
+   */
+  private recordHarness(session: Session): void {
+    if (agentHarnessOf(this.runtime.ctx.sessionProjections, session) !== undefined) return
+    session.append('agent/harness', { harness: this.harness.id })
   }
 
   /**

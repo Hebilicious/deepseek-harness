@@ -1,7 +1,7 @@
 {
   "name": "@deepseek-ai/dsh-agent-acp",
   "description": "ACP session driver: shared devin acp process, per-session ACP session binding, and the Devin agent factory",
-  "version": "0.1.5-rc.2",
+  "version": "0.1.6-alpha.2",
   "publishConfig": {
     "access": "public"
   },

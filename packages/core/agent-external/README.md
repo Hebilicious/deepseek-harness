@@ -29,7 +29,7 @@ Write an agent driver that reuses every session-facing behavior dsh already defi
 
 Every driver in dsh extends this package instead of reimplementing the session shell. `dsh-agent-loop` extends `ManagedAgent` and keeps its own step loop; `dsh-agent-codex` and `dsh-agent-acp` extend `ExternalAgent` so a Codex account or the Devin CLI owns the loop, prompt, tools, MCP servers, and config. Choose `ManagedAgent` when your driver calls `ctx.llm` and `ctx.tools` itself, and `ExternalAgent` plus `ExternalAgentHost` when the model work happens in another process over a wire protocol.
 
-A driver mounts itself as the `ctx.agents` factory. `AgentRegistry.setFactory()` accepts exactly one factory and throws `an agent factory is already registered` on a second registration, so a profile runs one driver at a time and the composition disables the driver it replaces.
+A driver registers itself as one agent harness: `AgentRegistry.registerHarness({ id, name, factory })` keys each registration by harness id, so several drivers coexist in one process and `session.create`/`resume` name the harness that owns each session. A driver that owns a whole profile may keep using `ctx.agents.setFactory()`, which registers the built-in `dsh` id.
 
 ### Entry point
 
@@ -157,7 +157,7 @@ None. The logged header describes the request without altering its token sequenc
 
 These limits define what this base does not decide for a driver. They are current package constraints, not a task backlog.
 
-- **One driver per profile** — `ctx.agents.setFactory()` rejects a second registration, so a harness driver replaces the in-process `dsh-agent-loop` for the whole profile; the shipped bundles disable that row instead of composing both.
+- **One harness owns each session** — the session records its harness as an `agent/harness` event, and a resume under a different harness is refused, so a conversation cannot move between drivers; a profile that mounts several drivers chooses the harness at creation instead.
 - **The harness owns the turn** — for an `ExternalAgent`, the loop, prompt, tools, MCP servers, and config live in the foreign process. DSH keeps the durable session, transcript, approvals, notifications, and model picker; the driver forwards a model selection per turn and reports the harness's own current model.
 - **Harness credentials are outside DSH** — Codex sessions need a Codex account (`CODEX_HOME`, `codex login`) and Devin sessions need `devin auth login`; DSH neither stores nor provisions either one.
 - **Model catalogs come from the harness** — a driver that feeds its picker from a CLI call has no entries while that CLI is unreachable or slow.

@@ -29,7 +29,7 @@ Mount this provider when sessions should run on a Codex account rather than on a
 
 ### When to choose it
 
-Choose this driver when Codex's own loop, prompt, tools, MCP servers, and `config.toml` should serve the session. The driver registers itself as the `ctx.agents` factory, and `AgentRegistry.setFactory()` accepts exactly one factory, so the composition cannot also run [`dsh-agent-loop`](../agent-loop/README.md); the shipped bundle disables that row.
+Choose this driver when Codex's own loop, prompt, tools, MCP servers, and `config.toml` should serve the session. The driver registers itself as the `codex` agent harness, so a composition may mount it beside [`dsh-agent-loop`](../agent-loop/README.md) and any ACP harness; the shipped `dsh-web-codex` bundle still disables the loop row to keep that profile Codex-only.
 
 ### Configuration
 
@@ -157,7 +157,7 @@ A model or effort change replaces the route; a cached prefix under the previous 
 
 These limits define when this driver is the wrong choice or needs operational care. They are current package constraints, not a task backlog.
 
-- **It replaces the profile's agent loop** — `ctx.agents.setFactory()` accepts exactly one factory, so mounting this driver excludes `dsh-agent-loop` for the whole profile; the `dsh-web-codex` bundle disables that row instead of composing both.
+- **The `dsh-web-codex` bundle keeps its profile Codex-only** — it disables the `agent-loop` row. The driver itself needs no such exclusion: a multi-harness profile mounts this driver beside the loop and the ACP harnesses.
 - **Codex owns the turn, dsh owns the shell** — the loop, prompt, tools, MCP servers, and config live in Codex. DSH keeps the durable session, transcript, approvals, notifications, and model picker; the driver forwards a model selection per turn and reports the harness's own current model, falling back to `agent-default` when Codex never reports one.
 - **A Codex account is required and not provided** — sessions need `CODEX_HOME` with a completed `codex login`, or a `credentialRef` for the API-key path; dsh neither stores nor provisions Codex credentials.
 - **The model catalog needs the CLI** — every picker read walks `model/list` over the shared app-server, so an unreachable, broken, or slow `codex` binary leaves the picker without entries.

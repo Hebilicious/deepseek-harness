@@ -311,7 +311,7 @@ export class TestSessions implements ISessions {
 
   /** Calls observed on the service-level face, newest last. */
   readonly calls: {
-    method: 'create' | 'setSubagentCatalogOpen' | 'refreshSubagents' | 'refresh' | 'search' | 'fork'
+    method: 'create' | 'stageHarness' | 'setSubagentCatalogOpen' | 'refreshSubagents' | 'refresh' | 'search' | 'fork'
     args: unknown[]
   }[] = []
 
@@ -623,6 +623,14 @@ export class TestSessions implements ISessions {
     const id = await this.createStub(opts)
     this.require(id)
     return id
+  }
+
+  /**
+   * Record the harness a surface staged for the next created Session. No
+   * fixture consumes it: a spec reads it to assert what the surface asked for.
+   */
+  stageHarness(harness: Parameters<ISessions['stageHarness']>[0]): void {
+    this.calls.push({ method: 'stageHarness', args: [harness] })
   }
 
   /** Resolve a retained or catalog-derived address independently of a view. */

@@ -46,7 +46,7 @@ dsh plugin --profile <name> remove @deepseek-ai/dsh-web-codex
 
 | 目标配置行 | 变更 |
 |---|---|
-| `agent-loop` | 被禁用，因为 `ctx.agents.setFactory()` 只接受一个工厂，而 Codex 驱动器占用了该槽位 |
+| `agent-loop` | 被禁用，因此该 profile 的每个会话都由 Codex 运行，而不提供并行挂载的循环 |
 | `agent-default-model` | `provider: codex`、`model: ''`，因此新会话在选择器或 `model/selection` 做出选择之前不携带模型 |
 | `session-title-llm` | 固定为 `deepseek-official`／`deepseek-flash`，因为会话记录的路由是仅提供目录、不提供流的 `codex` 适配器 |
 | `agent-codex` | 被插入：每个 profile 一个共享 app-server，每个会话一个 Codex 线程 |
@@ -67,7 +67,7 @@ dsh plugin --profile <name> remove @deepseek-ai/dsh-web-codex
 
 ### 为什么循环离开了组合
 
-`AgentRegistry.setFactory()` 在第二次注册时抛出 `an agent factory is already registered`。`dsh-agent-loop` 与 `dsh-agent-codex` 都把自身注册为该工厂，因此该 profile 只组合其中之一：本层禁用 base 的 `agent-loop` 配置行并插入该驱动器。
+`dsh-agent-loop` 注册 `dsh` harness，`dsh-agent-codex` 注册 `codex` harness，因此组合可以同时挂载两者。本层只保留 Codex：禁用 base 的 `agent-loop` 配置行并插入该驱动器，把 harness 选择交给 profile 而不是选择器。当一个 profile 需要同时提供两者时，请使用 [`dsh-web-harnesses`](../web-harnesses/README.zh.md)。
 
 ### 为什么标题请求被改道
 
@@ -135,7 +135,7 @@ base 的提示词 section 与工具 schema 不再抵达模型，其每步成本�
 
 这些限制说明本 profile 何时不合适或何时需要运维注意。它们是当前包约束，不是任务积压。
 
-- **该 profile 只运行一个驱动器**——`ctx.agents.setFactory()` 只接受一个工厂，因此本层在整个 profile 内禁用 `agent-loop`，而不是把进程内循环与 Codex 组合在一起。
+- **该 profile 只运行一个驱动器**——本层禁用 `agent-loop`，因此每个会话都运行在 Codex 上，harness 选择器只有一个条目。需要挂载多个 harness 时请使用 [`dsh-web-harnesses`](../web-harnesses/README.zh.md)。
 - **轮次归 Codex，外壳归 dsh**——循环、提示词、工具、MCP 服务器与配置都位于 Codex；dsh 保留持久会话、transcript、审批、通知与模型选择器，并每轮转发选择器的选择。
 - **需要 Codex 账号，且不由此包提供**——在配置的 `CODEX_HOME` 完成 `codex login`，或由 `credentialRef` 提供 API key 之前，驱动器的 `codex app-server` 无法绑定会话；dsh 既不保存也不提供 Codex 凭据。
 - **模型选择器依赖该 CLI**——条目来自 app-server 的 `model/list`，因此 `codex` 二进制不可达、损坏或缓慢时，选择器为空。

@@ -17,6 +17,7 @@ import type {
   CreateAgentOptions,
   ResumeAgentOptions,
 } from '@deepseek-ai/dsh-agent'
+import { HarnessId } from '@deepseek-ai/dsh-agent'
 import { ExternalAgentHost, turnBoundaryProjectionDefinition } from '@deepseek-ai/dsh-agent-external'
 import { errorChain, ReasoningEffortId } from '@deepseek-ai/dsh-llm'
 import type {} from '@deepseek-ai/dsh-settings'
@@ -188,7 +189,15 @@ class LoopAgentHost extends ExternalAgentHost<ReactLoopAgent> {
     // The loop reads durable `model/selection` through the session
     // controller's own fold, so the foreign-harness fold stays out of its
     // sessions and their projection state.
-    super(ctx, 'agent loop', { modelSelection: false, effectPrefix: 'agentLoop' })
+    super(ctx, 'agent loop', {
+      harness: {
+        id: HarnessId('dsh'),
+        name: 'DSH Loop',
+        description: 'DeepSeek Harness runs its own in-process agent loop',
+      },
+      modelSelection: false,
+      effectPrefix: 'agentLoop',
+    })
   }
 
   /**

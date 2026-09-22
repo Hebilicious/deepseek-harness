@@ -8,8 +8,9 @@
 # control only. DSH stays the shell: session create/resume, transcript,
 # approvals, notifications, model picker.
 
-# `ctx.agents.setFactory` accepts exactly one factory: the ACP driver mounts
-# it, so the base's in-process agent loop leaves the composition.
+# This layer offers the Devin-driven surface alone, so the base's in-process
+# agent loop row leaves the composition; the driver mounts its own harnesses
+# and a lone mounted harness still needs no id from a session's caller.
 - id: agent-loop
   disabled: true
 
@@ -35,7 +36,15 @@
     timeoutMs: 60000
 
 - insert:
-    # One shared `devin acp` process per profile; every session binds its own
-    # ACP session on it. Devin's own data directory owns auth and config.
+    # One shared `devin acp` process for this entry; every session binds its
+    # own ACP session on it. Devin's own data directory owns auth and config.
+    # Further entries add further harnesses, each with its own process.
     - id: agent-acp
       name: '@deepseek-ai/dsh-agent-acp'
+      config:
+        harnesses:
+          - id: devin
+            name: Devin
+            description: Devin runs the session through devin acp
+            executable: devin
+            args: ['acp']

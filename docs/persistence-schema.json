@@ -542,6 +542,76 @@
       }
     },
     {
+      "key": "event:agent/harness",
+      "kind": "event",
+      "event": "agent/harness",
+      "surface": false,
+      "digest": "297cac9c86389e3507f2163d2ba3b29717b893c0735df5ef3a2940fcc45f20ae",
+      "schema": {
+        "root": 0,
+        "nodes": [
+          {
+            "kind": "object",
+            "properties": [
+              {
+                "name": "data",
+                "type": 1,
+                "optional": false
+              },
+              {
+                "name": "ignorable",
+                "type": 3,
+                "optional": true
+              },
+              {
+                "name": "seq",
+                "type": 4,
+                "optional": false
+              },
+              {
+                "name": "time",
+                "type": 4,
+                "optional": false
+              },
+              {
+                "name": "type",
+                "type": 5,
+                "optional": false
+              }
+            ],
+            "indices": []
+          },
+          {
+            "kind": "object",
+            "properties": [
+              {
+                "name": "harness",
+                "type": 2,
+                "optional": false
+              }
+            ],
+            "indices": []
+          },
+          {
+            "kind": "primitive",
+            "type": "string"
+          },
+          {
+            "kind": "literal",
+            "value": true
+          },
+          {
+            "kind": "primitive",
+            "type": "number"
+          },
+          {
+            "kind": "literal",
+            "value": "agent/harness"
+          }
+        ]
+      }
+    },
+    {
       "key": "event:agent/inbox/spliced",
       "kind": "event",
       "event": "agent/inbox/spliced",
@@ -22763,6 +22833,76 @@
       ]
     },
     {
+      "digest": "297cac9c86389e3507f2163d2ba3b29717b893c0735df5ef3a2940fcc45f20ae",
+      "schema": {
+        "root": 0,
+        "nodes": [
+          {
+            "kind": "object",
+            "properties": [
+              {
+                "name": "data",
+                "type": 1,
+                "optional": false
+              },
+              {
+                "name": "ignorable",
+                "type": 3,
+                "optional": true
+              },
+              {
+                "name": "seq",
+                "type": 4,
+                "optional": false
+              },
+              {
+                "name": "time",
+                "type": 4,
+                "optional": false
+              },
+              {
+                "name": "type",
+                "type": 5,
+                "optional": false
+              }
+            ],
+            "indices": []
+          },
+          {
+            "kind": "object",
+            "properties": [
+              {
+                "name": "harness",
+                "type": 2,
+                "optional": false
+              }
+            ],
+            "indices": []
+          },
+          {
+            "kind": "primitive",
+            "type": "string"
+          },
+          {
+            "kind": "literal",
+            "value": true
+          },
+          {
+            "kind": "primitive",
+            "type": "number"
+          },
+          {
+            "kind": "literal",
+            "value": "agent/harness"
+          }
+        ]
+      },
+      "names": [
+        "event:agent/harness"
+      ],
+      "sources": []
+    },
+    {
       "digest": "29af48b840d0cd9e48b6f50bf3b354f8f6340607c5b99220a48e74f60beac9e2",
       "schema": {
         "root": 0,
@@ -32337,7 +32477,7 @@
         "packages/workflow/workflow/src/types.ts#WorkflowRunId"
       ],
       "sources": [
-        "packages/api/session-controller/src/types.ts:376",
+        "packages/api/session-controller/src/types.ts:400",
         "packages/attachment/attachment/src/brand.ts:6",
         "packages/compaction/compaction/src/brand.ts:4",
         "packages/core/session/src/types.ts:19",
@@ -35300,9 +35440,9 @@
         ]
       },
       "names": [
-        "SessionEventEnvelope[41].sourceEventSeqs",
-        "SessionEventEnvelope[54].sourceEventSeqs",
-        "SessionEventEnvelope[57].sourceEventSeqs",
+        "SessionEventEnvelope[42].sourceEventSeqs",
+        "SessionEventEnvelope[55].sourceEventSeqs",
+        "SessionEventEnvelope[58].sourceEventSeqs",
         "event:assistant/attempt.data.stream[0][0].dt",
         "event:assistant/attempt.data.stream[0][1].dt",
         "event:assistant/attempt.data.stream[0][2].dt",
@@ -38285,7 +38425,7 @@
         "event:agent/inbox/spliced.data.inserted[0].source[11]"
       ],
       "sources": [
-        "packages/api/session-controller/src/types.ts:381"
+        "packages/api/session-controller/src/types.ts:405"
       ]
     },
     {
@@ -40547,7 +40687,7 @@
         ]
       },
       "names": [
-        "SessionEventEnvelope[8]"
+        "SessionEventEnvelope[9]"
       ],
       "sources": []
     },
@@ -41225,6 +41365,20 @@
           {
             "kind": "literal",
             "value": "agent-message"
+          }
+        ]
+      },
+      "names": [],
+      "sources": []
+    },
+    {
+      "digest": "8293e230c3102f87621183ea33ccd02b90941fe5916194af62b18997de15e78f",
+      "schema": {
+        "root": 0,
+        "nodes": [
+          {
+            "kind": "literal",
+            "value": "agent/harness"
           }
         ]
       },
@@ -44644,7 +44798,7 @@
         "packages/core/agent/src/types.ts#InboxTarget"
       ],
       "sources": [
-        "packages/core/agent/src/types.ts:30"
+        "packages/core/agent/src/types.ts:31"
       ]
     },
     {
@@ -44797,9 +44951,9 @@
         ]
       },
       "names": [
-        "SessionEventEnvelope[41]",
-        "SessionEventEnvelope[54]",
-        "SessionEventEnvelope[57]"
+        "SessionEventEnvelope[42]",
+        "SessionEventEnvelope[55]",
+        "SessionEventEnvelope[58]"
       ],
       "sources": []
     },
@@ -48615,7 +48769,7 @@
         "event:agent/inbox/spliced.data"
       ],
       "sources": [
-        "packages/core/agent/src/types.ts:87"
+        "packages/core/agent/src/types.ts:95"
       ]
     },
     {
@@ -52452,7 +52606,7 @@
         ]
       },
       "names": [
-        "SessionEventEnvelope[8].surfaceOp[1]"
+        "SessionEventEnvelope[9].surfaceOp[1]"
       ],
       "sources": [
         "packages/core/session/src/types.ts:441"
@@ -58886,7 +59040,7 @@
         "SessionEventEnvelope[39]",
         "SessionEventEnvelope[3]",
         "SessionEventEnvelope[40]",
-        "SessionEventEnvelope[42]",
+        "SessionEventEnvelope[41]",
         "SessionEventEnvelope[43]",
         "SessionEventEnvelope[44]",
         "SessionEventEnvelope[45]",
@@ -58899,14 +59053,15 @@
         "SessionEventEnvelope[51]",
         "SessionEventEnvelope[52]",
         "SessionEventEnvelope[53]",
-        "SessionEventEnvelope[55]",
+        "SessionEventEnvelope[54]",
         "SessionEventEnvelope[56]",
-        "SessionEventEnvelope[58]",
+        "SessionEventEnvelope[57]",
         "SessionEventEnvelope[59]",
         "SessionEventEnvelope[5]",
+        "SessionEventEnvelope[60]",
         "SessionEventEnvelope[6]",
         "SessionEventEnvelope[7]",
-        "SessionEventEnvelope[9]"
+        "SessionEventEnvelope[8]"
       ],
       "sources": []
     },
@@ -59928,6 +60083,35 @@
       "sources": []
     },
     {
+      "digest": "ed94f0559d23718e3a1e05e6e6f8285782a478b19132772dbb0dcf404b9db1a8",
+      "schema": {
+        "root": 0,
+        "nodes": [
+          {
+            "kind": "object",
+            "properties": [
+              {
+                "name": "harness",
+                "type": 1,
+                "optional": false
+              }
+            ],
+            "indices": []
+          },
+          {
+            "kind": "primitive",
+            "type": "string"
+          }
+        ]
+      },
+      "names": [
+        "event:agent/harness.data"
+      ],
+      "sources": [
+        "packages/core/agent/src/harness.ts:28"
+      ]
+    },
+    {
       "digest": "eefbea819caeeea91ccb02dfafc16c68dd7f961cf9c1b2be25a2084509cf5c5a",
       "schema": {
         "root": 0,
@@ -60111,7 +60295,7 @@
         "packages/api/session-controller/src/types.ts#ModelSelection"
       ],
       "sources": [
-        "packages/api/session-controller/src/types.ts:86"
+        "packages/api/session-controller/src/types.ts:87"
       ]
     },
     {

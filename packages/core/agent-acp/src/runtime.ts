@@ -1,8 +1,9 @@
 /**
- * Profile-shared ACP runtime: one `devin acp`-shape child process, one
- * {@link AcpClientConnection}, the Devin model catalog read
- * (`devin models list --format json`), and the auth CLI verbs the settings
- * panel drives. All state here is connection-global, never session-local.
+ * One harness's ACP runtime: one ACP harness child process, one
+ * {@link AcpClientConnection}, the model catalog the harness advertises on its
+ * sessions plus the optional CLI catalog verb, and the auth CLI verbs the
+ * settings panel drives. All state here is connection-global for that
+ * harness, never session-local.
  *
  * @module @deepseek-ai/dsh-agent-acp/runtime
  */
@@ -13,11 +14,14 @@ import type { SubprocessHandle, SubprocessOutcome } from '@deepseek-ai/dsh-subpr
 import { ExternalHarnessProcess } from '@deepseek-ai/dsh-agent-external'
 import { errorChain } from '@deepseek-ai/dsh-llm'
 import { AcpClientConnection } from './connection.ts'
-import { ACP_PREFIX } from './protocol.ts'
+import { acpAdvertisedModels, acpPrefix, type AcpSessionAdvert } from './protocol.ts'
+import type { AcpCatalogModel } from './types.ts'
 
-/** Options the plugin resolves once at construction; all fields required. */
+/** Options the plugin resolves once per harness at construction; all fields required but the catalog verb. */
 export interface AcpRuntimeOptions {
-  /** Harness executable (default `devin`). */
+  /** Harness id this runtime belongs to, used to attribute every diagnostic. */
+  readonly harness: string
+  /** Harness executable name or path. */
   readonly command: string
   /** Arguments after the executable (default `['acp']`). */
   readonly args: readonly string[]
@@ -29,31 +33,20 @@ export interface AcpRuntimeOptions {
   readonly disposeGraceMs: number
   /** Tier-1 window after stdin EOF before termination escalation (ms). */
   readonly eofGraceMs: number
-  /** Model-catalog command arguments (default `['models', 'list', '--format', 'json']`). */
-  readonly modelsArgs: readonly string[]
+  /** Model-catalog CLI arguments; omitted, the catalog comes from a session advert. */
+  readonly catalogArgs?: readonly string[]
+  /** Whether to open one throwaway session for the catalog when no session has bound yet (default true). */
+  readonly probeCatalog: boolean
   /** Auth-status command arguments (default `['auth', 'status']`). */
   readonly authStatusArgs: readonly string[]
   /** Auth-logout command arguments (default `['auth', 'logout']`). */
   readonly authLogoutArgs: readonly string[]
-  /** Deadline for one CLI verb (ms); `devin models list` refreshes over the network. */
+  /** Deadline for one CLI verb (ms); Devin's `models list` refreshes over the network. */
   readonly cliTimeoutMs: number
 }
 
-/** One catalog entry from `devin models list`. */
-export interface DevinModelEntry {
-  /** Opaque model uid the ACP `model` config option accepts. */
-  readonly id: string
-  /** Human-readable label. */
-  readonly name: string
-  /** Cost/capability summary, when the CLI reports one. */
-  readonly description?: string
-}
-
-/** Every startup path's failure message once {@link AcpRuntime.dispose} latched. */
-const DISPOSED = `${ACP_PREFIX}: runtime is disposed`
-
 /**
- * The profile's shared ACP runtime. `connect` memoizes one live connection;
+ * One harness's shared ACP runtime. `connect` memoizes one live connection;
  * teardown disposes the managed process through {@link ExternalHarnessProcess}
  * so quiescence is proven, not assumed.
  */
@@ -62,11 +55,13 @@ export class AcpRuntime {
   private connection: AcpClientConnection | undefined
   private connecting: Promise<AcpClientConnection> | undefined
   private initializeResponse: InitializeResponse | undefined
+  private advert: readonly AcpCatalogModel[] = []
+  private probing: Promise<readonly AcpCatalogModel[]> | undefined
   private disposed = false
 
   /**
    * @param ctx - the plugin service context (logger and subprocess seam).
-   * @param options - resolved runtime options.
+   * @param options - resolved runtime options for this harness.
    */
   constructor(
     private readonly ctx: Context,
@@ -79,15 +74,34 @@ export class AcpRuntime {
   }
 
   /**
-   * Spawn and handshake the shared `devin acp` process exactly once. A
-   * memoized endpoint whose child exited or whose connection went fatal is
-   * retired by its own observers, so this call respawns rather than handing
-   * back a dead endpoint.
+   * The model catalog the most recent bound session advertised. Empty until a
+   * session binds, because the advert is the harness's own statement of what
+   * it can run.
+   */
+  get advertisedModels(): readonly AcpCatalogModel[] {
+    return this.advert
+  }
+
+  /**
+   * Publish the catalog one bound session advertised. The newest non-empty
+   * advert wins: an empty one says nothing about the harness, and replacing a
+   * known catalog with it would empty the picker for a live deployment.
+   * @param models - entries the session advertises, possibly none.
+   */
+  recordAdvert(models: readonly AcpCatalogModel[]): void {
+    if (models.length > 0) this.advert = models
+  }
+
+  /**
+   * Spawn and handshake this harness's process exactly once. A memoized
+   * endpoint whose child exited or whose connection went fatal is retired by
+   * its own observers, so this call respawns rather than handing back a dead
+   * endpoint.
    * @param signal - caller cancellation for the startup window.
    * @returns the live shared connection.
    */
   async connect(signal?: AbortSignal): Promise<AcpClientConnection> {
-    if (this.disposed) throw new Error(DISPOSED)
+    if (this.disposed) throw new Error(`${this.prefix}: runtime is disposed`)
     const live = this.connection
     if (live !== undefined) return live
     this.connecting ??= this.openConnection(signal)
@@ -99,23 +113,71 @@ export class AcpRuntime {
   }
 
   /**
-   * Run `devin models list --format json`, flattened into one entry per
-   * variant. The command answers from a local cache or refreshes it over the
-   * network, so it is bounded by the caller's signal and the configured
-   * CLI deadline; an exit failure carries the CLI's own diagnostic.
+   * Run the configured catalog CLI verb, in the shape the harness's own
+   * listing command answers with (Devin: `devin models list --format json`),
+   * flattened into one entry per variant. The command answers from a local
+   * cache or refreshes it over the network, so it is bounded by the caller's
+   * signal and the configured CLI deadline; an exit failure carries the CLI's
+   * own diagnostic. A harness with no configured catalog verb lists nothing.
    * @param signal - caller cancellation.
    * @returns catalog entries in CLI order.
    */
-  async listDevinModels(signal?: AbortSignal): Promise<DevinModelEntry[]> {
-    const output = await this.runCli(this.options.modelsArgs, signal)
+  /**
+   * The model catalog this harness publishes to the picker. A bound session's
+   * advert wins; otherwise the configured CLI verb answers; otherwise, when
+   * probing is enabled, the runtime opens one throwaway session to read what
+   * the harness offers, so a deployment that has not started a session of this
+   * harness yet still offers real models in the picker. The probe is memoized
+   * for the process lifetime and its session stays open on the harness side,
+   * because the same child serves the sessions that follow.
+   * @param signal - caller cancellation for the catalog read.
+   * @returns the advertised or CLI-listed models, possibly empty.
+   */
+  async catalog(signal?: AbortSignal): Promise<readonly AcpCatalogModel[]> {
+    if (this.advert.length > 0) return this.advert
+    const listed = await this.listCatalogCli(signal)
+    if (listed.length > 0) return listed
+    if (!this.options.probeCatalog) return []
+    this.probing ??= this.probeCatalog(signal)
+    try {
+      return await this.probing
+    } finally {
+      this.probing = undefined
+    }
+  }
+
+  /** Open one throwaway session and publish the catalog it advertises. */
+  private async probeCatalog(signal?: AbortSignal): Promise<readonly AcpCatalogModel[]> {
+    const connection = await this.connect(signal)
+    const response = await connection.request<AcpSessionAdvert & { sessionId?: string }>(
+      'session/new',
+      { cwd: this.options.cwd, mcpServers: [] },
+      signal,
+    )
+    const models = acpAdvertisedModels(response)
+    this.recordAdvert(models)
+    return models
+  }
+
+  /**
+   * Read the optional CLI catalog verb this harness configures. Devin's
+   * `models list` is the only shipped shape: families with variants, each
+   * naming a model id and label.
+   * @param signal - caller cancellation for the CLI run.
+   * @returns catalog entries, or none when no verb is configured.
+   */
+  async listCatalogCli(signal?: AbortSignal): Promise<AcpCatalogModel[]> {
+    const args = this.options.catalogArgs
+    if (args === undefined) return []
+    const output = await this.runCli(args, signal)
     const parsed: unknown = JSON.parse(output)
     const families = typeof parsed === 'object' && parsed !== null
       ? (parsed as { families?: unknown }).families
       : undefined
     if (!Array.isArray(families)) {
-      throw new Error(`${ACP_PREFIX}: models list returned no families array`)
+      throw new Error(`${this.prefix}: models list returned no families array`)
     }
-    const entries: DevinModelEntry[] = []
+    const entries: AcpCatalogModel[] = []
     for (const family of families) {
       const variants = typeof family === 'object' && family !== null
         ? (family as { variants?: unknown }).variants
@@ -139,7 +201,8 @@ export class AcpRuntime {
   }
 
   /**
-   * Run `devin auth status` and report its exit state and trimmed output.
+   * Run the harness's auth-status verb and report its exit state and trimmed
+   * output.
    * @param signal - caller cancellation.
    * @returns the CLI's exit fact and diagnostic text.
    */
@@ -153,7 +216,7 @@ export class AcpRuntime {
   }
 
   /**
-   * Run `devin auth logout`.
+   * Run the harness's auth-logout verb.
    * @param signal - caller cancellation.
    */
   async authLogout(signal?: AbortSignal): Promise<void> {
@@ -161,8 +224,8 @@ export class AcpRuntime {
   }
 
   /**
-   * Forward the ACP `authenticate` request to the shared agent (Devin's
-   * `devin-browser` method opens the browser).
+   * Forward the ACP `authenticate` request to this harness's shared agent
+   * (Devin's `devin-browser` method opens the browser).
    * @param methodId - one advertised auth-method id.
    * @param signal - caller cancellation.
    */
@@ -173,7 +236,7 @@ export class AcpRuntime {
 
   /**
    * Sign the account out: the ACP `logout` request when the connected agent
-   * advertises it, otherwise the `devin auth logout` CLI. Real Devin answers
+   * advertises it, otherwise the harness's auth-logout CLI. Real Devin answers
    * `agentCapabilities.auth` as `{}` — no logout method — so the CLI carries
    * that deployment, and a request the agent does not serve is never sent.
    * @param signal - caller cancellation.
@@ -200,7 +263,7 @@ export class AcpRuntime {
    */
   registerSession(sessionId: string, peer: Parameters<AcpClientConnection['registerPeer']>[1]): () => void {
     if (this.connection === undefined) {
-      throw new Error(`${ACP_PREFIX}: session registration before connect`)
+      throw new Error(`${this.prefix}: session registration before connect`)
     }
     return this.connection.registerPeer(sessionId, peer)
   }
@@ -230,6 +293,11 @@ export class AcpRuntime {
     if (process !== undefined) await process.dispose(this.options.eofGraceMs)
   }
 
+  /** Diagnostic tag naming this harness in every message the runtime raises. */
+  private get prefix(): string {
+    return acpPrefix(this.options.harness)
+  }
+
   private async openConnection(signal?: AbortSignal): Promise<AcpClientConnection> {
     const process = await ExternalHarnessProcess.spawn(this.ctx.subprocess, {
       command: this.options.command,
@@ -250,7 +318,7 @@ export class AcpRuntime {
       // disposal stays the only owner of the process range.
       if (this.disposed) {
         connection.close()
-        throw new Error(DISPOSED)
+        throw new Error(`${this.prefix}: runtime is disposed`)
       }
       this.adopt(process, connection, initialize)
       return connection
@@ -296,7 +364,7 @@ export class AcpRuntime {
     /* v8 ignore next 3 -- a failed reap has no observable producer: the range
        this child owns is already gone whenever retirement runs. */
     void process.dispose(this.options.eofGraceMs).catch((error: unknown) => {
-      this.ctx.logger.warn(`${ACP_PREFIX}: reaping the failed devin acp child failed: ${errorChain(error)}`)
+      this.ctx.logger.warn(`${this.prefix}: reaping the failed child failed: ${errorChain(error)}`)
     })
   }
 
@@ -332,7 +400,7 @@ export class AcpRuntime {
     // back after settlement to report a timeout as one.
     const deadline = new AbortController()
     const timer = setTimeout(() => {
-      deadline.abort(new Error(`${ACP_PREFIX}: ${this.options.command} ${args.join(' ')} timed out`))
+      deadline.abort(new Error(`${this.prefix}: ${this.options.command} ${args.join(' ')} timed out`))
     }, this.options.cliTimeoutMs)
     const bound = signal === undefined
       ? deadline.signal
@@ -358,7 +426,7 @@ export class AcpRuntime {
     }
     if (deadline.signal.aborted) {
       throw new Error(
-        `${ACP_PREFIX}: ${this.options.command} ${args.join(' ')} did not answer within ${String(this.options.cliTimeoutMs)}ms`,
+        `${this.prefix}: ${this.options.command} ${args.join(' ')} did not answer within ${String(this.options.cliTimeoutMs)}ms`,
       )
     }
     /* v8 ignore next -- the seam publishes a stdout reader for every collect-mode stream. */
@@ -368,7 +436,7 @@ export class AcpRuntime {
       /* v8 ignore next -- the seam publishes a stderr reader for every collect-mode stream. */
       const stderr = handle.collected.stderr?.readFrom(0).text.trim() ?? ''
       throw new Error(
-        `${ACP_PREFIX}: ${this.options.command} ${args.join(' ')} exited ${String(outcome.exitCode)}${stderr === '' ? '' : `: ${stderr}`}`,
+        `${this.prefix}: ${this.options.command} ${args.join(' ')} exited ${String(outcome.exitCode)}${stderr === '' ? '' : `: ${stderr}`}`,
       )
     }
     return text

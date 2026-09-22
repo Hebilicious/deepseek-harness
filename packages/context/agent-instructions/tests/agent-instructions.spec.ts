@@ -224,7 +224,10 @@ async function stubAgent(cwd?: string, seed: readonly SessionEvent[] = []): Prom
     data: SessionEvent['data'],
     opts?: Partial<SurfaceIntent>,
   ) => SessionEvent
-  for (const event of seed) {
+  // Publication already recorded this session's own harness, so the source
+  // log's record is not replayed: copying it would log the record twice.
+  const replay = seed[0]?.type === 'agent/harness' ? seed.slice(1) : seed
+  for (const event of replay) {
     if ('surfaceOp' in event || 'sourceEventSeqs' in event) {
       append(event.type, event.data, {
         ...event.surfaceOp === undefined ? {} : { surfaceOp: event.surfaceOp },
@@ -234,7 +237,7 @@ async function stubAgent(cwd?: string, seed: readonly SessionEvent[] = []): Prom
       append(event.type, event.data)
     }
   }
-  if (seed.at(-1)?.type !== 'session/end-seed') agent.session.append('session/end-seed', {})
+  if (replay.at(-1)?.type !== 'session/end-seed') agent.session.append('session/end-seed', {})
   return agent
 }
 

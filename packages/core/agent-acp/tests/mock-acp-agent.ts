@@ -15,6 +15,11 @@
  *                         `session/new` and `session/load`; the mock tracks
  *                         `session/set_config_option` writes and echoes the
  *                         updated `currentValue` back.
+ * - `MOCK_SESSION_MODELS` — JSON `[{modelId, name, description?}]` returned as
+ *                         the session's `models.availableModels` advert, the
+ *                         newer ACP session model state.
+ * - `MOCK_CURRENT_MODEL`  — `models.currentModelId`; defaults to the first
+ *                         `MOCK_SESSION_MODELS` entry.
  * - `MOCK_TEXT`         — assistant text streamed as `agent_message_chunk`s.
  * - `MOCK_THOUGHT`      — text streamed as one `agent_thought_chunk` first.
  * - `MOCK_PLAN`         — JSON `[{content, status}]` emitted as a `plan` update.
@@ -191,7 +196,29 @@ function jsonEnv(name: string): unknown {
   return JSON.parse(raw)
 }
 
+/**
+ * The session model state some agents send: newer than this SDK's
+ * `NewSessionResponse` type, so the mock and the driver both read it as an
+ * extension field.
+ */
+interface MockSessionModels {
+  readonly currentModelId: string
+  readonly availableModels: NonNullable<typeof SESSION_MODELS>
+}
+
+/** This child's session model advert, or undefined when the script declares none. */
+function sessionModels(): MockSessionModels | undefined {
+  if (SESSION_MODELS === undefined) return undefined
+  return {
+    currentModelId: process.env.MOCK_CURRENT_MODEL ?? SESSION_MODELS[0]?.modelId ?? '',
+    availableModels: SESSION_MODELS,
+  }
+}
+
 const CONFIG_OPTIONS = (jsonEnv('MOCK_CONFIG_OPTIONS') as SessionConfigOption[] | undefined) ?? []
+const SESSION_MODELS = jsonEnv('MOCK_SESSION_MODELS') as
+  | Array<{ modelId: string; name: string; description?: string }>
+  | undefined
 const PERMISSION_OPTIONS = jsonEnv('MOCK_PERMISSION_OPTIONS') as
   | Array<{ optionId: string; name: string; kind: string }>
   | undefined
@@ -205,6 +232,10 @@ function record(method: string, params: unknown): void {
   if (RECORD_FILE === undefined) return
   appendFileSync(RECORD_FILE, `${JSON.stringify({ method, params })}\n`)
 }
+
+// Every ACP-mode child records its own startup facts, so a test driving
+// several harnesses can tell which process served which session.
+record('process', { cwd: process.cwd(), args: process.argv.slice(2) })
 
 /**
  * Emit one of every handled `session/update` kind after the prompt response,
@@ -275,10 +306,13 @@ function makeAgent() {
     newSession(params: NewSessionRequest): Promise<NewSessionResponse> {
       record('session/new', params)
       if (process.env.MOCK_MISSING_SESSION_ID === '1') return Promise.resolve({} as NewSessionResponse)
-      return Promise.resolve({
+      const models = sessionModels()
+      const response = {
         sessionId: process.env.MOCK_SESSION_ID ?? randomUUID(),
         ...NO_CONFIG_OPTIONS ? {} : { configOptions },
-      })
+        ...models === undefined ? {} : { models },
+      }
+      return Promise.resolve(response)
     },
     loadSession(params: LoadSessionRequest): Promise<LoadSessionResponse> {
       record('session/load', params)
@@ -287,7 +321,11 @@ function makeAgent() {
         error.code = -32601
         return Promise.reject(error)
       }
-      return Promise.resolve(NO_CONFIG_OPTIONS ? {} : { configOptions })
+      const models = sessionModels()
+      return Promise.resolve({
+        ...NO_CONFIG_OPTIONS ? {} : { configOptions },
+        ...models === undefined ? {} : { models },
+      })
     },
     closeSession(params: unknown): Promise<Record<string, never>> {
       record('session/close', params)

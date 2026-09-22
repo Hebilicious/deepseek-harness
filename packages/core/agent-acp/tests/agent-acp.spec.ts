@@ -14,7 +14,7 @@ import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import { SessionId } from '@deepseek-ai/dsh-session'
-import { AcpHarness, acpSessionOf, DevinCatalogAdapter } from '../src/index.ts'
+import { AcpCatalogAdapter, AcpHarness, acpSessionOf } from '../src/index.ts'
 import type { AcpRuntime } from '../src/runtime.ts'
 import {
   type Bench,
@@ -359,13 +359,13 @@ describe('agent-acp driver', () => {
     // leaves the field unknown rather than claiming text-only.
     expect(models[0]!.inputModalities).toBeUndefined()
 
-    const disconnected = await bench.ctx.acpHarness.status(new AbortController().signal)
+    const disconnected = await bench.ctx.acpHarness.status({ harness: 'devin' }, new AbortController().signal)
     expect(disconnected.connected).toBe(false)
     expect(disconnected.cliLoggedIn).toBe(true)
     expect(disconnected.cliDetail).toBe('logged in as mock@example.com')
     // A session connect publishes the agent's advertised auth facts.
     await bench.ctx.agents.create({ sessionId: SessionId('s18'), agentOptions: {} })
-    const status = await bench.ctx.acpHarness.status(new AbortController().signal)
+    const status = await bench.ctx.acpHarness.status({ harness: 'devin' }, new AbortController().signal)
     expect(status.connected).toBe(true)
     expect(status.authMethods).toEqual([
       { id: 'devin-browser', name: 'Log in with browser', description: 'Sign in via your browser' },
@@ -523,7 +523,7 @@ describe('agent-acp driver', () => {
   it('logs out through the CLI when the agent advertises no ACP logout method', async () => {
     bench = await setup()
     const handle = await bench.ctx.agents.create({ sessionId: SessionId('s26'), agentOptions: {} })
-    await bench.ctx.acpHarness.logout(new AbortController().signal)
+    await bench.ctx.acpHarness.logout({ harness: 'devin' }, new AbortController().signal)
 
     const calls = await recordedCalls(bench.recordFile)
     expect(calls.some(call => call.method === 'logout')).toBe(false)
@@ -535,7 +535,7 @@ describe('agent-acp driver', () => {
   it('uses the agent logout method when it is advertised', async () => {
     bench = await setup({ MOCK_LOGOUT: '1' })
     await bench.ctx.agents.create({ sessionId: SessionId('s27'), agentOptions: {} })
-    await bench.ctx.acpHarness.logout(new AbortController().signal)
+    await bench.ctx.acpHarness.logout({ harness: 'devin' }, new AbortController().signal)
 
     const calls = await recordedCalls(bench.recordFile)
     expect(calls.some(call => call.method === 'logout')).toBe(true)
@@ -548,7 +548,7 @@ describe('agent-acp driver', () => {
       MOCK_AUTH_METHODS: JSON.stringify([{ id: 'devin-browser', name: 'Log in with browser' }]),
     })
     await bench.ctx.agents.create({ sessionId: SessionId('s28'), agentOptions: {} })
-    await bench.ctx.acpHarness.login({}, new AbortController().signal)
+    await bench.ctx.acpHarness.login({ harness: 'devin' }, new AbortController().signal)
 
     const calls = await recordedCalls(bench.recordFile)
     const authenticate = calls.find(call => call.method === 'authenticate')
@@ -558,7 +558,7 @@ describe('agent-acp driver', () => {
   it('rejects login when the agent advertises no auth methods', async () => {
     bench = await setup()
     await bench.ctx.agents.create({ sessionId: SessionId('s29'), agentOptions: {} })
-    await expect(bench.ctx.acpHarness.login({}, new AbortController().signal))
+    await expect(bench.ctx.acpHarness.login({ harness: 'devin' }, new AbortController().signal))
       .rejects.toThrow('no auth methods')
   }, TEST_TIMEOUT)
 
@@ -584,8 +584,9 @@ describe('agent-acp driver', () => {
   }, TEST_TIMEOUT)
 
   it('rejects stream calls as a catalog-only provider', async () => {
-    const adapter = new DevinCatalogAdapter({
-      listDevinModels: async () => [],
+    const adapter = new AcpCatalogAdapter('devin', 'Devin', {
+      advertisedModels: [],
+      listCatalogCli: async () => [],
     } as unknown as AcpRuntime)
     expect(() => adapter.stream({ messages: [] } as never)).toThrow('catalog')
   })

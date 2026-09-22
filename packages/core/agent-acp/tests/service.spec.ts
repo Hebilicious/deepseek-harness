@@ -1,7 +1,7 @@
 /**
- * `AcpHarness` service tests: the constructor's config fallbacks, which the
- * Loader's schema normally supplies, and the Remote surface's error
- * normalization (`status`, `login`, `logout`). Driver-level behavior of those
+ * `AcpHarness` service tests: which harness identities the constructor mounts,
+ * and the Remote surface's error normalization (`status`, `login`, `logout`)
+ * including the unknown-harness refusal. Driver-level behavior of those
  * operations lives in the other specs; this one pins the service's own
  * contract.
  */
@@ -39,33 +39,46 @@ async function mountServices(): Promise<Context> {
 }
 
 describe('AcpHarness construction', () => {
-  it('falls back to the documented defaults for every omitted config field', async () => {
+  it('mounts every configured entry as its own agent harness', async () => {
     const ctx = await mountServices()
-    const harness = new AcpHarness(ctx, {})
-    expect(harness.config).toEqual({})
+    new AcpHarness(ctx, {
+      harnesses: [
+        { id: 'devin', name: 'Devin', executable: 'devin' },
+        { id: 'grok', name: 'Grok Build', description: 'xAI Grok Build', executable: 'grok' },
+      ],
+    })
+    expect(ctx.agents.harnesses()).toEqual([
+      { id: 'devin', name: 'Devin' },
+      { id: 'grok', name: 'Grok Build', description: 'xAI Grok Build' },
+    ])
     await ctx.fiber.dispose()
   })
 
   it('carries a fully supplied config without substituting defaults', async () => {
     const ctx = await mountServices()
     const harness = new AcpHarness(ctx, {
-      executable: mockAgent,
-      args: ['acp', '--model', 'swe-1'],
-      cwd: '/tmp',
-      env: { MOCK_TEXT: 'configured' },
-      sandbox: 'read-only',
-      approval: 'never',
-      mode: 'plan',
-      model: 'swe-1',
+      harnesses: [{
+        id: 'grok',
+        name: 'Grok Build',
+        executable: mockAgent,
+        args: ['agent', '--no-leader', 'stdio'],
+        cwd: '/tmp',
+        env: { MOCK_TEXT: 'configured' },
+        sandbox: 'read-only',
+        approval: 'never',
+        mode: 'plan',
+        model: 'grok-4.7',
+        reasoningEffort: 'high',
+        catalogArgs: ['models', 'list'],
+        authStatusArgs: ['auth', 'status'],
+        authLogoutArgs: ['auth', 'logout'],
+      }],
       disposeGraceMs: 1234,
       eofGraceMs: 567,
-      modelsArgs: ['models', 'list'],
-      authStatusArgs: ['auth', 'status'],
-      authLogoutArgs: ['auth', 'logout'],
+      cliTimeoutMs: 890,
     })
-    expect(harness.config.executable).toBe(mockAgent)
-    expect(harness.config.mode).toBe('plan')
-    expect(harness.config.model).toBe('swe-1')
+    expect(harness.config.harnesses[0]?.id).toBe('grok')
+    expect(harness.config.harnesses[0]?.reasoningEffort).toBe('high')
     await ctx.fiber.dispose()
   })
 })
@@ -74,8 +87,24 @@ describe('AcpHarness Remote surface', () => {
   it('reports an agent title only when the agent advertises one', async () => {
     bench = await setup({ MOCK_AGENT_INFO: JSON.stringify({ name: 'mock-agent', version: '1.2.3' }) })
     await bench.ctx.agents.create({ sessionId: SessionId('r1'), agentOptions: {} })
-    const status = await bench.ctx.acpHarness.status(new AbortController().signal)
+    const status = await bench.ctx.acpHarness.status({ harness: 'devin' }, new AbortController().signal)
     expect(status.agentInfo).toEqual({ name: 'mock-agent', version: '1.2.3' })
+  }, TEST_TIMEOUT)
+
+  it('rejects every operation naming an unmounted harness with the mounted ids', async () => {
+    bench = await setup()
+    const signal = new AbortController().signal
+    const failures = await Promise.all([
+      bench.ctx.acpHarness.status({ harness: 'ghost' }, signal).then(() => undefined, (error: unknown) => error),
+      bench.ctx.acpHarness.login({ harness: 'ghost', methodId: 'x' }, signal).then(() => undefined, (error: unknown) => error),
+      bench.ctx.acpHarness.logout({ harness: 'ghost' }, signal).then(() => undefined, (error: unknown) => error),
+    ])
+    for (const failure of failures) {
+      expect(failure).toBeInstanceOf(RemoteError)
+      expect((failure as RemoteError).code).toBe('gateway/bad-request')
+      expect((failure as RemoteError).message).toContain('unknown ACP harness "ghost"')
+      expect((failure as RemoteError).message).toContain('mounted: devin')
+    }
   }, TEST_TIMEOUT)
 
   it('normalizes a failing logout and login into Remote errors', async () => {
@@ -84,13 +113,13 @@ describe('AcpHarness Remote surface', () => {
 
     // This deployment's CLI fallback fails; the Remote surfaces the CLI's own
     // diagnostic under the ACP code.
-    const failure: unknown = await harness.logout(new AbortController().signal)
+    const failure: unknown = await harness.logout({ harness: 'devin' }, new AbortController().signal)
       .then(() => undefined, (error: unknown) => error)
     expect(failure).toBeInstanceOf(RemoteError)
     expect((failure as RemoteError).code).toBe('acp/login-failed')
     expect((failure as RemoteError).message).toContain('unknown subcommand bogus')
 
-    const loginFailure: unknown = await harness.login({}, new AbortController().signal)
+    const loginFailure: unknown = await harness.login({ harness: 'devin' }, new AbortController().signal)
       .then(() => undefined, (error: unknown) => error)
     expect(loginFailure).toBeInstanceOf(RemoteError)
     expect((loginFailure as RemoteError).code).toBe('gateway/bad-request')
@@ -105,8 +134,10 @@ describe('AcpHarness Remote surface', () => {
     // object itself stays callable.
     await bench.ctx.fiber.dispose()
 
-    const failure: unknown = await harness.login({ methodId: 'devin-browser' }, new AbortController().signal)
-      .then(() => undefined, (error: unknown) => error)
+    const failure: unknown = await harness.login(
+      { harness: 'devin', methodId: 'devin-browser' },
+      new AbortController().signal,
+    ).then(() => undefined, (error: unknown) => error)
     expect(failure).toBeInstanceOf(RemoteError)
     expect((failure as RemoteError).code).toBe('acp/login-failed')
     expect((failure as RemoteError).message).toContain('runtime is disposed')
@@ -114,7 +145,7 @@ describe('AcpHarness Remote surface', () => {
 
   it('runs the CLI logout verb the fallback selects', async () => {
     bench = await setup()
-    await bench.ctx.acpHarness.logout(new AbortController().signal)
+    await bench.ctx.acpHarness.logout({ harness: 'devin' }, new AbortController().signal)
     const argv = (await recordedCalls(bench.recordFile))
       .filter(call => call.method === 'cli')
       .map(call => (call.params as { argv: readonly string[] }).argv)

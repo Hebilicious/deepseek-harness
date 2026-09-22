@@ -822,6 +822,12 @@ inspect( sessionId: SessionId, signal?: AbortSignal, ): Promise<SessionInspectio
 @Remote('modelCatalog') modelCatalog(): Promise<ModelCatalog>
 
 /**
+ * Describe every agent harness this deployment can create sessions with.
+ * @returns the mounted harnesses, in registration order.
+ */
+@Remote('harnessCatalog') harnessCatalog(): SessionHarnessCatalog
+
+/**
  * Report whether this deployment can hand a Session workspace path to a native desktop.
  * @returns true when the matching open operation is available.
  */

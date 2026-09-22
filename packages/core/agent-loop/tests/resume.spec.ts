@@ -202,11 +202,12 @@ describe('the session-persistence Agent Note: AgentLoop factory create/resume', 
 
     await expect(handle.dispose()).rejects.toThrow('close exploded')
     // Teardown reached quiescence before the rejection: the agent and session
-    // are unregistered, and write ownership is released — the never-flushed
-    // session reports absence, not an ownership conflict.
+    // are unregistered, and write ownership is released — the stored session
+    // reopens for write instead of reporting an ownership conflict.
     expect(ctx.agents.get(sessionId)).toBeUndefined()
     expect(ctx.sessions.get(sessionId)).toBeUndefined()
-    await expect(ctx.sessionPersistence.open(sessionId, 'write')).rejects.toThrow('not found')
+    const reopened = await ctx.sessionPersistence.open(sessionId, 'write')
+    await reopened.close()
     await ctx.fiber.dispose()
   })
 
@@ -461,7 +462,7 @@ describe('the session-persistence Agent Note: AgentLoop factory create/resume', 
     first.session.append('turn/end', { turn: 1, reason: { kind: 'completed' } })
     await ctx.sessions.flush(first.session)
     const stored = await readStoredEvents(ctx, sessionId)
-    expect(stored.map(event => event.type)).toEqual(['turn/start', 'turn/end'])
+    expect(stored.map(event => event.type)).toEqual(['agent/harness', 'turn/start', 'turn/end'])
     expect(stored.at(-1)).toMatchObject({
       type: 'turn/end',
       data: { reason: { kind: 'completed' } },
@@ -485,11 +486,11 @@ describe('the session-persistence Agent Note: AgentLoop factory create/resume', 
     const ctx2 = await mountPersistentHarness(root, new MockAdapter([]))
     const handle = await ctx2.agents.resume({ resumeSessionId: sessionId })
     expect(handle.agent.session.snapshotEvents().map(event => event.type))
-      .toEqual(['turn/start', 'turn/end', 'session/end-seed'])
+      .toEqual(['turn/start', 'turn/end', 'session/end-seed', 'agent/harness'])
     await handle.dispose()
 
     const stored = await readStoredEvents(ctx2, sessionId)
-    expect(stored.map(event => event.type)).toEqual(['turn/start', 'turn/end', 'session/end-seed'])
+    expect(stored.map(event => event.type)).toEqual(['turn/start', 'turn/end', 'session/end-seed', 'agent/harness'])
     expect(stored[1]).toMatchObject({ data: { reason: { kind: 'interrupted' } } })
     await ctx2.fiber.dispose()
   })
@@ -522,9 +523,9 @@ describe('the session-persistence Agent Note: AgentLoop factory create/resume', 
     const stored = await readStoredEvents(ctx2, sessionId)
     expect(stored.map(event => event.type)).toEqual([
       'turn/start', 'step/start', 'assistant/message', 'tool/call',
-      'tool/result', 'step/end', 'turn/end', 'session/end-seed',
+      'tool/result', 'step/end', 'turn/end', 'session/end-seed', 'agent/harness',
     ])
-    expect(stored.map(event => event.seq)).toEqual([0, 1, 2, 3, 4, 5, 6, 7])
+    expect(stored.map(event => event.seq)).toEqual([0, 1, 2, 3, 4, 5, 6, 7, 8])
     expect(stored[4]).toMatchObject({
       sourceEventSeqs: [3],
       data: { error: { code: TOOL_OUTCOME_UNKNOWN } },
@@ -553,12 +554,12 @@ describe('the session-persistence Agent Note: AgentLoop factory create/resume', 
     const ctx2 = await mountPersistentHarness(root, new MockAdapter([]), 'none')
     const handle = await ctx2.agents.resume({ resumeSessionId: sessionId })
     expect(handle.agent.session.snapshotEvents().map(event => event.type))
-      .toEqual(['turn/start', 'turn/end', 'session/end-seed'])
+      .toEqual(['turn/start', 'turn/end', 'session/end-seed', 'agent/harness'])
     await handle.dispose()
 
     const stored = await readStoredEvents(ctx2, sessionId)
     expect(stored.map(event => `${event.type}@${event.seq}`))
-      .toEqual(['turn/start@0', 'turn/end@1', 'session/end-seed@2'])
+      .toEqual(['turn/start@0', 'turn/end@1', 'session/end-seed@2', 'agent/harness@3'])
     await ctx2.fiber.dispose()
   })
 
@@ -675,8 +676,9 @@ describe('the session-persistence Agent Note: AgentLoop factory create/resume', 
 
   it('a resumed session stores its repair suffix durably before publication', async () => {
     // The stored fixture (two events, no end-seed) gains the end-seed marker
-    // through the resume handle: after one resume lifecycle the STORED log
-    // carries it, so the next resume reads it back without re-marking.
+    // through the resume handle, then the harness record the pre-publication
+    // suffix writes. The record trails the marker, so the next resume finds a
+    // last event that is not a marker and re-marks.
     const sessionId = SessionId('resume-suffix-durable')
     const root = await persistSession(sessionId)
     const ctx = await mountPersistentHarness(root, new MockAdapter([]))
@@ -684,14 +686,16 @@ describe('the session-persistence Agent Note: AgentLoop factory create/resume', 
     await first.dispose()
 
     const stored = await readStoredEvents(ctx, sessionId)
-    expect(stored.map(event => event.type)).toEqual(['turn/start', 'turn/end', 'session/end-seed'])
+    expect(stored.map(event => event.type))
+      .toEqual(['turn/start', 'turn/end', 'session/end-seed', 'agent/harness'])
 
     const second = await ctx.agents.resume({ resumeSessionId: sessionId })
     expect(second.agent.session.snapshotEvents().map(event => event.type))
-      .toEqual(['turn/start', 'turn/end', 'session/end-seed'])
+      .toEqual(['turn/start', 'turn/end', 'session/end-seed', 'agent/harness', 'session/end-seed'])
     await second.dispose()
     const restored = await readStoredEvents(ctx, sessionId)
-    expect(restored.map(event => event.type)).toEqual(['turn/start', 'turn/end', 'session/end-seed'])
+    expect(restored.map(event => event.type))
+      .toEqual(['turn/start', 'turn/end', 'session/end-seed', 'agent/harness', 'session/end-seed'])
     await ctx.fiber.dispose()
   })
 

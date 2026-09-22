@@ -46,10 +46,10 @@ dsh plugin --profile <name> remove @deepseek-ai/dsh-web-acp
 
 | 目标配置行 | 变更 |
 |---|---|
-| `agent-loop` | 被禁用，因为 `ctx.agents.setFactory()` 只接受一个工厂，而 ACP 驱动器占用了该槽位 |
+| `agent-loop` | 被禁用，使进程内循环的 `dsh` harness 不进入这个由 Devin 驱动的界面 |
 | `agent-default-model` | `provider: devin`、`model: ''`，因此新会话在选择器或 `model/selection` 做出选择之前不携带模型 |
 | `session-title-llm` | 固定为 `deepseek-official`／`deepseek-flash`，因为会话记录的路由是仅提供目录、不提供流的 `devin` 适配器 |
-| `agent-acp` | 被插入：每个 profile 一个共享 `devin acp` 进程，每个会话一个 ACP 会话 |
+| `agent-acp` | 被插入，并带一个 `devin` harness 条目：该条目一个共享 `devin acp` 进程，每个会话一个 ACP 会话 |
 
 驱动器自身的约定、配置与限制见 [`dsh-agent-acp`](../../core/agent-acp/README.zh.md)。
 
@@ -67,7 +67,7 @@ dsh plugin --profile <name> remove @deepseek-ai/dsh-web-acp
 
 ### 为什么循环离开了组合
 
-`AgentRegistry.setFactory()` 在第二次注册时抛出 `an agent factory is already registered`。`dsh-agent-loop` 与 `dsh-agent-acp` 都把自身注册为该工厂，因此该 profile 只组合其中之一：本层禁用 base 的 `agent-loop` 配置行并插入该驱动器。
+`ctx.agents` 按 harness id 分派创建与恢复，`dsh-agent-loop` 把自身注册为 `dsh` harness，而驱动器为每个已配置条目注册一个 harness。本层只提供 ACP 驱动的界面，因此禁用 base 的 `agent-loop` 配置行；保留循环的 profile 会组合两者，由每个调用方指名所需的 harness。
 
 ### 为什么标题请求被改道
 
@@ -135,7 +135,7 @@ base 的提示词 section 与工具 schema 不再抵达模型，其每步成本�
 
 这些限制说明本 profile 何时不合适或何时需要运维注意。它们是当前包约束，不是任务积压。
 
-- **该 profile 只运行一个驱动器**——`ctx.agents.setFactory()` 只接受一个工厂，因此本层在整个 profile 内禁用 `agent-loop`，而不是把进程内循环与 Devin 组合在一起。
+- **该 profile 只提供 Devin 这一个 harness**——本层禁用了 `agent-loop`，因此指名 `dsh` harness 的调用方找不到已挂载的条目；要提供更多 harness，请添加更多条目（或保留循环）。
 - **只读预期无法被强制执行**——Devin 声明的 ACP 会话模式（`accept-edits`、`smart`、`ask`、`plan`、`bypass`）只表达审批行为，因此记录了 `read-only` 沙箱的会话仍会运行一个可以编辑的模式；驱动器会记录警告，指明它实际运行的模式。
 - **轮次归 Devin，外壳归 dsh**——循环、提示词、工具、MCP 服务器与配置都位于 Devin；dsh 保留持久会话、transcript、审批、通知与模型选择器，并每轮转发选择器的选择。
 - **需要 Devin 登录，且不由此包提供**——在该 CLI 所用账号完成 `devin auth login` 之前，驱动器无法服务会话；dsh 既不保存也不提供 Devin 凭据。

@@ -29,7 +29,7 @@ kind: "package-reference"
 
 ### 何时选择
 
-当希望由 Codex 自带的循环、提示词、工具、MCP 服务器与 `config.toml` 服务该会话时，选择本驱动器。驱动器把自身注册为 `ctx.agents` 工厂，而 `AgentRegistry.setFactory()` 只接受一个工厂，因此组合中不能同时运行 [`dsh-agent-loop`](../agent-loop/README.zh.md)；随包发布的 bundle 会禁用该配置行。
+当希望由 Codex 自带的循环、提示词、工具、MCP 服务器与 `config.toml` 服务该会话时，选择本驱动器。驱动器把自身注册为 `codex` agent harness，因此组合可以把它与 [`dsh-agent-loop`](../agent-loop/README.zh.md) 以及任意 ACP harness 一起挂载；随包发布的 `dsh-web-codex` bundle 仍会禁用循环行，使该 profile 只运行 Codex。
 
 ### 配置
 
@@ -157,7 +157,7 @@ dsh 每轮只贡献新的用户输入；Codex 为它自己的提示词、历史�
 
 这些限制说明本驱动器何时不合适或何时需要运维注意。它们是当前包约束，不是任务积压。
 
-- **它会取代 profile 的 agent loop**——`ctx.agents.setFactory()` 只接受一个工厂，因此挂载本驱动器会在整个 profile 内排除 `dsh-agent-loop`；`dsh-web-codex` bundle 会禁用该配置行，而不是把两者组合起来。
+- **`dsh-web-codex` bundle 让其 profile 只运行 Codex**——它会禁用 `agent-loop` 行。驱动器本身并不要求这种排除：多 harness 的 profile 会把它与循环及各个 ACP harness 一起挂载。
 - **轮次归 Codex，外壳归 dsh**——循环、提示词、工具、MCP 服务器与配置都位于 Codex。DSH 保留持久会话、transcript、审批、通知与模型选择器；驱动器每轮转发一次模型选择，并上报 harness 自己当前的模型，当 Codex 从不上报时回退为 `agent-default`。
 - **需要 Codex 账号，且不由此包提供**——会话需要完成了 `codex login` 的 `CODEX_HOME`，或为 API-key 路径提供 `credentialRef`；dsh 既不保存也不提供 Codex 凭据。
 - **模型目录依赖该 CLI**——每次选择器读取都会经共享 app-server 走一遍 `model/list`，因此 `codex` 二进制不可达、损坏或缓慢时，选择器就没有条目。

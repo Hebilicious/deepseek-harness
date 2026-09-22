@@ -26,6 +26,7 @@ import {
   ApiSessionAgentController,
   ApiSessionCwdConflict,
   ApiSessionNotFound,
+  ApiSessionHarnessConflict,
   ApiSessionPresetConflict,
   ApiSessionSubagentOwnership,
   apiSessionSubagentOwnershipError,
@@ -106,6 +107,7 @@ export class SessionCommandController {
         cwd,
         request.sessionId !== undefined,
         request.agentPreset,
+        request.harness,
       )
     } catch (error) {
       this.rejectCreation(sessionId, error)
@@ -520,6 +522,12 @@ export class SessionCommandController {
 
   private rejectCreation(sessionId: SessionId, error: unknown): never {
     if (remoteErrorOf(error) !== undefined) throw error
+    if (error instanceof ApiSessionHarnessConflict) {
+      throw new RemoteError('session/harness-unavailable', error.message, {
+        harness: error.requestedHarness,
+        available: this.ctx.agents.harnesses().map(entry => entry.id),
+      })
+    }
     if (error instanceof ApiSessionPresetConflict) {
       throw new RemoteError('agent-preset/conflict', error.message, {
         sessionId: error.sessionId,

@@ -222,12 +222,15 @@ describe('in-process policy inheritance', () => {
       const child = run.localAgent as Agent
 
       expect(child.session.header.isSeeded).toBe(true)
-      expect(child.session.inheritedEventCount).toBe(1)
+      // The parent's whole log is the fork prefix: its harness record plus the
+      // sandbox/mode event captured before the parent switched to read-only.
+      expect(seed.map(event => event.type)).toEqual(['agent/harness', 'sandbox/mode'])
+      expect(child.session.inheritedEventCount).toBe(seed.length)
       expect(child.session.firstLiveSeq).toBe(seed.length)
-      // seq 1 is the constructor's end-seed marker.
+      // seq 2 is the constructor's end-seed marker.
       expect(child.session.snapshotEvents().filter(event => event.type === 'sandbox/mode')).toMatchObject([
-        { seq: 0, data: { mode: 'workspace-write' } },
-        { seq: 2, data: { mode: 'read-only', source: 'delegation' } },
+        { seq: 1, data: { mode: 'workspace-write' } },
+        { seq: 3, data: { mode: 'read-only', source: 'delegation' } },
       ])
       await expect(readFile(blocked, 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
       expect(ctx.sandboxPolicy.overrideOf(child.session)).toBe('read-only')

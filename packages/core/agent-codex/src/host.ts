@@ -7,7 +7,7 @@
  */
 
 import type { Context } from '@deepseek-ai/cordis'
-import type { AgentOptions } from '@deepseek-ai/dsh-agent'
+import { HarnessId, type AgentOptions } from '@deepseek-ai/dsh-agent'
 import { ExternalAgentHost } from '@deepseek-ai/dsh-agent-external'
 import type { Session, SessionId } from '@deepseek-ai/dsh-session'
 import { CodexAgent, type CodexAgentConfig } from './agent.ts'
@@ -31,7 +31,13 @@ export class CodexAgentHost extends ExternalAgentHost<CodexAgent> {
     private readonly codexRuntime: CodexAppServerRuntime,
     private readonly agentConfig: CodexAgentConfig,
   ) {
-    super(ctx, CODEX_PREFIX)
+    super(ctx, CODEX_PREFIX, {
+      harness: {
+        id: HarnessId('codex'),
+        name: 'Codex',
+        description: 'OpenAI Codex runs the session through codex app-server',
+      },
+    })
     ctx.sessionProjections.register(codexThreadProjection)
   }
 

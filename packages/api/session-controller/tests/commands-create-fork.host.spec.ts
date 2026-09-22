@@ -63,6 +63,7 @@ describe('Session creation failures', () => {
       '/default-workspace',
       false,
       undefined,
+      undefined,
     )
     await ctx.fiber.dispose()
   })

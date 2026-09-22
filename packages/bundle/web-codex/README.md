@@ -46,7 +46,7 @@ In-box bundles resolve from the dsh installation; the launcher activates this la
 
 | Target row | Change |
 |---|---|
-| `agent-loop` | Disabled, because `ctx.agents.setFactory()` accepts exactly one factory and the Codex driver takes that slot |
+| `agent-loop` | Disabled, so this profile runs Codex for every session instead of offering the loop beside it |
 | `agent-default-model` | `provider: codex`, `model: ''`, so a new session carries no model until the picker or a `model/selection` chooses one |
 | `session-title-llm` | Pinned to `deepseek-official` / `deepseek-flash`, because the session's logged route is the catalog-only `codex` adapter, which serves no streams |
 | `agent-codex` | Inserted: one shared app-server per profile, one Codex thread per session |
@@ -67,7 +67,7 @@ A patch replaces the targeted row's whole `config`, and an `insert` list appends
 
 ### Why the loop leaves the composition
 
-`AgentRegistry.setFactory()` throws `an agent factory is already registered` on a second registration. Both `dsh-agent-loop` and `dsh-agent-codex` register themselves as that factory, so the profile composes exactly one of them: this layer disables the base's `agent-loop` row and inserts the driver.
+`dsh-agent-loop` registers the `dsh` harness and `dsh-agent-codex` registers the `codex` harness, so a composition can mount both. This layer keeps only Codex: it disables the base's `agent-loop` row and inserts the driver, leaving the harness choice to the profile rather than to the picker. Use [`dsh-web-harnesses`](../web-harnesses/README.md) when one profile should offer both.
 
 ### Why the title request moves
 
@@ -135,7 +135,7 @@ Independent of the session's Codex turns; the title request has its own short pr
 
 These limits define when this profile is the wrong choice or needs operational care. They are current package constraints, not a task backlog.
 
-- **The profile runs one driver** — `ctx.agents.setFactory()` accepts exactly one factory, so this layer disables `agent-loop` for the whole profile instead of composing the in-process loop beside Codex.
+- **The profile runs one driver** — this layer disables `agent-loop`, so every session runs on Codex and the harness picker has a single entry. [`dsh-web-harnesses`](../web-harnesses/README.md) mounts several harnesses instead.
 - **Codex owns the turn, dsh owns the shell** — the loop, prompt, tools, MCP servers, and config live in Codex; dsh keeps the durable session, transcript, approvals, notifications, and model picker, and forwards the picker's selection per turn.
 - **A Codex account is required and not provided** — the driver's `codex app-server` cannot bind a session until the configured `CODEX_HOME` holds a completed `codex login`, or `credentialRef` supplies an API key; dsh neither stores nor provisions Codex credentials.
 - **The model picker depends on the CLI** — entries come from the app-server's `model/list`, so an unreachable, broken, or slow `codex` binary leaves the picker empty.

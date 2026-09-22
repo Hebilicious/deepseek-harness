@@ -69,13 +69,15 @@ async function runtimeBench(
   const ctx = new Context()
   await ctx.plugin(LocalSubprocessRuntime)
   const runtime = new AcpRuntime(ctx, {
+    harness: 'devin',
     command: process.execPath,
     args: [mockAgent, 'acp'],
     cwd: root,
     env: { MOCK_RECORD_FILE: recordFile, ...env },
     disposeGraceMs: 5000,
     eofGraceMs: 2000,
-    modelsArgs: [mockAgent, 'models', 'list', '--format', 'json'],
+    catalogArgs: [mockAgent, 'models', 'list', '--format', 'json'],
+    probeCatalog: true,
     authStatusArgs: [mockAgent, 'auth', 'status'],
     authLogoutArgs: [mockAgent, 'auth', 'logout'],
     cliTimeoutMs: 60_000,
@@ -221,6 +223,28 @@ describe('AcpRuntime auth', () => {
 })
 
 describe('AcpRuntime model catalog', () => {
+  it('publishes the newest non-empty session advert and ignores an empty one', async () => {
+    bench = await runtimeBench()
+    expect(bench.runtime.advertisedModels).toEqual([])
+
+    bench.runtime.recordAdvert([{ id: 'swe-1', name: 'SWE 1' }])
+    expect(bench.runtime.advertisedModels).toEqual([{ id: 'swe-1', name: 'SWE 1' }])
+
+    // An empty advert carries no catalog, so it never replaces a known one.
+    bench.runtime.recordAdvert([])
+    expect(bench.runtime.advertisedModels).toEqual([{ id: 'swe-1', name: 'SWE 1' }])
+
+    bench.runtime.recordAdvert([{ id: 'swe-2', name: 'SWE 2', description: 'standard' }])
+    expect(bench.runtime.advertisedModels).toEqual([
+      { id: 'swe-2', name: 'SWE 2', description: 'standard' },
+    ])
+  }, 30_000)
+
+  it('lists nothing from the CLI when the deployment configures no catalog verb', async () => {
+    bench = await runtimeBench({})
+    await expect(bench.runtime.listCatalogCli()).resolves.toEqual([])
+  }, 30_000)
+
   it('flattens the CLI families and skips variants it cannot name', async () => {
     bench = await runtimeBench({
       MOCK_MODELS_JSON: JSON.stringify({
@@ -240,7 +264,7 @@ describe('AcpRuntime model catalog', () => {
         ],
       }),
     })
-    expect(await bench.runtime.listDevinModels()).toEqual([
+    expect(await bench.runtime.listCatalogCli()).toEqual([
       { id: 'swe-2', name: 'SWE 2', description: 'standard' },
       { id: 'swe-1', name: 'SWE 1' },
     ])
@@ -248,31 +272,31 @@ describe('AcpRuntime model catalog', () => {
 
   it('rejects a catalog response without a families array', async () => {
     bench = await runtimeBench({ MOCK_MODELS_JSON: '{"families":"none"}' })
-    await expect(bench.runtime.listDevinModels()).rejects.toThrow('no families array')
+    await expect(bench.runtime.listCatalogCli()).rejects.toThrow('no families array')
     await bench.ctx.fiber.dispose()
     bench = await runtimeBench({ MOCK_MODELS_JSON: '[]' })
-    await expect(bench.runtime.listDevinModels()).rejects.toThrow('no families array')
+    await expect(bench.runtime.listCatalogCli()).rejects.toThrow('no families array')
     await bench.ctx.fiber.dispose()
     // A payload that is not a JSON object at all carries no families either.
     bench = await runtimeBench({ MOCK_MODELS_JSON: '42' })
-    await expect(bench.runtime.listDevinModels()).rejects.toThrow('no families array')
+    await expect(bench.runtime.listCatalogCli()).rejects.toThrow('no families array')
   }, 30_000)
 
   it('gives up on a CLI verb that never answers', async () => {
     bench = await runtimeBench({ MOCK_MODELS_HANG: '1' }, { cliTimeoutMs: 300 })
-    await expect(bench.runtime.listDevinModels()).rejects.toThrow('did not answer within 300ms')
+    await expect(bench.runtime.listCatalogCli()).rejects.toThrow('did not answer within 300ms')
     // The deadline is per call, so a later attempt is not poisoned by it.
-    await expect(bench.runtime.listDevinModels()).rejects.toThrow('did not answer within 300ms')
+    await expect(bench.runtime.listCatalogCli()).rejects.toThrow('did not answer within 300ms')
   }, 30_000)
 
   it('surfaces a CLI failure with its exit code and stderr', async () => {
-    bench = await runtimeBench({}, { modelsArgs: [mockAgent, 'bogus'] })
-    await expect(bench.runtime.listDevinModels()).rejects.toThrow('exited 2: unknown subcommand bogus')
-    await expect(bench.runtime.listDevinModels()).rejects.toThrow('agent-acp')
+    bench = await runtimeBench({}, { catalogArgs: [mockAgent, 'bogus'] })
+    await expect(bench.runtime.listCatalogCli()).rejects.toThrow('exited 2: unknown subcommand bogus')
+    await expect(bench.runtime.listCatalogCli()).rejects.toThrow('agent-acp')
     await bench.ctx.fiber.dispose()
     // A silent non-zero exit reports only the exit code.
     bench = await runtimeBench({ MOCK_MODELS_EXIT: '3' })
-    await expect(bench.runtime.listDevinModels()).rejects.toThrow(/exited 3$/)
+    await expect(bench.runtime.listCatalogCli()).rejects.toThrow(/exited 3$/)
   }, 30_000)
 })
 

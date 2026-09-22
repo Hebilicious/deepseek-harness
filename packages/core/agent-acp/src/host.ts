@@ -1,7 +1,8 @@
 /**
- * The ACP `AgentFactory` host: binds the shared `devin acp` runtime and the
- * driver deployment config into every constructed {@link AcpAgent}, and
- * registers the durable session-binding projection the resume path folds.
+ * The ACP `AgentFactory` host: binds one harness's shared ACP runtime and
+ * driver deployment config into every constructed {@link AcpAgent}, registers
+ * the harness identity the agent registry dispatches by, and registers the
+ * durable session-binding projection the resume path folds.
  *
  * @module @deepseek-ai/dsh-agent-acp/host
  */
@@ -11,32 +12,36 @@ import type { AgentOptions } from '@deepseek-ai/dsh-agent'
 import { ExternalAgentHost } from '@deepseek-ai/dsh-agent-external'
 import type { Session, SessionId } from '@deepseek-ai/dsh-session'
 import { AcpAgent, type AcpAgentConfig } from './agent.ts'
-import { ACP_PREFIX } from './protocol.ts'
+import { acpPrefix } from './protocol.ts'
 import type { AcpRuntime } from './runtime.ts'
 import { acpSessionProjection } from './session-state.ts'
 
 /**
- * ACP factory host. Construction registers the `acpSession` projection, the
- * shared transaction ownership, and `ctx.agents.setFactory` — all
- * effect-scoped to the plugin fiber — then every create/resume runs the
- * shared unpublished-preparation → bind → publish transaction.
+ * One harness's ACP factory host. Construction registers the `acpSession`
+ * projection, the shared transaction ownership, and the harness in
+ * `ctx.agents` — all effect-scoped to the plugin fiber — then every
+ * create/resume runs the shared unpublished-preparation → bind → publish
+ * transaction.
  */
 export class AcpAgentHost extends ExternalAgentHost<AcpAgent> {
   /**
    * @param ctx - the plugin service's registration context.
-   * @param runtime - the profile's shared ACP runtime.
-   * @param config - resolved driver deployment defaults.
+   * @param runtime - this harness's shared ACP runtime.
+   * @param config - resolved driver deployment defaults, including the harness identity.
    */
   constructor(
     ctx: Context,
     private readonly acpRuntime: AcpRuntime,
     private readonly agentConfig: AcpAgentConfig,
   ) {
-    super(ctx, ACP_PREFIX)
+    super(ctx, acpPrefix(agentConfig.harness.id), {
+      harness: agentConfig.harness,
+      effectPrefix: `acpHarness.${agentConfig.harness.id}`,
+    })
     ctx.sessionProjections.register(acpSessionProjection)
   }
 
-  /** Construct the driver around the shared runtime and resolved config. */
+  /** Construct the driver around this harness's shared runtime and resolved config. */
   protected override constructAgent(
     hostCtx: Context,
     id: SessionId,

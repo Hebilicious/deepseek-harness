@@ -18,6 +18,7 @@ import SessionProjectionRegistry from '@deepseek-ai/dsh-session-projection'
 import JsonlSessionPersistence from '@deepseek-ai/dsh-session-persistence-jsonl'
 import SessionStore, { type SessionEvent } from '@deepseek-ai/dsh-session'
 import LocalSubprocessRuntime from '@deepseek-ai/dsh-subprocess-local'
+import type { AcpHarnessEntry } from '@deepseek-ai/dsh-agent-acp'
 import TypertRegistry from '@deepseek-ai/dsh-typert-registry'
 import ApprovalService, { type ApprovalOutcome } from '@deepseek-ai/dsh-user-approval'
 import SandboxPolicy from '@deepseek-ai/dsh-sandbox-policy'
@@ -161,16 +162,27 @@ export interface Bench {
   readonly approval?: FakeApproval
 }
 
-/** Mount the full driver bench with `AcpHarness` pointed at the mock agent. */
+/** Default harness id the bench mounts, so unqualified create/resume calls reach it. */
+export const DEFAULT_HARNESS_ID = 'devin'
+
+/** Benches' own switches and config overrides. */
+export interface BenchOptions {
+  approval?: boolean | 'fake'
+  questions?: boolean
+  attachments?: boolean
+  sandboxPolicy?: boolean
+  /** Overrides merged into the default `devin` entry. */
+  config?: Partial<AcpHarnessEntry>
+  /** Extra harness entries mounted beside the default `devin` entry. */
+  harnesses?: AcpHarnessEntry[]
+  /** Plugin-level config overrides (termination graces and the CLI deadline). */
+  plugin?: Record<string, unknown>
+}
+
+/** Mount the full driver bench with `AcpHarness` pointing its default entry at the mock agent. */
 export async function setup(
   env: Record<string, string> = {},
-  options: {
-    approval?: boolean | 'fake'
-    questions?: boolean
-    attachments?: boolean
-    sandboxPolicy?: boolean
-    config?: Record<string, unknown>
-  } = {},
+  options: BenchOptions = {},
 ): Promise<Bench> {
   const root = await mkdtemp(join(tmpdir(), 'agent-acp-test-'))
   const recordFile = join(root, 'record.jsonl')
@@ -188,13 +200,22 @@ export async function setup(
   if (options.attachments === true) await ctx.plugin(FakeAttachments)
   if (options.sandboxPolicy === true) await ctx.plugin(SandboxPolicy)
   await ctx.plugin(AcpHarness, {
-    executable: process.execPath,
-    args: [mockAgent, 'acp'],
-    modelsArgs: [mockAgent, 'models', 'list', '--format', 'json'],
-    authStatusArgs: [mockAgent, 'auth', 'status'],
-    authLogoutArgs: [mockAgent, 'auth', 'logout'],
-    env: { MOCK_RECORD_FILE: recordFile, ...env },
-    ...options.config,
+    harnesses: [
+      {
+        id: DEFAULT_HARNESS_ID,
+        name: 'Devin',
+        description: 'Devin runs the session through devin acp',
+        executable: process.execPath,
+        args: [mockAgent, 'acp'],
+        catalogArgs: [mockAgent, 'models', 'list', '--format', 'json'],
+        authStatusArgs: [mockAgent, 'auth', 'status'],
+        authLogoutArgs: [mockAgent, 'auth', 'logout'],
+        env: { MOCK_RECORD_FILE: recordFile, ...env },
+        ...options.config,
+      },
+      ...options.harnesses ?? [],
+    ],
+    ...options.plugin,
   })
   const questions = ctx.get('userQuestions') as FakeQuestions | undefined
   const attachments = ctx.get('attachments') as FakeAttachments | undefined
