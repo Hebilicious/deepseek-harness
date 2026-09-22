@@ -1,41 +1,18 @@
 /**
  * Abstract Agent driver whose work runs inside a foreign harness process. The
- * class owns the session-facing machinery every driver shares — phase machine,
- * durable inbox, turn/step boundaries, live steer/inject delivery, and the
- * durable model-selection fold — while the subclass owns only the harness
- * binding and one turn's drive.
+ * shared {@link ManagedAgent} base owns the session-facing machinery every
+ * driver has in common; this subclass adds the harness surface — one turn is
+ * exactly one durable step, live steering and context injection reach the
+ * harness, and the durable model-selection fold decides the route.
  *
  * @module @deepseek-ai/dsh-agent-external/agent
  */
 
-import type {
-  Agent,
-  AgentCancelCause,
-  AgentEventDispatch,
-  AgentOptions,
-  AgentStatus,
-  CancelOptions,
-  InboxTarget,
-} from '@deepseek-ai/dsh-agent'
-import { agentEvents } from '@deepseek-ai/dsh-agent'
 import { errorChain } from '@deepseek-ai/dsh-llm'
 import type { UserMessage } from '@deepseek-ai/dsh-llm'
-import type { Scope } from '@deepseek-ai/dsh-scope'
-import { createScope } from '@deepseek-ai/dsh-scope'
-import type { Session, SessionId, TurnEndReason } from '@deepseek-ai/dsh-session'
-import type { Context } from '@deepseek-ai/cordis'
-import { DurableAgentInbox } from './inbox.ts'
+import type { TurnEndReason } from '@deepseek-ai/dsh-session'
+import { ManagedAgent, type RunningAgentPhase, type TurnBodyOutcome } from './base.ts'
 import { ExternalTurnProjector, type RouteLogState } from './projector.ts'
-
-type Phase =
-  | { kind: 'idle'; lastTurn: number }
-  | {
-    kind: 'maintenance'
-    abort: AbortController
-    lastTurn: number
-    wakeRequested: boolean
-  }
-  | { kind: 'running'; abort: AbortController; turn: number; step: number; wakeRequested: boolean }
 
 /** One live harness-turn boundary handed to the driver. */
 export interface ExternalTurnDrive {
@@ -73,24 +50,14 @@ export interface ExternalModelSelection {
 /**
  * Agent whose turns run inside an external harness process. Subclasses
  * implement the four harness verbs; everything session-facing — durable
- * inbox, turn/step events, live notifications, cancellation — is owned here.
+ * inbox, turn/step events, live notifications, cancellation — comes from
+ * {@link ManagedAgent}.
  *
  * The host calls {@link bind} after caller setup and before publication, and
  * {@link unbind} during teardown after driver quiescence; neither is part of
  * the public {@link Agent} surface.
  */
-export abstract class ExternalAgent implements Agent {
-  readonly inbox: DurableAgentInbox
-  private phase: Phase
-  private activityDone: Promise<void> = Promise.resolve()
-
-  /** The agent-scoped registration boundary; the lifecycle owner unwinds it after the driver exits. */
-  readonly scope: Scope
-  readonly ctx: Context
-
-  /** Fused dispatcher, built once in the constructor so hot-path dispatches never allocate. */
-  protected readonly dispatch: AgentEventDispatch
-
+export abstract class ExternalAgent extends ManagedAgent {
   /** Live drive window for mid-turn steering, or undefined between turns. */
   private liveDrive: ExternalTurnDrive | undefined
   /** Serialized steer/inject forwards, so wire order matches inbox order. */
@@ -101,50 +68,7 @@ export abstract class ExternalAgent implements Agent {
   /** Request-header bookkeeping shared by every turn's projector. */
   private readonly routeState: RouteLogState = { logged: false }
 
-  constructor(
-    /** The factory service's context: session projection reads and initiator scoping. */
-    protected readonly hostCtx: Context,
-    public readonly id: SessionId,
-    public readonly options: AgentOptions,
-    public readonly session: Session,
-  ) {
-    this.dispatch = agentEvents(hostCtx, this)
-    this.scope = createScope(hostCtx, this)
-    this.ctx = this.scope.ctx
-    this.inbox = new DurableAgentInbox(this.ctx.sessionProjections, session, this.dispatch)
-    /* v8 ignore next -- the host registers its own turnBoundary unit, so the key is always present */
-    const lastTurn = this.hostCtx.sessionProjections.stateOf(session, 'turnBoundary')?.lastTurn ?? 0
-    this.phase = { kind: 'idle', lastTurn }
-  }
-
-  get status(): AgentStatus {
-    return this.phase.kind === 'idle' || this.phase.kind === 'maintenance' ? 'idle' : 'running'
-  }
-
-  /** Commit a phase and publish its externally visible status transition. */
-  private setPhase(next: Phase): void {
-    const previousStatus = this.status
-    this.phase = next
-    const status = this.status
-    if (status !== previousStatus) {
-      this.dispatch.emit('agent/status', { status })
-    }
-  }
-
-  send(message: UserMessage, target: InboxTarget, wakeup: boolean): void {
-    // Waking input cannot join an aborted activity, so it starts the next turn.
-    // Captured before the insertion so a reentrant cancel from a splice observer cannot reclassify it.
-    const wakingAfterAbort = wakeup && this.phase.kind !== 'idle' && this.phase.abort.signal.aborted
-    const resolvedTarget = wakingAfterAbort ? 'next-turn' : target
-    this.inbox.splice(resolvedTarget, Infinity, 0, [message])
-    if (wakeup) this.wakeDriver(wakingAfterAbort)
-  }
-
-  followup(input: UserMessage): void {
-    this.send(input, 'next-turn', true)
-  }
-
-  steer(input: UserMessage): void {
+  override steer(input: UserMessage): void {
     // Capture the live drive BEFORE send() can wake a driver: steering sent
     // while idle rides the turn claim like ordinary input, and only a drive
     // already live at call time receives the wire-level forward.
@@ -153,201 +77,70 @@ export abstract class ExternalAgent implements Agent {
     if (drive !== undefined) this.forwardLive(input, message => this.steerLive(message, drive))
   }
 
-  inject(input: UserMessage): void {
+  override inject(input: UserMessage): void {
     this.send(input, 'next-step', false)
     this.forwardLive(input, message => this.injectHarness(message))
   }
 
-  cancel(cause: AgentCancelCause, options: CancelOptions = {}): void {
-    if (!options.keepInbox) {
-      this.inbox.clear()
-      if (this.phase.kind !== 'idle') this.phase.wakeRequested = false
-    }
-    if (this.phase.kind !== 'idle') this.phase.abort.abort(cause)
-  }
-
-  runMaintenance<T>(job: (signal: AbortSignal) => Promise<T>): Promise<T> {
-    if (this.phase.kind !== 'idle') throw new Error(`agent "${this.id}" already has active work`)
-    const done = Promise.withResolvers<void>()
-    const maintenance: Phase = {
-      kind: 'maintenance',
-      abort: new AbortController(),
-      lastTurn: this.phase.lastTurn,
-      wakeRequested: false,
-    }
-    this.setPhase(maintenance)
-    this.activityDone = done.promise
-    return (async () => {
-      try {
-        return await job(maintenance.abort.signal)
-      } finally {
-        this.setPhase({ kind: 'idle', lastTurn: maintenance.lastTurn })
-        if (maintenance.wakeRequested && this.inbox.hasPending) this.wakeDriver()
-        done.resolve()
-      }
-    })()
-  }
-
   /**
-   * Start one driver, or latch its wake behind maintenance or an aborted
-   * activity. A wake sent while idle always opens its turn boundary, even
-   * when its message was cleared; only a latched replay is suppressed when
-   * the queue no longer holds the wake.
-   * @param wakeAfterAbort - the {@link send} classification, captured before
-   *   the inbox insertion so a reentrant cancel cannot reclassify it.
+   * Drive exactly one durable step for the claimed batch. A foreign turn has
+   * no step loop: the harness call owns everything between `step/start` and
+   * `step/end`, and an empty claim still opens the turn boundary.
+   * @param turn - the durable turn already appended.
+   * @param signal - the live turn's abort signal.
+   * @param phase - the running phase the skeleton reserved for this turn.
+   * @returns the turn ending, and whether the driver stops here.
    */
-  private wakeDriver(wakeAfterAbort = false): void {
-    if (this.phase.kind !== 'idle') {
-      // Maintenance and aborted drivers cannot deliver the wake: latch it for
-      // replay at convergence. Live drivers claim queued work themselves;
-      // disposal never latches, so teardown waits on no model turn.
-      const reason = this.phase.abort.signal.reason as AgentCancelCause | undefined
-      if (reason?.kind !== 'disposed' && (this.phase.kind === 'maintenance' || wakeAfterAbort)) {
-        this.phase.wakeRequested = true
-      }
-      return
-    }
-    const driver = Promise.withResolvers<void>()
-    this.activityDone = driver.promise
-    this.setPhase({
-      kind: 'running',
-      abort: new AbortController(),
-      turn: this.phase.lastTurn,
-      step: 0,
-      wakeRequested: false,
-    })
-    this.hostCtx.agents.withInitiator(this, () => this.kick()).then(driver.resolve, driver.reject)
-  }
-
-  async whenIdle(): Promise<void> {
-    let activity: Promise<void>
-    do {
-      await (activity = this.activityDone)
-    } while (activity !== this.activityDone)
-  }
-
-  /** Report one failure at its live boundary, then preserve it for driver containment. */
-  private throwError(error: unknown): never {
-    const turn = this.phase.kind === 'running' ? this.phase.turn : this.phase.lastTurn
-    const step = this.phase.kind === 'running' ? this.phase.step : 0
-    this.dispatch.emit('agent/error', { turn, step, error })
-    throw error
-  }
-
-  private async kick(): Promise<void> {
-    try {
-      while (await this.turn()) {}
-    } catch (_error) {
-      // Reported failures and cancellation are contained at the driver boundary.
-    } finally {
-      /* v8 ignore next -- kick owns a running phase until this driver boundary */
-      if (this.phase.kind === 'running') {
-        const { turn, wakeRequested } = this.phase
-        this.setPhase({ kind: 'idle', lastTurn: turn })
-        if (wakeRequested && this.inbox.hasPending) this.wakeDriver()
-      }
-    }
-  }
-
-  /**
-   * Run one harness turn: claim the queued batch, commit it as user/message
-   * events, and hand the turn to the subclass's harness call. A foreign turn
-   * is exactly one durable step; pending input still queued at the boundary
-   * rolls the driver into another turn.
-   * @returns whether another turn should run immediately.
-   */
-  private async turn(): Promise<boolean> {
-    /* v8 ignore next -- kick owns a running phase until this driver boundary */
-    if (this.phase.kind !== 'running') {
-      this.throwError(new Error(`agent "${this.id}": turn without driver reservation`))
-    }
-    const phase = this.phase
-    const { signal } = phase.abort
+  protected override async runTurnBody(
+    turn: number,
+    signal: AbortSignal,
+    phase: RunningAgentPhase,
+  ): Promise<TurnBodyOutcome> {
     signal.throwIfAborted()
-    const turn = phase.turn + 1
+    const claimed = this.inbox.claim('next-turn', turn)
+    // A bare wake (cleared or consumed input) still owns its turn boundary
+    // but spends no harness call.
+    if (claimed.length === 0) return { ends: { kind: 'completed' }, stop: true }
+    const step = 1
+    this.session.append('step/start', { turn, step })
+    phase.step = step
     try {
-      this.session.append('turn/start', { turn })
-    } catch (error: unknown) {
-      this.throwError(error)
-    }
-    phase.turn = turn
-    let turnEnds: TurnEndReason | null = null
-    try {
-      signal.throwIfAborted()
-      const claimed = this.inbox.claim('next-turn', turn)
-      // A bare wake (cleared or consumed input) still owns its turn boundary
-      // but spends no harness call.
-      if (claimed.length === 0) {
-        turnEnds = { kind: 'completed' }
-        return false
+      for (const message of claimed) {
+        this.session.append('user/message', message, { surfaceOp: 'append' })
       }
-      const step = 1
-      this.session.append('step/start', { turn, step })
-      phase.step = step
+      const projector = new ExternalTurnProjector(
+        this.session,
+        this.dispatch,
+        turn,
+        step,
+        () => ++this.assistantAttemptCounter,
+        () => ++this.assistantStreamRevision,
+        this.routeState,
+      )
+      const drive: ExternalTurnDrive = { turn, step, signal, projector }
+      const onAbort = (): void => {
+        void Promise.resolve()
+          .then(() => this.interruptTurn(drive))
+          .catch((error: unknown) => {
+            this.ctx.logger.warn(`agent "${this.id}": harness interrupt failed: ${errorChain(error)}`)
+          })
+      }
+      signal.addEventListener('abort', onAbort)
+      this.liveDrive = drive
       try {
-        for (const message of claimed) {
-          this.session.append('user/message', message, { surfaceOp: 'append' })
-        }
-        const projector = new ExternalTurnProjector(
-          this.session,
-          this.dispatch,
-          turn,
-          step,
-          () => ++this.assistantAttemptCounter,
-          () => ++this.assistantStreamRevision,
-          this.routeState,
-        )
-        const drive: ExternalTurnDrive = { turn, step, signal, projector }
-        const onAbort = (): void => {
-          void Promise.resolve()
-            .then(() => this.interruptTurn(drive))
-            .catch((error: unknown) => {
-              this.ctx.logger.warn(`agent "${this.id}": harness interrupt failed: ${errorChain(error)}`)
-            })
-        }
-        signal.addEventListener('abort', onAbort)
-        this.liveDrive = drive
-        try {
-          turnEnds = await this.driveTurn(claimed, drive)
-        } finally {
-          // Accepted live forwards still commit their durable rows inside
-          // this turn's boundary; settlement cannot inspect the queue ahead
-          // of them. The chain never rejects — forward failures surface on
-          // the agent's error channel.
-          await this.liveForward
-          this.liveDrive = undefined
-          signal.removeEventListener('abort', onAbort)
-        }
+        return { ends: await this.driveTurn(claimed, drive), stop: false }
       } finally {
-        this.session.append('step/end', { turn, step })
+        // Accepted live forwards still commit their durable rows inside
+        // this turn's boundary; settlement cannot inspect the queue ahead
+        // of them. The chain never rejects — forward failures surface on
+        // the agent's error channel.
+        await this.liveForward
+        this.liveDrive = undefined
+        signal.removeEventListener('abort', onAbort)
       }
-    } catch (error: unknown) {
-      if (signal.aborted) {
-        const reason = signal.reason as AgentCancelCause
-        turnEnds = { kind: 'aborted', reason }
-        // Pending input kept through a non-disposal abort is owed a turn:
-        // this driver is exiting, so the boundary latch replays the queue.
-        if (reason.kind !== 'disposed' && this.inbox.hasPending) phase.wakeRequested = true
-        throw error
-      }
-      // Every failure is structured: anything the harness threw flattens to
-      // `errorChain` text under the `UNKNOWN` code.
-      turnEnds = { kind: 'error', error: { message: errorChain(error), code: 'UNKNOWN' } }
-      this.throwError(error)
     } finally {
-      try {
-        // oxlint-disable-next-line typescript/no-non-null-assertion -- every exit assigns a turn ending
-        this.session.append('turn/end', { turn, reason: turnEnds! })
-      } catch (error: unknown) {
-        this.throwError(error)
-      }
+      this.session.append('step/end', { turn, step })
     }
-    if (!this.inbox.hasPending) return false
-    phase.abort = new AbortController()
-    // A fresh controller makes a latch set on the old one stale: the live driver claims the queue itself.
-    phase.wakeRequested = false
-    phase.step = 0
-    return true
   }
 
   /**
@@ -362,8 +155,7 @@ export abstract class ExternalAgent implements Agent {
       if (!accepted) return
       // Steering accepted mid-turn belongs to the live turn; context a
       // harness accepted between turns belongs to the turn about to open.
-      const turn = this.liveDrive?.turn
-        ?? (this.phase.kind === 'running' ? this.phase.turn : this.phase.lastTurn) + 1
+      const turn = this.liveDrive?.turn ?? this.currentTurn + 1
       if (!this.inbox.consume(message.id, turn)) return
       this.session.append('user/message', message, { surfaceOp: 'append' })
     })
@@ -372,7 +164,7 @@ export abstract class ExternalAgent implements Agent {
     this.liveForward = chained.then(() => undefined, () => undefined)
     void chained.catch((error: unknown) => {
       this.dispatch.emit('agent/error', {
-        turn: this.phase.kind === 'running' ? this.phase.turn : this.phase.lastTurn,
+        turn: this.currentTurn,
         step: this.phase.kind === 'running' ? this.phase.step : 0,
         error,
       })
@@ -393,7 +185,7 @@ export abstract class ExternalAgent implements Agent {
       provider: selected?.provider ?? this.options.provider ?? '',
       model: selected?.model ?? this.options.model ?? '',
       ...selected?.reasoningEffort === undefined
-        ? this.options.reasoningEffort === undefined ? {} : { reasoningEffort: this.options.reasoningEffort as string }
+        ? this.options.reasoningEffort === undefined ? {} : { reasoningEffort: this.options.reasoningEffort }
         : { reasoningEffort: selected.reasoningEffort },
     }
   }
@@ -408,14 +200,14 @@ export abstract class ExternalAgent implements Agent {
    * here and flush with the pre-publication suffix.
    * @param signal - fused caller/lifecycle cancellation.
    */
-  abstract bind(signal: AbortSignal): Promise<void>
+  abstract override bind(signal: AbortSignal): Promise<void>
 
   /**
    * Release the harness-side conversation — Codex `thread/unsubscribe`, ACP
    * `session/close`. Called during teardown after driver quiescence, before
    * the agent scope unwinds; the shared process is still alive.
    */
-  abstract unbind(): Promise<void>
+  abstract override unbind(): Promise<void>
 
   /**
    * Drive one harness turn — Codex `turn/start` to `turn/completed`, ACP

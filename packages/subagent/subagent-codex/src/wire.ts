@@ -1,60 +1,34 @@
 /**
  * Minimal Codex app-server 0.153.4 protocol adapter. The shared JSON-RPC
- * transport owns framing and request correlation; this module owns only the
- * product methods, current thread/turn association, unattended approval
- * responses, and terminal-answer selection.
+ * transport owns framing and request correlation, the driver package owns the
+ * app-server protocol vocabulary (frame validators, permission params, and
+ * terminal-turn failure classification); this module owns only the product
+ * methods, current thread/turn association, unattended approval responses, and
+ * terminal-answer selection.
  *
  * @module @deepseek-ai/dsh-subagent-codex/wire
  */
 
 import type { Readable, Writable } from 'node:stream'
+import {
+  codexObject,
+  codexString,
+  codexTurnFailureInfo,
+  THREAD_PERMISSION_PARAMS,
+  type CodexPermissionMode,
+  type CodexTurnFailureInfo,
+  type CodexWireFailureFacts,
+  type JsonObject,
+} from '@deepseek-ai/dsh-agent-codex'
 import type { ContentBlock } from '@deepseek-ai/dsh-llm'
 import type { SubagentResult } from '@deepseek-ai/dsh-subagent'
 import { JsonRpcLineTransport } from '@deepseek-ai/dsh-sdk-protocol'
-import type { CodexPermissionMode } from './run.ts'
 
-type JsonObject = Record<string, unknown>
+/** Diagnostic prefix for every error this package raises on the wire. */
+const PREFIX = 'subagent-codex'
 
-/** Product facts owned by the Codex wire after publication. */
-export interface CodexWireFailureFacts {
-  readonly stage: 'turn-start' | 'turn'
-  readonly category:
-    | 'limit'
-    | 'access-policy'
-    | 'service'
-    | 'transport'
-    | 'product-error'
-    | 'invalid-result'
-    | 'unknown'
-  readonly httpStatus?: number | undefined
-}
-
-const THREAD_PERMISSION_PARAMS: Readonly<Record<CodexPermissionMode, JsonObject>> = {
-  never: { approvalPolicy: 'never' },
-  'approve-for-me': {
-    approvalPolicy: 'on-request',
-    approvalsReviewer: 'auto_review',
-    sandbox: 'workspace-write',
-  },
-  'dangerously-bypass-approvals-and-sandbox': {
-    approvalPolicy: 'never',
-    sandbox: 'danger-full-access',
-  },
-}
-
-function object(value: unknown, label: string): JsonObject {
-  if (value === null || typeof value !== 'object' || Array.isArray(value)) {
-    throw new Error(`subagent-codex: app-server returned invalid ${label}`)
-  }
-  return value as JsonObject
-}
-
-function string(value: unknown, label: string): string {
-  if (typeof value !== 'string' || value.length === 0) {
-    throw new Error(`subagent-codex: app-server returned invalid ${label}`)
-  }
-  return value
-}
+/** Re-exported so this package's callers keep one failure-facts vocabulary. */
+export type { CodexWireFailureFacts }
 
 function unattendedDecision(params: JsonObject): 'cancel' | 'decline' {
   const available = params.availableDecisions
@@ -64,87 +38,6 @@ function unattendedDecision(params: JsonObject): 'cancel' | 'decline' {
     if (available.includes('decline')) return 'decline'
   }
   throw new Error('subagent-codex: app-server offered no unattended approval decision')
-}
-
-function numericHttpStatus(value: unknown): number | undefined {
-  return typeof value === 'number'
-    && Number.isInteger(value)
-    && value >= 0
-    && value <= 65_535
-    ? value
-    : undefined
-}
-
-interface ParsedFailureInfo {
-  readonly category: CodexWireFailureFacts['category']
-  readonly httpStatus?: number | undefined
-  readonly maxTokens?: true
-  readonly sandboxFailure?: true
-}
-
-function objectFailureInfo(value: JsonObject): ParsedFailureInfo {
-  const keys = Object.keys(value)
-  const category = keys[0]
-  if (keys.length !== 1 || category === undefined) {
-    return { category: 'unknown' }
-  }
-  const detail = value[category]
-  if (detail === null || typeof detail !== 'object' || Array.isArray(detail)) {
-    return { category: 'unknown' }
-  }
-  const fields = detail as JsonObject
-  switch (category) {
-    case 'httpConnectionFailed':
-    case 'responseStreamConnectionFailed':
-    case 'responseStreamDisconnected':
-    case 'responseTooManyFailedAttempts':
-    {
-      const httpStatus = numericHttpStatus(fields.httpStatusCode)
-      return httpStatus === undefined
-        ? { category: 'transport' }
-        : { category: 'transport', httpStatus }
-    }
-    case 'activeTurnNotSteerable':
-      return { category: 'product-error' }
-    default:
-      return { category: 'unknown' }
-  }
-}
-
-function failureInfo(turn: JsonObject): ParsedFailureInfo {
-  if (turn.status !== 'failed') return { category: 'unknown' }
-  const error = turn.error
-  if (error === null || typeof error !== 'object' || Array.isArray(error)) {
-    return { category: 'unknown' }
-  }
-  const info = (error as JsonObject).codexErrorInfo
-  if (typeof info === 'string') {
-    switch (info) {
-      case 'contextWindowExceeded':
-        return { category: 'limit', maxTokens: true }
-      case 'sessionBudgetExceeded':
-      case 'usageLimitExceeded':
-        return { category: 'limit' }
-      case 'serverOverloaded':
-      case 'internalServerError':
-        return { category: 'service' }
-      case 'cyberPolicy':
-      case 'misalignmentPolicyViolation':
-      case 'unauthorized':
-        return { category: 'access-policy' }
-      case 'badRequest':
-      case 'threadRollbackFailed':
-      case 'other':
-        return { category: 'product-error' }
-      case 'sandboxError':
-        return { category: 'access-policy', sandboxFailure: true }
-      default:
-        return { category: 'unknown' }
-    }
-  }
-  return info !== null && typeof info === 'object' && !Array.isArray(info)
-    ? objectFailureInfo(info as JsonObject)
-    : { category: 'unknown' }
 }
 
 function unattendedDiagnostic(
@@ -266,7 +159,7 @@ export class CodexAppServerWire {
    * @param signal - unpublished-start cancellation.
    */
   async initialize(signal: AbortSignal): Promise<void> {
-    object(await this.guarded(this.transport.request('initialize', {
+    codexObject(await this.guarded(this.transport.request('initialize', {
       clientInfo: {
         name: 'deepseek-harness',
         title: 'DeepSeek Harness',
@@ -276,7 +169,7 @@ export class CodexAppServerWire {
         experimentalApi: false,
         requestAttestation: false,
       },
-    }, signal), signal), 'initialize response')
+    }, signal), signal), 'initialize response', PREFIX)
     this.transport.notify('initialized')
     await this.guarded(this.transport.flush(), signal)
   }
@@ -287,14 +180,14 @@ export class CodexAppServerWire {
    * @param signal - unpublished-start cancellation.
    */
   async startThread(cwd: string, signal: AbortSignal): Promise<void> {
-    const response = object(await this.guarded(this.transport.request('thread/start', {
+    const response = codexObject(await this.guarded(this.transport.request('thread/start', {
       cwd,
       ephemeral: true,
       ...this.model === undefined ? {} : { model: this.model },
       ...THREAD_PERMISSION_PARAMS[this.permissionMode],
-    }, signal), signal), 'thread/start response')
-    const thread = object(response.thread, 'thread/start thread')
-    const id = string(thread.id, 'thread/start thread id')
+    }, signal), signal), 'thread/start response', PREFIX)
+    const thread = codexObject(response.thread, 'thread/start thread', PREFIX)
+    const id = codexString(thread.id, 'thread/start thread id', PREFIX)
     if (thread.ephemeral !== true) {
       throw new Error('subagent-codex: app-server did not create an ephemeral thread')
     }
@@ -319,13 +212,13 @@ export class CodexAppServerWire {
     this.turnCompleted = completion
     const threadId = this.threadId as string
     try {
-      const response = object(await this.guarded(this.transport.request('turn/start', {
+      const response = codexObject(await this.guarded(this.transport.request('turn/start', {
         threadId,
         input: texts.map(text => ({ type: 'text', text, text_elements: [] })),
         ...this.reasoningEffort === undefined ? {} : { effort: this.reasoningEffort },
-      }, signal), signal), 'turn/start response')
-      const turn = object(response.turn, 'turn/start turn')
-      this.commitTurnId(string(turn.id, 'turn/start turn id'))
+      }, signal), signal), 'turn/start response', PREFIX)
+      const turn = codexObject(response.turn, 'turn/start turn', PREFIX)
+      this.commitTurnId(codexString(turn.id, 'turn/start turn id', PREFIX))
     } catch (error: unknown) {
       this.recordFailure({ stage: 'turn-start', category: 'unknown' })
       throw error
@@ -338,14 +231,14 @@ export class CodexAppServerWire {
     let terminal: JsonObject
     try {
       completed = await this.guarded(completion.promise, signal)
-      terminal = object(completed.params.turn, 'turn/completed turn')
+      terminal = codexObject(completed.params.turn, 'turn/completed turn', PREFIX)
     } catch (error: unknown) {
       this.recordFailure({ stage: 'turn', category: 'unknown' })
       throw error
     }
     const status = terminal.status
     if (status !== 'completed') {
-      const parsed = failureInfo(terminal)
+      const parsed: CodexTurnFailureInfo = codexTurnFailureInfo(terminal)
       this.recordFailure(parsed.httpStatus === undefined
         ? { stage: 'turn', category: parsed.category }
         : {
@@ -493,7 +386,7 @@ export class CodexAppServerWire {
       throw new Error('subagent-codex: app-server request referenced another thread')
     }
     if (nullableTurn && params.turnId === null) return false
-    const id = string(params.turnId, 'server request turn id')
+    const id = codexString(params.turnId, 'server request turn id', PREFIX)
     if (this.turnId === undefined) {
       this.observePendingTurnId(id)
       return true
@@ -637,18 +530,18 @@ export class CodexAppServerWire {
     order?: number,
   ): void {
     if (method === 'turn/started') {
-      const threadId = string(params.threadId, 'turn/started thread id')
+      const threadId = codexString(params.threadId, 'turn/started thread id', PREFIX)
       if (threadId !== this.threadId) return
-      const turn = object(params.turn, 'turn/started turn')
+      const turn = codexObject(params.turn, 'turn/started turn', PREFIX)
       if (this.turnCompleted !== undefined && this.turnId === undefined) {
-        this.observePendingTurnId(string(turn.id, 'turn/started turn id'))
+        this.observePendingTurnId(codexString(turn.id, 'turn/started turn id', PREFIX))
       }
       return
     }
     if (method === 'item/completed') {
-      const threadId = string(params.threadId, 'item/completed thread id')
+      const threadId = codexString(params.threadId, 'item/completed thread id', PREFIX)
       if (threadId !== this.threadId) return
-      const id = string(params.turnId, 'item/completed turn id')
+      const id = codexString(params.turnId, 'item/completed turn id', PREFIX)
       if (this.turnId === undefined) {
         if (this.turnCompleted !== undefined) {
           this.observePendingTurnId(id)
@@ -661,7 +554,7 @@ export class CodexAppServerWire {
         return
       }
       if (id !== this.turnId) return
-      const item = object(params.item, 'item/completed item')
+      const item = codexObject(params.item, 'item/completed item', PREFIX)
       if (this.recordDeclinedItem(item, order)) return
       if (item.type !== 'agentMessage') return
       const text = typeof item.text === 'string'
@@ -677,10 +570,10 @@ export class CodexAppServerWire {
       return
     }
     if (method !== 'turn/completed') return
-    const threadId = string(params.threadId, 'turn/completed thread id')
+    const threadId = codexString(params.threadId, 'turn/completed thread id', PREFIX)
     if (threadId !== this.threadId) return
-    const turn = object(params.turn, 'turn/completed turn')
-    const id = string(turn.id, 'turn/completed turn id')
+    const turn = codexObject(params.turn, 'turn/completed turn', PREFIX)
+    const id = codexString(turn.id, 'turn/completed turn id', PREFIX)
     const turnCompleted = this.turnCompleted
     if (turnCompleted === undefined) return
     if (this.turnId === undefined) {

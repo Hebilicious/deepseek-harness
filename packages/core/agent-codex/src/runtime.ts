@@ -43,6 +43,13 @@ export interface CodexThreadPeer {
    */
   notification(method: string, params: JsonObject): void
   /**
+   * Report a failure the peer raised while consuming its own notification.
+   * The runtime scopes the failure here instead of failing the shared
+   * connection, so one session's failure cannot take down every other thread.
+   * @param error - the failure the peer's notification dispatch raised.
+   */
+  failed(error: Error): void
+  /**
    * Answer one server→client request addressed to this peer's thread.
    * @param method - the wire method name.
    * @param params - the decoded params object.
@@ -72,6 +79,18 @@ function toError(value: unknown): Error {
 }
 
 /**
+ * One spawned app-server child with the wire that speaks to it. The pair is
+ * published before the initialize handshake completes, so teardown can reach a
+ * child that is still starting; {@link retired} memoizes its quiescence proof.
+ */
+interface LiveAppServer {
+  readonly process: ExternalHarnessProcess
+  readonly connection: CodexAppServerConnection
+  /** Settles when the retired child reached quiescence; set at first retirement. */
+  retired?: Promise<void>
+}
+
+/**
  * One app-server process and connection per mounted profile. Sessions bind
  * threads over the shared connection; the account and model-catalog surfaces
  * use the same connection outside any session. Construction is cheap —
@@ -79,13 +98,13 @@ function toError(value: unknown): Error {
  * binds share one handshake.
  */
 export class CodexAppServerRuntime {
-  private process: ExternalHarnessProcess | undefined
-  private connection: CodexAppServerConnection | undefined
+  private live: LiveAppServer | undefined
   private startup: Promise<CodexAppServerConnection> | undefined
-  private processExit: Error | undefined
+  /** Quiescence proof for every retired child, awaited by {@link dispose}. */
+  private retirement: Promise<void> = Promise.resolve()
   private readonly threads = new Map<string, CodexThreadPeer>()
   private readonly accountListeners = new Set<(method: string, params: JsonObject) => void>()
-  private disposing: Promise<void> | undefined
+  private disposal: Promise<void> | undefined
 
   /**
    * @param ctx - the plugin service's context: subprocess seam and logger.
@@ -96,41 +115,44 @@ export class CodexAppServerRuntime {
     private readonly options: CodexRuntimeOptions,
   ) {}
 
-  /** Whether the shared process is currently usable for new work. */
-  get available(): boolean {
-    return this.connection !== undefined && this.processExit === undefined && this.disposing === undefined
+  /** Whether {@link dispose} has latched. Teardown outranks every later connect. */
+  private get disposing(): boolean {
+    return this.disposal !== undefined
   }
 
   /**
    * Lazily spawn the app-server and complete the protocol handshake. Shared
-   * and memoized: concurrent callers join the same startup; a failed startup
-   * is not retried implicitly — the rejection is cached so a broken
-   * deployment fails loudly instead of respawning in a loop.
+   * and memoized: concurrent callers join the same startup. A startup failure
+   * clears the memo, so the next caller retries on a fresh child rather than
+   * reusing a connection whose process is gone.
    * @param signal - caller cancellation for the startup await.
    * @returns the live connection.
    */
   connect(signal?: AbortSignal): Promise<CodexAppServerConnection> {
-    if (this.startup !== undefined) return this.startup
-    const started = this.spawnAndInitialize()
-    this.startup = started
-    // A rejected startup must not poison later callers through an unhandled
-    // rejection, but the failure stays cached so every caller sees it.
-    started.catch(() => {})
-    if (signal !== undefined) {
-      return Promise.race([
-        started,
-        new Promise<never>((_resolve, reject) => {
-          if (signal.aborted) {
-            reject(signal.reason instanceof Error ? signal.reason : new Error(String(signal.reason)))
-            return
-          }
-          signal.addEventListener('abort', () => {
-            reject(signal.reason instanceof Error ? signal.reason : new Error(String(signal.reason)))
-          }, { once: true })
-        }),
-      ])
+    if (this.disposing) return Promise.reject(this.disposedError())
+    if (this.startup === undefined) {
+      const started = this.spawnAndInitialize()
+      this.startup = started
+      // A rejected startup must not poison later callers through an unhandled
+      // rejection, and must not stay memoized: the next connect() spawns again.
+      started.catch(() => {
+        if (this.startup === started) this.startup = undefined
+      })
     }
-    return started
+    const startup = this.startup
+    if (signal === undefined) return startup
+    return Promise.race([
+      startup,
+      new Promise<never>((_resolve, reject) => {
+        if (signal.aborted) {
+          reject(signal.reason instanceof Error ? signal.reason : new Error(String(signal.reason)))
+          return
+        }
+        signal.addEventListener('abort', () => {
+          reject(signal.reason instanceof Error ? signal.reason : new Error(String(signal.reason)))
+        }, { once: true })
+      }),
+    ])
   }
 
   /**
@@ -158,23 +180,46 @@ export class CodexAppServerRuntime {
   /**
    * Route one notification to its thread peer, or to account listeners when
    * it carries no thread id. Unknown threads are dropped: notifications
-   * already in flight when a thread unsubscribes land here legitimately.
+   * already in flight when a thread unsubscribes land here legitimately. A
+   * peer's own failure stays on that peer: the frame was already delivered,
+   * and the connection is still coherent for every other thread.
    */
   private dispatchNotification(method: string, params: JsonObject): void {
     const threadId = codexThreadIdOf(params)
     if (threadId === undefined) {
-      for (const listener of this.accountListeners) listener(method, params)
+      for (const listener of this.accountListeners) {
+        try {
+          listener(method, params)
+        } catch (error: unknown) {
+          // Connection-global listeners are observers of account traffic; one
+          // failing subscriber must not fail the session serving it.
+          this.ctx.logger.warn(`${CODEX_PREFIX}: account notification listener failed: ${toError(error).message}`)
+        }
+      }
       return
     }
     const peer = this.threads.get(threadId)
     if (peer === undefined) {
-      this.ctx.logger.debug?.(`${CODEX_PREFIX}: dropped ${method} for unregistered thread "${threadId}"`)
+      this.ctx.logger.debug(`${CODEX_PREFIX}: dropped ${method} for unregistered thread "${threadId}"`)
       return
     }
-    peer.notification(method, params)
+    try {
+      peer.notification(method, params)
+    } catch (error: unknown) {
+      // Notification handlers end in durable session appends, so a failure is
+      // scoped to the thread that owns the frame. Only the connection's own
+      // transport failures (stream error, EOF, write failure) fail the
+      // connection for every session; a delivered frame that one session
+      // cannot fold does not make the wire unusable for the others.
+      peer.failed(toError(error))
+    }
   }
 
-  /** Subscribe to connection-global notifications (account/login/*). */
+  /**
+   * Subscribe to connection-global notifications (account/login/*).
+   * @param listener - receives every account notification name and its params.
+   * @returns a disposer that detaches the listener.
+   */
   onAccountNotification(listener: (method: string, params: JsonObject) => void): () => void {
     this.accountListeners.add(listener)
     return () => { this.accountListeners.delete(listener) }
@@ -182,9 +227,10 @@ export class CodexAppServerRuntime {
 
   /**
    * Associate one agent's peer with a Codex thread id for request and
-   * notification routing. Returns the disposer.
+   * notification routing.
    * @param threadId - the bound thread.
    * @param peer - the agent's dispatch surface.
+   * @returns a disposer that retires the thread peer.
    */
   registerThread(threadId: string, peer: CodexThreadPeer): () => void {
     if (this.threads.has(threadId)) {
@@ -335,22 +381,33 @@ export class CodexAppServerRuntime {
 
   /**
    * Close the connection, then walk the managed-range teardown ladder.
-   * Idempotent and memoized: every caller joins the same quiescence proof.
+   * Idempotent and memoized: every caller joins the same quiescence proof. The
+   * teardown latches before its first await, so a connect() racing it refuses
+   * instead of receiving a child this call is about to reap, and a startup
+   * still spawning publishes its pair into {@link live} for the retirement
+   * below rather than leaking it past the return.
    */
   dispose(): Promise<void> {
-    return this.disposing ??= (async () => {
-      this.connection?.close()
-      if (this.process !== undefined) {
-        await this.process.dispose(this.options.eofGraceMs)
-      }
+    return this.disposal ??= (async () => {
+      // Read both slots before the first await: retiring the pair clears them,
+      // and the in-flight startup below must still be awaited.
       const startup = this.startup
+      const live = this.live
+      // Retiring the published pair first reaps a child whose initialize
+      // handshake is still in flight; its startup then rejects instead of
+      // hanging. A spawn that has not published yet refuses on the disposal
+      // latch and retires its own pair before the startup settles.
+      if (live !== undefined) await this.retire(live, this.disposedError())
       if (startup !== undefined) await startup.catch(() => {})
+      await this.retirement
     })()
   }
 
+  private disposedError(): Error {
+    return new Error(`${CODEX_PREFIX}: runtime is disposed`)
+  }
+
   private async spawnAndInitialize(): Promise<CodexAppServerConnection> {
-    if (this.processExit !== undefined) throw this.processExit
-    if (this.disposing !== undefined) throw new Error(`${CODEX_PREFIX}: runtime is disposed`)
     const env: Record<string, string> = {
       ...scrubbedParentEnv(),
       CODEX_HOME: this.options.codexHome,
@@ -363,38 +420,79 @@ export class CodexAppServerRuntime {
       env,
       graceMs: this.options.disposeGraceMs,
     })
-    process.done.then(
-      (outcome) => {
-        this.processExit = new Error(
-          `${CODEX_PREFIX}: app-server exited (code ${String(outcome.exitCode)}, signal ${String(outcome.signal)}): ${process.stderrTail()}`,
-        )
-        this.connection?.close()
-      },
-      (error: unknown) => {
-        this.processExit = toError(error)
-        this.connection?.close()
-      },
-    )
     const connection = new CodexAppServerConnection(
       process.stdout,
       process.stdin,
       {
         request: (method, params) => this.dispatchRequest(method, params),
-        notification: (method, params) => this.dispatchNotification(method, params),
+        notification: (method, params) => { this.dispatchNotification(method, params) },
       },
       CODEX_PREFIX,
     )
+    const live: LiveAppServer = { process, connection }
+    // Publish the pair before the handshake: a dispose that begins while
+    // initialize is still in flight must be able to reap the child, and only
+    // then observe the startup it interrupts.
+    this.live = live
+    if (this.disposing) {
+      await this.retire(live, this.disposedError())
+      throw this.disposedError()
+    }
+    process.done.then(
+      (outcome) => {
+        void this.retire(live, new Error(
+          `${CODEX_PREFIX}: app-server exited (code ${String(outcome.exitCode)}, signal ${String(outcome.signal)}): ${process.stderrTail()}`,
+        ))
+      },
+      (error: unknown) => {
+        void this.retire(live, toError(error))
+      },
+    )
+    // The wire can also fail while the child still runs (a stream error, or a
+    // router defect): retire the pair so the next connect() spawns a fresh
+    // child instead of reusing a connection nothing can use.
+    void connection.fatal.catch((error: unknown) => this.retire(live, toError(error)))
     try {
       connection.start()
       await connection.initialize(new AbortController().signal)
     } catch (error: unknown) {
-      connection.close()
-      await process.dispose(this.options.eofGraceMs).catch(() => {})
+      await this.retire(live, toError(error))
       throw error
     }
-    this.process = process
-    this.connection = connection
     return connection
+  }
+
+  /**
+   * Retire one live pair after its child or wire failed: fail the wire so
+   * requests already racing it reject, clear the memoized pair so a later
+   * connect() spawns a fresh child, then dispose the child to quiescence.
+   * Memoized per pair: concurrent owners join one teardown.
+   */
+  private retire(live: LiveAppServer, error: Error): Promise<void> {
+    if (live.retired !== undefined) return live.retired
+    const disposal = this.disposeLive(live, error)
+    live.retired = disposal
+    this.retirement = this.retirement.then(() => disposal)
+    return disposal
+  }
+
+  private async disposeLive(live: LiveAppServer, error: Error): Promise<void> {
+    // retire() is memoized per pair and every publication clears its
+    // predecessor, so the pair reaching here still owns the memo slots.
+    /* v8 ignore next -- unreachable alternative: a newer pair cannot be published before this one is cleared here */
+    if (this.live === live) {
+      this.live = undefined
+      this.startup = undefined
+    }
+    live.connection.fail(error)
+    try {
+      await live.process.dispose(this.options.eofGraceMs)
+    } catch (failure: unknown) {
+      // Quiescence is already lost for this child; the caller that owns the
+      // failure (a session bind, or runtime disposal) reports the original
+      // error, so teardown only records what the seam could not reap.
+      this.ctx.logger.warn(`${CODEX_PREFIX}: app-server teardown failed: ${toError(failure).message}`)
+    }
   }
 }
 
@@ -417,7 +515,10 @@ function normalizeAccount(response: JsonObject): CodexAccountSnapshot {
   }
 }
 
-/** Default `CODEX_HOME` when the deployment does not set one: `~/.codex`. */
+/**
+ * Default `CODEX_HOME` when the deployment does not set one: `~/.codex`.
+ * @returns the resolved default Codex home path.
+ */
 export function defaultCodexHome(): string {
   return join(homedir(), '.codex')
 }

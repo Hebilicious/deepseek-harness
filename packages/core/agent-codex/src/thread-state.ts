@@ -14,10 +14,11 @@ import type { ProjectionDefinition } from '@deepseek-ai/dsh-session-projection'
 declare module '@deepseek-ai/dsh-session/types' {
   interface SessionEventMap {
     /**
-     * The Codex thread this session is bound to. Appended once by the driver
-     * after `thread/start`, inside the pre-publication suffix; resume reads
-     * the fold to call `thread/resume` on the same identity. Log-only: the
-     * foreign thread id is not model-visible content.
+     * The Codex thread this session is bound to. Appended by the driver at
+     * bind time after `thread/start`, inside the pre-publication suffix, and
+     * once more when a recorded thread has no rollout left to resume. Resume
+     * reads the fold to call `thread/resume` on the newest identity.
+     * Log-only: the foreign thread id is not model-visible content.
      */
     'agent-codex/thread': {
       /** Opaque Codex thread id (UUIDv7) returned by `thread/start`. */
@@ -43,7 +44,12 @@ const codexThreadStateSchema: z.ZodType<CodexThreadState | null> = z.object({
   threadId: z.string().min(1),
 }).nullable()
 
-/** Host-only fold of the durable thread binding; a second binding event is a corrupt log. */
+/**
+ * Host-only fold of the durable thread binding. A bind appends the event once;
+ * a later event rebinds the session when the recorded thread cannot be
+ * resumed, so the fold keeps the newest identity and the next resume targets
+ * the live thread.
+ */
 export const codexThreadProjection = {
   key: 'codexThread',
   stateVersion: 1,
@@ -51,9 +57,6 @@ export const codexThreadProjection = {
   init: (): CodexThreadState | null => null,
   apply: (state, event) => {
     if (event.type !== 'agent-codex/thread') return state
-    if (state !== null) {
-      throw new Error(`duplicate agent-codex/thread binding at seq ${event.seq}`)
-    }
     const { threadId } = event.data
     if (typeof threadId !== 'string' || threadId.length === 0) {
       throw new Error(`invalid agent-codex/thread at seq ${event.seq}`)

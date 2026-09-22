@@ -38,33 +38,52 @@ export class FactoryOwnership {
     return this.teardown.signal
   }
 
+  /** Whether this factory may still accept new lifecycles.
+   * @returns `true` while the owner fiber is live and teardown has not begun.
+   */
   isActive(): boolean {
     return this.accepting && !INACTIVE_STATES.has(this.fiber.state)
   }
 
-  /** Track one live agent's shared teardown until it has run. */
+  /**
+   * Track one live agent's shared teardown until it has run.
+   * @param dispose - the agent's memoized teardown.
+   * @returns a function that stops tracking it.
+   */
   track(dispose: () => Promise<void>): () => void {
     this.liveAgents.add(dispose)
     return () => { this.liveAgents.delete(dispose) }
   }
 
-  /** Join config startup work that begins before an agent exists. */
+  /**
+   * Join config startup work that begins before an agent exists.
+   * @param job - the startup work factory disposal awaits.
+   */
   trackStartup(job: Promise<void>): void {
     this.startupTasks.add(job)
     const forget = () => { this.startupTasks.delete(job) }
     void job.then(forget, forget)
   }
 
-  /** Join one public create/resume continuation; factory dispose awaits its settlement. */
+  /**
+   * Join one public create/resume continuation; factory dispose awaits its settlement.
+   * @param job - the continuation whose settlement disposal awaits.
+   */
   trackWrapper(job: Promise<unknown>): void {
     this.trackStartup(job.then(() => undefined, () => undefined))
   }
 
-  /** Resolve `task`, or stop waiting when factory teardown begins. */
+  /**
+   * Resolve `job`, or stop waiting when factory teardown begins.
+   * @param job - the wait a caller must not extend past teardown.
+   */
   async waitWhileActive(job: Promise<void>): Promise<void> {
     await Promise.race([job, this.inactive.promise])
   }
 
+  /** Abort every fused signal and join live teardowns and startup work.
+   * @returns a promise that settles at full quiescence.
+   */
   async dispose(): Promise<void> {
     this.accepting = false
     this.teardown.abort(new Error(`${this.label} is not active`))
@@ -76,7 +95,13 @@ export class FactoryOwnership {
   }
 }
 
-/** Await `operation`, or throw the signal's reason as soon as it aborts. */
+/**
+ * Await `operation`, or throw the signal's reason as soon as it aborts.
+ * @param operation - the promise or value to await.
+ * @param signal - cancellation whose reason becomes the thrown error.
+ * @param id - session identity named in the abort error message.
+ * @returns the operation's value when it settles first.
+ */
 export async function raceAbort<T>(
   operation: PromiseLike<T> | T,
   signal: AbortSignal,
@@ -96,7 +121,14 @@ export async function raceAbort<T>(
   }
 }
 
-/** Start an abortable operation and release a value that arrives after cancellation. */
+/**
+ * Start an abortable operation and release a value that arrives after cancellation.
+ * @param operation - starts the work and returns its promise.
+ * @param signal - cancellation whose reason becomes the thrown error.
+ * @param id - session identity named in the abort error message.
+ * @param releaseAbandoned - receives a value that arrives after cancellation.
+ * @returns the operation's value when it settles first.
+ */
 export async function raceAbortCall<T>(
   operation: () => PromiseLike<T> | T,
   signal: AbortSignal,
@@ -112,7 +144,7 @@ export async function raceAbortCall<T>(
   try {
     return await raceAbort(pending, signal, id)
   } catch (error: unknown) {
-    // The signal can abort while the operation is awaited.
+    // oxlint-disable-next-line typescript/no-unnecessary-condition -- the signal can abort while the operation is awaited.
     if (signal.aborted && releaseAbandoned !== undefined) {
       void pending.then(releaseAbandoned, () => undefined)
     }
@@ -120,7 +152,10 @@ export async function raceAbortCall<T>(
   }
 }
 
-/** Reject an output-token cap that cannot be represented exactly on the request wire. */
+/**
+ * Reject an output-token cap that cannot be represented exactly on the request wire.
+ * @param options - the agent options to validate.
+ */
 export function assertAgentOptions(options: AgentOptions): void {
   if (options.maxTokens !== undefined
     && (!Number.isSafeInteger(options.maxTokens) || options.maxTokens <= 0)) {

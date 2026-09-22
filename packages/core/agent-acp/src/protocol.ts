@@ -18,7 +18,6 @@ import type {
 import type { ApprovalOutcome } from '@deepseek-ai/dsh-user-approval'
 import type { ContentBlock } from '@deepseek-ai/dsh-llm'
 import type { TurnEndReason } from '@deepseek-ai/dsh-session'
-import type { JsonValue } from '@deepseek-ai/dsh-util-values'
 
 /** Diagnostic prefix for every error this driver raises. */
 export const ACP_PREFIX = 'agent-acp'
@@ -63,7 +62,8 @@ export function acpTurnEnding(reason: StopReason): TurnEndReason {
  * text block carrying the unified diff; `terminal` output embeds as text;
  * content blocks map through {@link acpBlockToContent}.
  * @param content - the tool call's reported content.
- * @returns durable content blocks.
+ * @param rawOutput - raw ACP tool output text, when the update carried one.
+ * @returns durable content blocks and an optional fallback text.
  */
 export function acpToolContent(content: readonly ToolCallContent[] | undefined, rawOutput: unknown): {
   blocks: ContentBlock[]
@@ -76,7 +76,7 @@ export function acpToolContent(content: readonly ToolCallContent[] | undefined, 
       if (mapped !== undefined) blocks.push(mapped)
     } else if (entry.type === 'diff') {
       blocks.push({ type: 'text', text: `--- ${entry.path}\n${entry.newText}` })
-    } else if (entry.type === 'terminal') {
+    } else {
       blocks.push({ type: 'text', text: `[terminal ${entry.terminalId}]` })
     }
   }
@@ -87,7 +87,11 @@ export function acpToolContent(content: readonly ToolCallContent[] | undefined, 
   return { blocks }
 }
 
-/** Map one ACP content block to a durable content block; returns undefined for non-text blocks. */
+/**
+ * Map one ACP content block to a durable content block.
+ * @param block - one ACP content block.
+ * @returns the mapped content block, or `undefined` when the block has no dsh equivalent.
+ */
 export function acpBlockToContent(block: AcpContentBlock): ContentBlock | undefined {
   switch (block.type) {
     case 'text':
@@ -194,9 +198,10 @@ export function acpModeOption(options: readonly SessionConfigOption[] | null | u
   )
 }
 
+/** Serialize a tool result's raw output, falling back to its string form when it cannot be encoded. */
 function safeJson(value: unknown): string {
   try {
-    return JSON.stringify(value as JsonValue)
+    return JSON.stringify(value)
   } catch {
     return String(value)
   }

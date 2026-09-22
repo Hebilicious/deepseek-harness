@@ -30,6 +30,7 @@ import {
   type UserMessage,
 } from '@deepseek-ai/dsh-llm'
 import type { SandboxMode } from '@deepseek-ai/dsh-sandbox'
+import { JsonRpcResponseError } from '@deepseek-ai/dsh-sdk-protocol'
 import type { Session, SessionId, TurnEndReason } from '@deepseek-ai/dsh-session'
 import type { JsonValue } from '@deepseek-ai/dsh-util-values'
 import type { CodexAppServerConnection } from './connection.ts'
@@ -82,6 +83,8 @@ interface ActiveTurn {
   readonly attempts: Map<string, { attempt: AssistantStreamAttempt; textIndex: number }>
   /** Item ids that already have a `tool/call` committed and await their result. */
   readonly openToolItems: Set<string>
+  /** Set once the terminal frame settled `completion`, or the drive ended. */
+  settled: boolean
   /** The effective model this turn was started with, for message provenance. */
   model: string
 }
@@ -93,8 +96,41 @@ interface CodexRoute {
   readonly reasoningEffort?: string
 }
 
+/** Bind-time thread settings shared by `thread/start` and `thread/resume`. */
+interface ThreadRequest {
+  readonly cwd: string | undefined
+  readonly permission: { sandbox: SandboxMode; approvalPolicy: 'on-request' | 'never' }
+  readonly selection: CodexRoute
+}
+
 function optionalString(value: unknown): string | undefined {
   return typeof value === 'string' && value.length > 0 ? value : undefined
+}
+
+/**
+ * Read one optional wire string array. Codex sends `reasoning.summary` and
+ * `reasoning.content` as string arrays; a non-array member stands in for the
+ * empty array so a partial item folds no reasoning text.
+ * @param value - decoded frame member.
+ * @returns the string entries in wire order.
+ */
+function stringList(value: unknown): string[] {
+  return Array.isArray(value) ? value.filter((entry): entry is string => typeof entry === 'string') : []
+}
+
+/**
+ * Whether a `thread/resume` rejection means the recorded thread has no
+ * rollout on disk. Codex 0.153.4 answers `-32600 no rollout found for thread
+ * id ...` for a valid id it never stored, while a malformed recorded id draws
+ * `-32600 invalid session id: ...`; the message is therefore part of the
+ * match, and every other refusal stays fatal to the bind.
+ * @param error - the rejection from `thread/resume`.
+ * @returns `true` only for the missing-rollout refusal.
+ */
+function isMissingRollout(error: unknown): boolean {
+  return error instanceof JsonRpcResponseError
+    && error.code === -32600
+    && /no rollout found/i.test(error.message)
 }
 
 /**
@@ -127,7 +163,7 @@ export class CodexAgent extends ExternalAgent implements CodexThreadPeer {
 
   /**
    * Join the profile's shared app-server, prove the account is authenticated,
-   * then start a fresh durable thread or resume the recorded one. Runs
+   * then resume the recorded thread or start a fresh durable one. Runs
    * unpublished: any rejection rolls the whole create/resume back.
    * @param signal - fused caller/lifecycle cancellation.
    */
@@ -144,52 +180,94 @@ export class CodexAgent extends ExternalAgent implements CodexThreadPeer {
         )
       }
     }
-    const selection = this.effectiveSelection()
-    const permission = this.effectivePermissions()
-    const cwd = this.session.header.cwd
-    const existing = codexThreadOf(this.ctx.sessionProjections, this.session)
-    if (existing === undefined) {
-      const response = codexObject(
-        await connection.request('thread/start', {
-          ...cwd === undefined ? {} : { cwd },
-          ephemeral: false,
-          sandbox: permission.sandbox,
-          approvalPolicy: permission.approvalPolicy,
-          ...selection.model === undefined ? {} : { model: selection.model },
-        }, signal),
-        'thread/start response',
-        CODEX_PREFIX,
-      )
-      const thread = codexObject(response.thread, 'thread/start thread', CODEX_PREFIX)
-      const threadId = codexString(thread.id, 'thread/start thread id', CODEX_PREFIX)
-      if (thread.ephemeral === true) {
-        throw new Error(`${CODEX_PREFIX}: app-server created an ephemeral thread for a durable session`)
-      }
-      this.threadId = threadId
-      this.session.append('agent-codex/thread', { threadId })
-      this.captureRoute(response)
-    } else {
-      const response = codexObject(
+    const request = {
+      cwd: this.session.header.cwd,
+      permission: this.effectivePermissions(),
+      selection: this.effectiveSelection(),
+    }
+    const recorded = codexThreadOf(this.ctx.sessionProjections, this.session)
+    // The durable binding is appended at bind time, so a session that was
+    // created and never prompted owns a thread with no rollout on disk; that
+    // thread cannot be resumed and is replaced by a fresh one.
+    const resumed = recorded === undefined
+      ? undefined
+      : await this.resumeThread(connection, recorded, request, signal)
+    const threadId = resumed ?? await this.startThread(connection, request, signal)
+    this.detachThread = this.runtime.registerThread(threadId, this)
+  }
+
+  /**
+   * Start a fresh durable thread and append its identity once, at bind time.
+   * @returns the started thread id.
+   */
+  private async startThread(
+    connection: CodexAppServerConnection,
+    request: ThreadRequest,
+    signal: AbortSignal,
+  ): Promise<string> {
+    const response = codexObject(
+      await connection.request('thread/start', {
+        ...request.cwd === undefined ? {} : { cwd: request.cwd },
+        ephemeral: false,
+        sandbox: request.permission.sandbox,
+        approvalPolicy: request.permission.approvalPolicy,
+        ...request.selection.model === undefined ? {} : { model: request.selection.model },
+      }, signal),
+      'thread/start response',
+      CODEX_PREFIX,
+    )
+    const thread = codexObject(response.thread, 'thread/start thread', CODEX_PREFIX)
+    const threadId = codexString(thread.id, 'thread/start thread id', CODEX_PREFIX)
+    if (thread.ephemeral === true) {
+      throw new Error(`${CODEX_PREFIX}: app-server created an ephemeral thread for a durable session`)
+    }
+    this.threadId = threadId
+    this.session.append('agent-codex/thread', { threadId })
+    this.captureRoute(response)
+    return threadId
+  }
+
+  /**
+   * Rejoin the durable thread recorded by a previous bind.
+   * @returns the resumed thread id, or `undefined` when its rollout is gone
+   * and the caller must start a fresh thread instead.
+   */
+  private async resumeThread(
+    connection: CodexAppServerConnection,
+    existing: string,
+    request: ThreadRequest,
+    signal: AbortSignal,
+  ): Promise<string | undefined> {
+    let response: JsonObject
+    try {
+      response = codexObject(
         await connection.request('thread/resume', {
           threadId: existing,
           excludeTurns: true,
-          ...cwd === undefined ? {} : { cwd },
-          sandbox: permission.sandbox,
-          approvalPolicy: permission.approvalPolicy,
-          ...selection.model === undefined ? {} : { model: selection.model },
+          ...request.cwd === undefined ? {} : { cwd: request.cwd },
+          sandbox: request.permission.sandbox,
+          approvalPolicy: request.permission.approvalPolicy,
+          ...request.selection.model === undefined ? {} : { model: request.selection.model },
         }, signal),
         'thread/resume response',
         CODEX_PREFIX,
       )
-      const thread = codexObject(response.thread, 'thread/resume thread', CODEX_PREFIX)
-      const resumed = codexString(thread.id, 'thread/resume thread id', CODEX_PREFIX)
-      if (resumed !== existing) {
-        throw new Error(`${CODEX_PREFIX}: app-server resumed thread "${resumed}" instead of "${existing}"`)
-      }
-      this.threadId = existing
-      this.captureRoute(response)
+    } catch (error: unknown) {
+      // A caller abort is not a missing thread, and any other refusal (auth,
+      // malformed recorded id, service failure) is a real failure the caller
+      // must see rather than silently re-binding a fresh thread.
+      if (signal.aborted || !isMissingRollout(error)) throw error
+      this.ctx.logger.warn(`${CODEX_PREFIX}: thread "${existing}" has no rollout; starting a fresh thread`)
+      return undefined
     }
-    this.detachThread = this.runtime.registerThread(this.threadId, this)
+    const thread = codexObject(response.thread, 'thread/resume thread', CODEX_PREFIX)
+    const resumed = codexString(thread.id, 'thread/resume thread id', CODEX_PREFIX)
+    if (resumed !== existing) {
+      throw new Error(`${CODEX_PREFIX}: app-server resumed thread "${resumed}" instead of "${existing}"`)
+    }
+    this.threadId = existing
+    this.captureRoute(response)
+    return existing
   }
 
   /**
@@ -248,10 +326,15 @@ export class CodexAgent extends ExternalAgent implements CodexThreadPeer {
       pendingReasoning: [],
       attempts: new Map(),
       openToolItems: new Set(),
+      settled: false,
       model,
     }
     this.active = active
     this.retired = undefined
+    // A notification the projector cannot fold rejects the completion through
+    // `failed` — possibly while `turn/start` is still in flight, before the
+    // race below observes it. Keep that rejection observed either way.
+    void active.completion.promise.catch(() => {})
     try {
       const permission = this.effectivePermissions()
       const response = codexObject(
@@ -278,10 +361,13 @@ export class CodexAgent extends ExternalAgent implements CodexThreadPeer {
       )
       return this.turnEnding(terminal, drive)
     } finally {
+      /* v8 ignore else -- the base runs one turn body at a time, so no later
+         turn can have replaced this.active before this turn retires. */
       if (this.active === active) {
         this.active = undefined
         this.retired = active
       }
+      active.settled = true
       // Tool items left open by an interrupted or failed turn still settle:
       // a dangling `tool/call` never gets its result.
       for (const itemId of active.openToolItems) {
@@ -421,11 +507,12 @@ export class CodexAgent extends ExternalAgent implements CodexThreadPeer {
   protected async interruptTurn(drive: ExternalTurnDrive): Promise<void> {
     const connection = this.connection
     const threadId = this.threadId
-    const active = this.active?.drive === drive ? this.active
-      : this.retired?.drive === drive ? this.retired
-        : undefined
-    if (connection === undefined || threadId === undefined || active === undefined) return
-    const turnId = await this.awaitTurnId(active, connection)
+    const owner = this.active?.drive === drive ? this.active : this.retired
+    /* v8 ignore if -- a live drive's abort listener always resolves to the
+       active or the just-retired turn, and unbind clears the binding only after
+       driver quiescence, so neither refusal arm can run */
+    if (connection === undefined || threadId === undefined || owner?.drive !== drive) return
+    const turnId = await this.awaitTurnId(owner, connection)
     if (turnId === undefined) return
     await connection.request('turn/interrupt', { threadId, turnId })
   }
@@ -447,13 +534,18 @@ export class CodexAgent extends ExternalAgent implements CodexThreadPeer {
     const pending = Promise.race<string | undefined>([
       active.turnIdReady.promise,
       active.completion.promise.then(() => undefined, () => undefined),
-      connection.fatal.then(() => undefined, () => undefined),
+      // The connection's fatal promise only ever rejects, so its loss resolves
+      // this wait without a fulfilling arm.
+      connection.fatal.catch(() => undefined),
     ])
     if (signal === undefined) return pending
     return raceAbort(pending, signal, this.id).then(
       id => id,
       (error: unknown) => {
+        /* v8 ignore else -- raceAbort rejects only after this signal aborted,
+           so the propagate arm cannot run */
         if (signal.aborted) return undefined
+        /* v8 ignore next -- see the arm above: no non-abort rejection exists */
         throw error
       },
     )
@@ -462,9 +554,32 @@ export class CodexAgent extends ExternalAgent implements CodexThreadPeer {
   // ---- CodexThreadPeer (thread-scoped dispatch from the shared router) ----
 
   /**
+   * Report a failure raised while consuming this thread's notification. The
+   * failure ends this thread's live turn and reaches the agent's error
+   * channel; the shared connection keeps serving every other thread.
+   * @param error - the failure this agent's notification dispatch raised.
+   */
+  failed(error: Error): void {
+    const active = this.active
+    // A live turn that has not seen its terminal frame owns the failure:
+    // rejecting the completion ends the turn as an error, which reports once
+    // at the turn/step boundary. A settled turn has no drive left to fail.
+    if (active !== undefined && !active.settled) {
+      active.settled = true
+      active.completion.reject(error)
+      return
+    }
+    /* v8 ignore next -- the host registers the turnBoundary unit for every
+       agent session this runtime serves, so the optional read always resolves */
+    const turn = this.hostCtx.sessionProjections.stateOf(this.session, 'turnBoundary')?.lastTurn ?? 0
+    this.dispatch.emit('agent/error', { turn, step: 0, error })
+  }
+
+  /**
    * Consume one notification addressed to this agent's thread. Turn-scoped
    * methods validate against the live drive; thread-scoped ones update
-   * bookkeeping. A protocol violation throws, which fails the connection.
+   * bookkeeping. A throw is scoped to this thread: the router reports it
+   * through {@link failed} and keeps the shared connection alive.
    */
   notification(method: string, params: JsonObject): void {
     const active = this.active
@@ -585,6 +700,7 @@ export class CodexAgent extends ExternalAgent implements CodexThreadPeer {
       if (!CODEX_TERMINAL_TURN_STATUSES.includes(turn.status as never)) {
         throw new Error(`${CODEX_PREFIX}: app-server returned invalid terminal turn status ${String(turn.status)}`)
       }
+      active.settled = true
       active.completion.resolve(turn)
       return
     }
@@ -754,14 +870,9 @@ export class CodexAgent extends ExternalAgent implements CodexThreadPeer {
       }
       case 'reasoning': {
         const parts = [
-          ...Array.isArray(item.summary) ? item.summary : [],
-          ...Array.isArray(item.content) ? item.content : [],
-        ].flatMap((part) => {
-          if (typeof part === 'string') return [part]
-          const record = part !== null && typeof part === 'object' ? part as JsonObject : undefined
-          const text = record !== undefined ? optionalString(record.text) : undefined
-          return text === undefined ? [] : [text]
-        })
+          ...stringList(item.summary),
+          ...stringList(item.content),
+        ]
         const combined = parts.join('\n')
         if (combined.length > 0) active.pendingReasoning.push(combined)
         return
@@ -916,9 +1027,10 @@ export class CodexAgent extends ExternalAgent implements CodexThreadPeer {
       const options = Array.isArray(question.options)
         ? question.options.flatMap((option) => {
           const record = option !== null && typeof option === 'object' ? option as JsonObject : undefined
-          const label = record !== undefined ? optionalString(record.label) : undefined
+          if (record === undefined) return []
+          const label = optionalString(record.label)
           if (label === undefined) return []
-          const description = record !== undefined ? optionalString(record.description) : undefined
+          const description = optionalString(record.description)
           return [{ label, ...description === undefined ? {} : { description } }]
         })
         : undefined
@@ -1102,7 +1214,9 @@ export class CodexAgent extends ExternalAgent implements CodexThreadPeer {
   /** `clientUserMessageId` mirrors the last claimed message's durable id. */
   private clientMessageId(messages: readonly UserMessage[]): JsonObject {
     const last = messages[messages.length - 1]
-    return last === undefined ? {} : { clientUserMessageId: last.id as string }
+    /* v8 ignore next -- the base opens no turn for an empty claim, so a driven
+       turn always carries at least one message; the empty arm is type-required */
+    return last === undefined ? {} : { clientUserMessageId: last.id }
   }
 
   /**
@@ -1115,7 +1229,10 @@ export class CodexAgent extends ExternalAgent implements CodexThreadPeer {
     if (attachments === undefined) return undefined
     try {
       if (block.type === 'image') return attachments.imageHostPath(block.attachment)
+      /* v8 ignore else -- injectHarness filters to image and file blocks before
+         this call, and toCodexInput throws for every other kind */
       if (block.type === 'file') return attachments.fileHostPath(block.attachment)
+      /* v8 ignore next -- see the arm above: no other block kind reaches here */
       return undefined
     } catch (error: unknown) {
       this.ctx.logger.warn(`${CODEX_PREFIX}: attachment host path unavailable: ${errorChain(error)}`)
@@ -1165,13 +1282,13 @@ export class CodexAgent extends ExternalAgent implements CodexThreadPeer {
     switch (turn.status) {
       case 'completed':
         return { kind: 'completed' }
-      case 'interrupted':
-        return {
-          kind: 'aborted',
-          reason: drive.signal.aborted
-            ? drive.signal.reason as AgentCancelCause
-            : { kind: 'user' },
-        }
+      case 'interrupted': {
+        let reason: AgentCancelCause = { kind: 'user' }
+        /* v8 ignore if -- the drive's raceAbort rejects as soon as its signal
+           aborts, so a server-reported interruption only reaches a live drive */
+        if (drive.signal.aborted) reason = drive.signal.reason as AgentCancelCause
+        return { kind: 'aborted', reason }
+      }
       case 'failed': {
         const info = codexTurnFailureInfo(turn)
         if (info.maxTokens === true) return { kind: 'max-tokens' }
@@ -1187,6 +1304,8 @@ export class CodexAgent extends ExternalAgent implements CodexThreadPeer {
           },
         }
       }
+      /* v8 ignore next -- closed-union guard: dispatchTurnFrame validated the
+         terminal status against CODEX_TERMINAL_TURN_STATUSES before settling */
       default:
         throw new Error(`${CODEX_PREFIX}: app-server returned invalid terminal turn status ${String(turn.status)}`)
     }
@@ -1199,7 +1318,7 @@ export class CodexAgent extends ExternalAgent implements CodexThreadPeer {
       ...optionalString(item.cwd) === undefined ? {} : { cwd: item.cwd as string },
       ...typeof item.exitCode === 'number' ? { exitCode: item.exitCode } : {},
       ...typeof item.durationMs === 'number' ? { durationMs: item.durationMs } : {},
-    } as unknown as JsonValue
+    }
   }
 
   /** Model-facing result text for a file change item. */
@@ -1295,6 +1414,8 @@ interface ParsedHunk {
  * Parse one unified diff into per-hunk before/after text. Context lines land
  * on both sides; `\ No newline` markers annotate the patch and never enter
  * content. Malformed hunks are skipped rather than failing the projection.
+ * @param diff - the unified diff text Codex reported for one file change.
+ * @returns the parsed hunks in patch order; malformed hunks are omitted.
  */
 export function parseUnifiedDiff(diff: string): ParsedHunk[] {
   const hunks: ParsedHunk[] = []

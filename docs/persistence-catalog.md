@@ -139,10 +139,11 @@ Source: [`packages/core/agent-acp/src/session-state.ts:22`](../packages/core/age
 
 ```ts persistence-catalog
 /**
- * The Codex thread this session is bound to. Appended once by the driver
- * after `thread/start`, inside the pre-publication suffix; resume reads
- * the fold to call `thread/resume` on the same identity. Log-only: the
- * foreign thread id is not model-visible content.
+ * The Codex thread this session is bound to. Appended by the driver at
+ * bind time after `thread/start`, inside the pre-publication suffix, and
+ * once more when a recorded thread has no rollout left to resume. Resume
+ * reads the fold to call `thread/resume` on the newest identity.
+ * Log-only: the foreign thread id is not model-visible content.
  */
 'agent-codex/thread': {
   /** Opaque Codex thread id (UUIDv7) returned by `thread/start`. */
@@ -150,7 +151,7 @@ Source: [`packages/core/agent-acp/src/session-state.ts:22`](../packages/core/age
 }
 ```
 
-Source: [`packages/core/agent-codex/src/thread-state.ts:22`](../packages/core/agent-codex/src/thread-state.ts)
+Source: [`packages/core/agent-codex/src/thread-state.ts:23`](../packages/core/agent-codex/src/thread-state.ts)
 
 ### `agent-preset/*`
 

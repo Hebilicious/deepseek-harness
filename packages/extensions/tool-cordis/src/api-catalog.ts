@@ -82,6 +82,29 @@ export interface TypeApiEntry {
 /** Every harness `ctx.<key>` service, sorted by key. */
 export const SERVICE_API: readonly ServiceApiEntry[] = [
   {
+    key: 'acpHarness',
+    summary: 'The `acpHarness` service (`acp` Remote namespace).',
+    description: 'The `acpHarness` service (`acp` Remote namespace). Owns the shared `devin acp` process and connection, the agent-factory host, the `devin` catalog adapter, and every auth operation — none of which belong to a session.',
+    methods: [
+      {
+        signature: '@Remote async status(signal: AbortSignal): Promise<DevinAccountSnapshot>',
+        description: 'Read the Devin account state: the agent\'s advertised auth methods plus the `devin auth status` CLI verdict.',
+        parameters: [{ name: 'signal', description: 'caller lifetime.' }],
+        returns: 'normalized account facts.',
+      },
+      {
+        signature: '@Remote(\'login\') async login(request: { methodId?: string }, signal: AbortSignal): Promise<void>',
+        description: 'Start the agent\'s browser authentication flow (`devin-browser`).',
+        parameters: [{ name: 'request', description: '`{methodId}`; defaults to the first advertised method.' }, { name: 'signal', description: 'caller lifetime.' }],
+      },
+      {
+        signature: '@Remote async logout(signal: AbortSignal): Promise<void>',
+        description: 'Sign the Devin account out — the ACP `logout` request when the agent advertises it, the `devin auth logout` CLI otherwise.',
+        parameters: [{ name: 'signal', description: 'caller lifetime.' }],
+      },
+    ],
+  },
+  {
     key: 'agentDefaultModel',
     summary: 'Owns the default model selection independently of any Host or transport.',
     description: 'Owns the default model selection independently of any Host or transport. The composition entry remains usable without a settings provider; when one is mounted, its user layer is read live.',
@@ -112,19 +135,19 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
       },
       {
         signature: 'async create(id: SessionId, options: AgentOptions = {}, meta: Pick<SessionHeader, \'cwd\'> = {}): Promise<Agent>',
-        description: 'Create an agent and session under one caller-supplied identity, owned by the accessing fiber. Constructor-driven config calls mint a fresh combined id before entering this boundary. When a persistence backend is mounted, the session\'s durable identity and any seed are stored before publication.',
+        description: 'Create and publish a fresh agent around a caller-supplied session id.',
         parameters: [{ name: 'id', description: 'shared agent/session identity.' }, { name: 'options', description: 'concrete loop options.' }, { name: 'meta', description: 'optional fresh-session workspace metadata.' }],
         returns: 'the published running agent.',
       },
       {
         signature: 'async createAgent(ownerCtx: Context, options: CreateAgentOptions): Promise<AgentHandle>',
-        description: 'Create an owned agent on a caller-supplied session id.',
+        description: 'Create an owned agent on a caller-supplied session id. The registered factory is the shared host; this delegate keeps the service\'s published AgentFactory surface identical to it.',
         parameters: [{ name: 'ownerCtx', description: 'caller context that structurally owns the lifecycle.' }, { name: 'options', description: 'identities, optional live parent, session seed/metadata, loop options, setup, and cancellation.' }],
         returns: 'the published handle.',
       },
       {
         signature: 'async resume(ownerCtx: Context, options: ResumeAgentOptions): Promise<AgentHandle>',
-        description: 'Resume an owned agent from the configured persistence service.',
+        description: 'Resume an owned agent from the configured persistence service. The registered factory is the shared host; this delegate keeps the service\'s published AgentFactory surface identical to it.',
         parameters: [{ name: 'ownerCtx', description: 'caller context that owns load, setup, and the live lifecycle.' }, { name: 'options', description: 'persisted identity, optional live parent, loop options, setup, and cancellation.' }],
         returns: 'the published handle.',
       },
@@ -662,6 +685,53 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
         description: 'Execute one program against the request\'s bindings and capture what it emitted. See the class doc for the resolution contract (error is a result field; rejection means Service Definition contract misuse only).',
         parameters: [{ name: 'request', description: 'the program, its bindings, and the abort signal; the request carries everything the runtime acts on, with no hidden defaults.' }],
         returns: 'the run\'s outcome: completion value (when transferable), the ordered log capture, and the failure (if any).',
+      },
+    ],
+  },
+  {
+    key: 'codexAppServer',
+    summary: 'The `codexAppServer` service (`codex` Remote namespace).',
+    description: 'The `codexAppServer` service (`codex` Remote namespace). Owns the shared app-server process and connection, the agent-factory host, the `codex` catalog adapter, and every account/login/rate-limit operation — none of which belong to a session.',
+    methods: [
+      {
+        signature: '@Remote async status(signal: AbortSignal): Promise<CodexAccountSnapshot>',
+        description: 'Read the Codex account state.',
+        parameters: [{ name: 'signal', description: 'caller lifetime.' }],
+        returns: 'normalized account facts.',
+      },
+      {
+        signature: '@Remote(\'loginDeviceCode\') async beginDeviceCode(signal: AbortSignal): Promise<CodexDeviceCodeLogin>',
+        description: 'Start a device-code login; the panel shows the URL and code.',
+        parameters: [{ name: 'signal', description: 'caller lifetime.' }],
+        returns: 'the attempt id, verification URL, and one-time code.',
+      },
+      {
+        signature: '@Remote(\'loginBrowser\') async beginBrowser(signal: AbortSignal): Promise<CodexBrowserLogin>',
+        description: 'Start a browser OAuth login; usable only where a browser can reach the app-server\'s localhost callback.',
+        parameters: [{ name: 'signal', description: 'caller lifetime.' }],
+        returns: 'the attempt id and authorization URL.',
+      },
+      {
+        signature: '@Remote(\'cancelLogin\') async cancelLogin(request: { loginId?: string }, signal: AbortSignal): Promise<void>',
+        description: 'Cancel one in-flight login attempt.',
+        parameters: [{ name: 'request', description: '`{loginId}` from a login start.' }, { name: 'signal', description: 'caller lifetime.' }],
+      },
+      {
+        signature: '@Remote async logout(signal: AbortSignal): Promise<void>',
+        description: 'Sign the Codex account out.',
+        parameters: [{ name: 'signal', description: 'caller lifetime.' }],
+      },
+      {
+        signature: '@Remote async rateLimits(signal: AbortSignal): Promise<CodexRateLimits>',
+        description: 'Read account quota.',
+        parameters: [{ name: 'signal', description: 'caller lifetime.' }],
+        returns: 'the normalized rate-limit payload.',
+      },
+      {
+        signature: '@Remote({ mode: \'stream\' }) async *events(signal: AbortSignal): AsyncIterable<CodexAccountNotification>',
+        description: 'Stream connection-global account notifications (`account/login/completed`, `account/updated`, `account/rateLimits/updated`).',
+        parameters: [{ name: 'signal', description: 'caller lifetime; aborting ends the stream.' }],
+        returns: 'account notifications as they arrive.',
       },
     ],
   },
@@ -3843,6 +3913,26 @@ export const TYPE_API: readonly TypeApiEntry[] = [
     declaration: 'export interface CodeRunResult {\n    value?: CodeJsonValue;\n    logs: string[];\n    error?: CodeRunFailure;\n}',
   },
   {
+    name: 'CodexAccountNotification',
+    declaration: 'export interface CodexAccountNotification {\n    readonly method: string;\n    readonly params: JsonValue;\n}',
+  },
+  {
+    name: 'CodexAccountSnapshot',
+    declaration: 'export interface CodexAccountSnapshot {\n    readonly authenticated: boolean;\n    readonly requiresOpenaiAuth: boolean;\n    readonly accountType?: string;\n    readonly email?: string;\n    readonly planType?: string;\n}',
+  },
+  {
+    name: 'CodexBrowserLogin',
+    declaration: 'export interface CodexBrowserLogin {\n    readonly loginId: string;\n    readonly authUrl: string;\n}',
+  },
+  {
+    name: 'CodexDeviceCodeLogin',
+    declaration: 'export interface CodexDeviceCodeLogin {\n    readonly loginId: string;\n    readonly verificationUrl: string;\n    readonly userCode: string;\n}',
+  },
+  {
+    name: 'CodexRateLimits',
+    declaration: 'export interface CodexRateLimits {\n    readonly rateLimits: JsonValue;\n    readonly rateLimitsByLimitId: Record<string, JsonValue> | null;\n}',
+  },
+  {
     name: 'CollectedOutput',
     declaration: 'export interface CollectedOutput {\n    text: string;\n    truncated: boolean;\n    spillPath?: string;\n}',
   },
@@ -4077,6 +4167,14 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   {
     name: 'DeepSeekLlmApiJson',
     declaration: 'export type DeepSeekLlmApiJson = null | boolean | number | string | DeepSeekLlmApiJson[] | {\n    [key: string]: DeepSeekLlmApiJson;\n};',
+  },
+  {
+    name: 'DevinAccountSnapshot',
+    declaration: 'export interface DevinAccountSnapshot {\n    readonly connected: boolean;\n    readonly authMethods: readonly DevinAuthMethod[];\n    readonly cliLoggedIn?: boolean;\n    readonly cliDetail?: string;\n    readonly agentInfo?: {\n        readonly name: string;\n        readonly title?: string;\n        readonly version: string;\n    };\n}',
+  },
+  {
+    name: 'DevinAuthMethod',
+    declaration: 'export interface DevinAuthMethod {\n    readonly id: string;\n    readonly name: string;\n    readonly description?: string;\n}',
   },
   {
     name: 'DiffCallView',

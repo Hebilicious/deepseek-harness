@@ -75,7 +75,8 @@ class FakeAgent extends ExternalAgent {
     () => Promise.resolve({ kind: 'completed' })
   steerImpl: (message: UserMessage, drive: ExternalTurnDrive) => Promise<boolean> =
     () => Promise.resolve(true)
-  injectImpl: (message: UserMessage) => Promise<boolean> = () => Promise.resolve(false)
+  /** Injection script; `undefined` keeps the base class's refusing default. */
+  injectImpl: ((message: UserMessage) => Promise<boolean>) | undefined
   interruptImpl: (drive: ExternalTurnDrive) => Promise<void> = () => Promise.resolve()
 
   /** Test read of the protected route fold. */
@@ -105,7 +106,7 @@ class FakeAgent extends ExternalAgent {
 
   protected override injectHarness(message: UserMessage): Promise<boolean> {
     this.injected.push(message)
-    return this.injectImpl(message)
+    return this.injectImpl === undefined ? super.injectHarness(message) : this.injectImpl(message)
   }
 
   protected interruptTurn(drive: ExternalTurnDrive): Promise<void> {
@@ -218,9 +219,12 @@ class FakePersistence extends SessionPersistence {
       append: (events: readonly SessionEvent[]) => {
         this.appendCalls += 1
         const store = (): void => { stored.push(...events) }
-        return this.appendGate === undefined
-          ? (store(), Promise.resolve())
-          : this.appendGate.promise.then(store)
+        const gate = this.appendGate
+        if (gate === undefined) {
+          store()
+          return Promise.resolve()
+        }
+        return gate.promise.then(store)
       },
       flush: () => Promise.resolve(),
       close: () => {
@@ -310,7 +314,7 @@ function gateDrive(agent: FakeAgent, onAbort: 'throw' | 'complete' = 'throw'): {
     if (onAbort === 'throw') drive.signal.throwIfAborted()
     return { kind: 'completed' }
   }
-  return { started: started.promise, release: () => release.resolve(undefined) }
+  return { started: started.promise, release: () => { release.resolve(undefined) } }
 }
 
 async function create(
@@ -671,6 +675,13 @@ describe('ExternalAgent turn drive', () => {
 
     expect(errors).toHaveLength(1)
     expect(types(agent)).not.toContain('turn/end')
+  })
+
+  it('resolves an empty route when neither options nor a selection declare one', async () => {
+    bench = await harness()
+    const { agent } = await create(bench.ctx, 'undeclared')
+
+    expect(agent.effectiveSelection()).toEqual({ provider: '', model: '' })
   })
 
   it('resolves the effective route from durable selection over declared options', async () => {
@@ -1075,6 +1086,7 @@ describe('ExternalHarnessProcess', () => {
     terminate?: () => void
     noPipes?: boolean
     stderrText?: string
+    collectedStderr?: boolean
   } = {}): SubprocessHandle {
     const reader: SubprocessOutputReader = {
       readFrom: () => ({ text: options.stderrText ?? '', nextOffset: 0, lossy: false }),
@@ -1083,7 +1095,7 @@ describe('ExternalHarnessProcess', () => {
       stdin: options.noPipes === true ? undefined : new PassThrough(),
       stdout: options.noPipes === true ? undefined : new PassThrough(),
       stderr: new PassThrough(),
-      collected: { stderr: reader },
+      collected: options.collectedStderr === false ? {} : { stderr: reader },
       done: Promise.resolve({ exitCode: 0, signal: null }),
       terminate: options.terminate ?? (() => {}),
       waitForExit: options.waitForExit ?? (() => Promise.resolve(true)),
@@ -1175,6 +1187,24 @@ describe('ExternalHarnessProcess', () => {
     expect(exitWaits).toBe(1)
   })
 
+  it('reports the missing-pipe failure even when the failing child cannot be awaited', async () => {
+    const runtime = new StubRuntime()
+    runtime.handleFactory = () => fakeHandle({
+      noPipes: true,
+      waitForExit: () => Promise.reject(new Error('child already reaped')),
+    })
+
+    await expect(spawn(runtime)).rejects.toThrow('no piped stdio')
+  })
+
+  it('stderrTail is empty when the provider collected no stderr reader', async () => {
+    const runtime = new StubRuntime()
+    runtime.handleFactory = () => fakeHandle({ collectedStderr: false })
+    const proc = await spawn(runtime)
+
+    expect(proc.stderrTail()).toBe('')
+  })
+
   it('dispose resolves on in-grace exit without terminating', async () => {
     const runtime = new StubRuntime()
     let terminated = 0
@@ -1195,7 +1225,9 @@ describe('ExternalHarnessProcess', () => {
       terminate: () => { terminated += 1 },
       waitForExit: (signal?: AbortSignal) => signal === undefined
         ? Promise.resolve(true)
-        : new Promise(resolve => signal.addEventListener('abort', () => resolve(false), { once: true })),
+        : new Promise<boolean>((resolve) => {
+          signal.addEventListener('abort', () => { resolve(false) }, { once: true })
+        }),
     })
     const proc = await spawn(runtime)
 
@@ -1250,5 +1282,71 @@ describe('DurableAgentInbox edges', () => {
     expect(agent.inbox.consume(brandString<MessageId>('missing'), 1)).toBe(false)
     expect(agent.inbox.remove(brandString<MessageId>('missing'))).toBe(false)
     expect(agent.inbox.replace(brandString<MessageId>('missing'), msg('x'))).toBe(false)
+  })
+})
+
+describe('shared driver defaults', () => {
+  it('refuses injected context when the driver declares no injection channel', async () => {
+    bench = await harness()
+    const { agent } = await create(bench.ctx)
+
+    agent.inject(msg('context'))
+    await flushForwards()
+
+    expect(agent.injected.map(textOf)).toEqual(['context'])
+    expect(types(agent)).not.toContain('user/message')
+    expect(agent.inbox.nextStep.map(textOf)).toEqual(['context'])
+  })
+
+  it('commits context the harness accepts between turns and reports a rejected forward', async () => {
+    bench = await harness()
+    const { agent } = await create(bench.ctx)
+
+    agent.injectImpl = () => Promise.resolve(true)
+    agent.inject(msg('accepted'))
+    await flushForwards()
+    // The accepted row leaves the queue and becomes a durable user message.
+    expect(types(agent)).toEqual(['agent/inbox/spliced', 'agent/inbox/spliced', 'user/message'])
+    expect(agent.inbox.nextStep).toEqual([])
+
+    const failure = new Error('inject transport failed')
+    const errors: unknown[] = []
+    bench.ctx.on('agent/error', ({ agent: subject, error }) => {
+      if (subject === agent) errors.push(error)
+    })
+    agent.injectImpl = () => Promise.reject(failure)
+    agent.inject(msg('rejected'))
+    await flushForwards()
+    expect(errors).toEqual([failure])
+    expect(agent.inbox.nextStep.map(textOf)).toEqual(['rejected'])
+  })
+
+  it('refuses creation once the factory ownership is torn down', async () => {
+    bench = await harness()
+    await bench.host.disposeOwnership()
+
+    await expect(bench.ctx.agents.create({ sessionId: SessionId('after-teardown') }))
+      .rejects.toThrow('fake is not active')
+    expect(bench.ctx.agents.list()).toEqual([])
+  })
+})
+
+describe('ExternalTurnProjector route and empty attempts', () => {
+  it('records an empty text attempt and a route carrying reasoning effort', async () => {
+    bench = await harness()
+    const { agent } = await create(bench.ctx)
+    agent.driveImpl = (_messages, drive) => {
+      drive.projector.assistantText('', { provider: 'p1', model: 'm1' })
+      drive.projector.noteRoute({ provider: 'p1', model: 'm1', reasoningEffort: 'high' })
+      return Promise.resolve({ kind: 'completed' })
+    }
+
+    send(agent, 'go')
+    await agent.whenIdle()
+
+    const events = agent.session.snapshotEvents()
+    expect(events.filter(event => event.type === 'assistant/message')).toHaveLength(1)
+    const header = events.find(event => event.type === 'request/header')
+    expect(header === undefined ? undefined : JSON.stringify(header.data)).toContain('high')
   })
 })

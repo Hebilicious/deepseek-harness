@@ -24,9 +24,10 @@ export interface CodexConnectionHandlers {
    */
   request(method: string, params: JsonObject): Promise<unknown>
   /**
-   * Consume one server→client notification. Throwing fails the connection —
-   * notifications carry no response channel, so a malformed one is a
-   * protocol violation.
+   * Consume one server→client notification. Notifications carry no response
+   * channel, so the handler contains its own failures — the runtime scopes a
+   * thread-scoped one to the agent that owns the thread. A throw reaching the
+   * connection means the router itself failed, which is connection-scoped.
    * @param method - the wire method name.
    * @param params - the decoded params object.
    */
@@ -99,13 +100,7 @@ export class CodexAppServerConnection {
         throw normalized
       }
     })
-    this.transport.onNotification((method, params) => {
-      try {
-        this.handlers.notification(method, params)
-      } catch (error: unknown) {
-        this.fail(thrown(error))
-      }
-    })
+    this.transport.onNotification(this.onNotification)
     this.input.on('error', this.onInputError)
     this.input.on('end', this.onInputEnd)
     // Pipe errors can race protocol closure and process teardown. Retain both
@@ -180,8 +175,28 @@ export class CodexAppServerConnection {
     this.transport.close()
   }
 
-  private fail(error: Error): void {
+  /**
+   * Enter fatal state with `error`. Every operation racing {@link fatal}
+   * rejects, and the shared connection serves no further work. The runtime
+   * calls this when the app-server child exits, so requests in flight observe
+   * the loss instead of waiting on a wire that will never answer.
+   * @param error - the failure every guarded operation reports.
+   */
+  fail(error: Error): void {
     this.fatalPromise.reject(error)
+  }
+
+  private readonly onNotification = (method: string, params: JsonObject): void => {
+    try {
+      this.handlers.notification(method, params)
+    } catch (error: unknown) {
+      // The router scopes thread failures to their owning agent, so a throw
+      // reaching here means the router itself failed and the connection can no
+      // longer be trusted to route. The transport does not await notification
+      // handlers, so this catch also keeps the failure off the unhandled-
+      // rejection path.
+      this.fail(thrown(error))
+    }
   }
 
   private readonly onInputError = (error: Error): void => {

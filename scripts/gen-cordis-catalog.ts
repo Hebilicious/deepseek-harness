@@ -55,6 +55,8 @@ export { REGION_BEGIN, REGION_END }
  */
 export const SERVICE_PAGE: Record<string, string> = {
   agentLoop: 'core.md',
+  acpHarness: 'core.md',
+  codexAppServer: 'core.md',
   agentDefaultModel: 'core.md',
   agentPresets: 'core.md',
   agents: 'core.md',
@@ -698,6 +700,12 @@ export const TYPE_LINK_EXEMPTIONS: Readonly<Record<string, string>> = {
   AgentPresetDocument: 'preset composition view is owned by packages/preset/agent-presets/README.md',
   AgentPresetComposition: 'flattened composition rows are owned by packages/preset/agent-presets/README.md',
   PresetMetadata: 'preset display text is owned by packages/preset/agent-presets/README.md',
+  CodexAccountSnapshot: 'connection-global Codex account payload is owned by packages/core/agent-codex/src/types.ts',
+  CodexBrowserLogin: 'connection-global Codex login payload is owned by packages/core/agent-codex/src/types.ts',
+  CodexDeviceCodeLogin: 'connection-global Codex login payload is owned by packages/core/agent-codex/src/types.ts',
+  CodexRateLimits: 'connection-global Codex quota payload is owned by packages/core/agent-codex/src/types.ts',
+  CodexAccountNotification: 'connection-global Codex notification payload is owned by packages/core/agent-codex/src/types.ts',
+  DevinAccountSnapshot: 'connection-global Devin account payload is owned by packages/core/agent-acp/src/types.ts',
   BashEnvContributor: 'service-local extension type is owned by packages/shell/tool-bash/src/index.ts',
   BashEnvVariableInfo: 'service-local metadata type is owned by packages/shell/tool-bash/src/index.ts',
   CompactionAgentContext: 'compaction service input is owned by packages/compaction/compaction/src/index.ts',

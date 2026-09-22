@@ -16,17 +16,17 @@
 
 运行中的 `dsh` 是一棵插件树，由启动时按序叠加的各层组合而成。
 
-**profile** 是存放在 Harness home 中的具名组装。它列出自己叠放的组合包，存放自己安装的树外插件，并保存用户自己的 `cordis.patch.yml`。`web`、`headless`、`sdk`、`sdk-minimal` 和 `acp` 作为模板随发行版交付。
+**profile** 是存放在 Harness home 中的具名组装。它列出自己叠放的组合包，存放自己安装的树外插件，并保存用户自己的 `cordis.patch.yml`。`web`、`web-codex`、`web-acp`、`headless`、`sdk`、`sdk-minimal` 和 `acp` 作为模板随发行版交付。
 
 **组合包**是 Cordis 配置项及其挂载代码的分发格式，因此它插入的内容始终可被其上各层 patch。
 
 两者都在各自的 `package.json` 中通过 `dsh` 字段声明自己：`dsh.profile` 列出一个 profile 的组合包，`dsh.bundle` 指向一个组合包的 patch 文件。
 
-[`dsh-base`](../packages/bundle/base/README.zh.md) 是 `web`、`headless`、`sdk` 与 `acp` profile 的共享第一层：模型适配器、工具、持久化、沙箱与审批策略、设置、凭据、遥测。[`dsh-web-app`](../packages/bundle/web-app/README.zh.md) 增加浏览器应用，[`dsh-headless`](../packages/bundle/headless/README.zh.md) 增加不带服务器的一次性运行器，[`dsh-sdk-app`](../packages/bundle/sdk-app/README.zh.md) 增加 SDK JSON-RPC 服务器，[`dsh-acp-app`](../packages/bundle/acp-app/README.zh.md) 增加仅用于自动化的 ACP 服务器。[`dsh-sdk-minimal`](../packages/bundle/sdk-minimal/README.zh.md) 是刻意保留的例外：一个组合包拥有完整的显式 SDK 配置树，不应用 `dsh-base`。
+[`dsh-base`](../packages/bundle/base/README.zh.md) 是 `web`、`web-codex`、`web-acp`、`headless`、`sdk` 与 `acp` profile 的共享第一层：模型适配器、工具、持久化、沙箱与审批策略、设置、凭据、遥测。[`dsh-web-app`](../packages/bundle/web-app/README.zh.md) 增加浏览器应用，[`dsh-headless`](../packages/bundle/headless/README.zh.md) 增加不带服务器的一次性运行器，[`dsh-sdk-app`](../packages/bundle/sdk-app/README.zh.md) 增加 SDK JSON-RPC 服务器，[`dsh-acp-app`](../packages/bundle/acp-app/README.zh.md) 增加仅用于自动化的 ACP 服务器，[`dsh-web-codex`](../packages/bundle/web-codex/README.zh.md) 与 [`dsh-web-acp`](../packages/bundle/web-acp/README.zh.md) 则让该浏览器界面运行在 Codex 或 Devin 上。[`dsh-sdk-minimal`](../packages/bundle/sdk-minimal/README.zh.md) 是刻意保留的例外：一个组合包拥有完整的显式 SDK 配置树，不应用 `dsh-base`。
 
 各层按此顺序应用在空条目列表之上：先按 profile 列出的顺序应用每个组合包，然后是 profile 的 `cordis.patch.yml`，然后是 home 级的那份，最后是任意 `--patch` overlay。一条 patch 按 id 定位某个条目并替换其整个 config，或插入新条目。
 
-自定义 profile 默认实时重载 patch。随附的 `web` profile 使用实时重载；`headless`、`sdk`、`sdk-minimal` 和 `acp` 则只在启动时应用一次所有配置层，因为一次性应用或 stdio 应用拥有工作之后，替换其依赖会破坏该生命周期。
+自定义 profile 默认实时重载 patch，随附的 `web`、`web-codex` 与 `web-acp` profile 同样如此；`headless`、`sdk`、`sdk-minimal` 和 `acp` 则只在启动时应用一次所有配置层，因为一次性应用或 stdio 应用拥有工作之后，替换其依赖会破坏该生命周期。
 
 要查看你的机器启动的配置树：
 
@@ -62,7 +62,9 @@ Electron 通过内置的上游 Node.js 进程启动私有 Desktop Host 包；该
 | [`core/system-prompt`](subsystems/system-prompt.zh.md) | 提示词片段与工具 schema 的组装 | `ctx.systemPrompt` |
 | [`core/tools`](subsystems/tools.zh.md) | 作用域化的工具注册表和带把关的执行流水线 | `ctx.tools` |
 | [`core/agent`](subsystems/core.zh.md) | `Agent` 接口、活跃 agent 注册表和 `agent/*` 事件 | `ctx.agents` |
-| [`core/agent-loop`](subsystems/core.zh.md) | 实现该接口的默认驱动器 | `ctx.agentLoop` |
+| [`core/agent-external`](../packages/core/agent-external/README.zh.md) | 共享驱动器基座：收件箱、轮次／步骤投影、create/resume/publish host | 库，无 key |
+| [`core/agent-loop`](subsystems/core.zh.md) | `ctx.agents` 背后的进程内驱动器 | `ctx.agentLoop` |
+| [`core/agent-codex`](../packages/core/agent-codex/README.zh.md)、[`core/agent-acp`](../packages/core/agent-acp/README.zh.md) | 基于 `codex app-server` 与 `devin acp` 的驱动器 | `ctx.codexAppServer`、`ctx.acpHarness` |
 | [`core/scope`](subsystems/scope.zh.md) | 按 agent 划分作用域的注册原语 | 库，无 ctx 键 |
 | [`llm/llm`](subsystems/llm-streaming.zh.md) | 消息与流式词汇表，以及适配器 seam | `ctx.llm` |
 | [`webhook/webhook`](subsystems/webhook.zh.md) | 已认证 delivery 的分派和 Workspace Session 创建 | `ctx.webhookRuntime` |
@@ -110,9 +112,11 @@ turn/end
 
 输入通过同一个 inbox 到达驱动器。有些消息会立即唤醒它；注入的上下文会留在 inbox 中，直到另一条消息将其唤醒。
 
-`agent/pre-step` 决定接纳的输入。监听器可以改写或拒绝已领取消息；首次领取被拒绝或为空时，关闭不含步骤的持久轮次。enter 决策可设置 `startsRequestSeries`：循环记录新的 `request/header`（原因为 `series`，或在封装同时变化时为携带 `startsSeries: true` 的 `change`）。包装监听器通过 `{ ...decision, messages }` 保留该声明。组装与 `step/start` 之后，`agent/request` 和 `prepareCall()` 先解析实际路由，再提交系统提示词与已接纳用户消息；在任一异步阶段取消都不会提交这两者。提示词准入依据已准备调用的能力，而非先前的 `request/context`。每次尝试同步协调同一份已渲染组装结果、仅在首次尝试追加用户消息、按需记录 header/context、派生并冻结请求，再通过绑定调用发起流式请求。重试不重复组装或 `agent/pre-step`。附接后的 surface 替换开启新请求序列，包括恢复后的首次 pre-step 中发生的替换；未变化的恢复延续序列。首次接纳的步骤在用户消息之前预留系统头节点，即使提示词为空（不产生协议消息）。提示词仅通过 `system/message` 历史传递：空渲染文本清除所有生效的系统节点，模型不再看到旧提示词；具备能力的路由可在缓存前缀之后追加非空更新；不具备能力的路由与新请求序列将非空提示词文本归并到首个系统节点，并为非空的后续系统节点记录空内容替换（[决策](../.agents/notes/implemented/architecture/2026-09-02-system-prompt-as-surface-node.zh.md)；[决策规则](../packages/core/agent-loop/README.zh.md#understand-the-implementation)）。
+`agent/pre-step` 决定接纳的输入：监听器可以改写或拒绝已领取消息，首次领取被拒绝或为空时，关闭不含步骤的轮次。enter 决策可设置 `startsRequestSeries`，循环据此记录一条 `request/header`（原因为 `series`，或在封装同时变化时为携带 `startsSeries: true` 的 `change`）。组装与 `step/start` 之后，`agent/request` 和 `prepareCall()` 先解析实际路由，再提交系统提示词与已接纳用户消息，因此在任一异步阶段取消都不会提交这两者。每次尝试都依据存活的 `system/message` 节点协调同一份已渲染组装结果、仅在首次尝试追加用户消息、派生并冻结请求，再通过绑定调用发起流式请求；重试不重复任何组装。附接后的 surface 替换开启新序列；未变化的恢复延续序列。提示词仅通过 `system/message` 历史传递：空渲染文本清除所有生效的系统节点，模型不再看到旧提示词；具备能力的路由可在缓存前缀之后追加非空更新；不具备能力的路由与新请求序列将非空提示词文本归并到首个系统节点，并为后续系统节点记录空内容替换（[决策](../.agents/notes/implemented/architecture/2026-09-02-system-prompt-as-surface-node.zh.md)；[决策规则](../packages/core/agent-loop/README.zh.md#understand-the-implementation)）。
 
 循环发送不可变请求，同时保留实时取消能力。只有已由该循环完整冻结的消息对象身份才能复用冻结证明；[agent-loop](../packages/core/agent-loop/README.zh.md)拥有请求构造规则。
+
+每个驱动器都共享 [`dsh-agent-external`](../packages/core/agent-external/README.zh.md)：持久收件箱、轮次／步骤投影与 create/resume/publish 事务。`dsh-agent-loop` 在其上增加进程内步骤循环；`dsh-agent-codex` 与 `dsh-agent-acp` 则把步骤内部交给拥有提示词、工具与 MCP 服务器的外部 harness。
 
 详情见[时序图](agent-lifecycle.zh.md)、[工具流水线](tool-execution-pipeline.zh.md)和[取消与错误恢复](subsystems/core.zh.md#the-agent-handle)。
 
@@ -124,7 +128,7 @@ Session 消费方只了解当前逻辑格式。仅 header 的 `stat` 与 `list` 
 
 **模型可见即已记录。** 抵达模型请求的一切都必须能从日志重建，并由一项运行时不变量断言这一点。因此，新增一项模型可见输入就需要新增一个会话事件：扩展 `SessionEventMap` 并从日志渲染。
 
-**投影 seam。** `dsh-session-projection` 提供 `ctx.sessionProjections`：已注册单元增量折叠已提交事件，host 消费方通过 `stateOf()` 读取单个类型化状态，载体通过 `snapshot()` 批量取得裁剪后的客户端视图。host 读取方要么在激活时要求该服务，要么在注册表或必需 key 缺席时明确失败。贡献方可以保留 `ctx.inject(['sessionProjections'], ...)` 注册，但不能为缺失的 host 值静默提供默认值。agent loop 为读取方注册共享的 `turnBoundary` 状态（[决策](../.agents/notes/implemented/architecture/2026-08-19-session-projection-mandatory-seam.zh.md)）。
+**投影 seam。** `dsh-session-projection` 提供 `ctx.sessionProjections`：已注册单元增量折叠已提交事件，host 消费方通过 `stateOf()` 读取单个类型化状态，载体通过 `snapshot()` 批量取得裁剪后的客户端视图。host 读取方要么在激活时要求该服务，要么在注册表或必需 key 缺席时明确失败。贡献方可以保留 `ctx.inject(['sessionProjections'], ...)` 注册，但不能为缺失的 host 值静默提供默认值。共享驱动器 host 为读取方注册 `turnBoundary` 状态（[决策](../.agents/notes/implemented/architecture/2026-08-19-session-projection-mandatory-seam.zh.md)）。
 
 ## 能力 seam
 
@@ -157,7 +161,7 @@ seam 正是替换一个提供方就能改变整个产品的原因。文件系统
 | 添加持久会话状态 | 扩展 `SessionEventMap`；从日志渲染和回放 |
 | 生成会话标题 | 注册唯一的 `ctx.sessionTitle` 提供方 |
 | 管理同会话目标 | 使用 `ctx.goals`；通过 `agent/*` 续跑 |
-| 在轮次边界 fork 会话 | `ctx.agents.create({ sessionId, seed, meta: { parentSession, seedLength } })`——只有经 agent-loop 发布的会话才会持久化 |
+| 在轮次边界 fork 会话 | `ctx.agents.create({ sessionId, seed, meta: { parentSession, seedLength } })`——只有经驱动器发布的会话才会持久化 |
 | 在新后端存储会话 | 基于共享的句柄脚手架实现 `SessionPersistence`（`create`/`open`/`stat`/`list`/`export`） |
 | 将注册项限定到单个 agent | 使用该 agent 的 `agent.ctx` |
 

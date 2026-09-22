@@ -8,145 +8,32 @@
  * no network.
  */
 
-import { existsSync } from 'node:fs'
-import { mkdtemp, readFile, rm } from 'node:fs/promises'
+import { mkdtemp, readFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { fileURLToPath } from 'node:url'
-import { afterEach, describe, expect, it } from 'vitest'
-import { Context, Service } from '@deepseek-ai/cordis'
-import AgentRegistry, { type Agent } from '@deepseek-ai/dsh-agent'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import { createUserMessage } from '@deepseek-ai/dsh-llm'
+import { SessionId } from '@deepseek-ai/dsh-session'
 import { AcpHarness, acpSessionOf, DevinCatalogAdapter } from '../src/index.ts'
 import type { AcpRuntime } from '../src/runtime.ts'
-import ApprovalService from '@deepseek-ai/dsh-user-approval'
-import { createUserMessage } from '@deepseek-ai/dsh-llm'
-import LlmRuntime from '@deepseek-ai/dsh-llm'
-import SessionProjectionRegistry from '@deepseek-ai/dsh-session-projection'
-import JsonlSessionPersistence from '@deepseek-ai/dsh-session-persistence-jsonl'
-import SessionStore, { SessionId, type SessionEvent } from '@deepseek-ai/dsh-session'
-import LocalSubprocessRuntime from '@deepseek-ai/dsh-subprocess-local'
-import TypertRegistry from '@deepseek-ai/dsh-typert-registry'
-
-const mockAgent = fileURLToPath(new URL('./mock-acp-agent.ts', import.meta.url))
-
-interface RecordedCall {
-  readonly method: string
-  readonly params: unknown
-}
-
-/** Read the mock's JSONL request record (initialize, session/*, authenticate, …). */
-async function recordedCalls(file: string): Promise<RecordedCall[]> {
-  const text = await readFile(file, 'utf8')
-  return text.trim().split('\n').map(line => JSON.parse(line) as RecordedCall)
-}
-
-/** Poll until `file` exists — subprocess cold-start is variable. */
-async function waitForFile(file: string, timeoutMs: number): Promise<void> {
-  const deadline = Date.now() + timeoutMs
-  while (!existsSync(file)) {
-    if (Date.now() > deadline) throw new Error(`mock child never wrote ${file}`)
-    await new Promise(r => setTimeout(r, 10))
-  }
-}
-
-/**
- * Poll the mock's request record until `method` appears. Agent-side record
- * writes trail the wire exchange that settles the caller, so awaiting the
- * agent is not enough to observe one.
- */
-async function waitForCall(file: string, method: string, timeoutMs: number): Promise<RecordedCall[]> {
-  const deadline = Date.now() + timeoutMs
-  while (true) {
-    const calls = existsSync(file) ? await recordedCalls(file) : []
-    if (calls.some(call => call.method === method)) return calls
-    if (Date.now() > deadline) throw new Error(`mock child never recorded ${method}`)
-    await new Promise(r => setTimeout(r, 10))
-  }
-}
-
-/** Minimal userQuestions stand-in: answers every asked item with `beta`. */
-class FakeQuestions extends Service {
-  constructor(ctx: Context) {
-    super(ctx, 'userQuestions')
-  }
-
-  async ask(req: { questions: readonly { id: string }[] }) {
-    return {
-      answers: req.questions.map(item => ({ id: item.id, selected: ['beta'] })),
-    }
-  }
-}
-
-interface Bench {
-  readonly ctx: Context
-  readonly root: string
-  readonly recordFile: string
-}
-
-/**
- * Mount the full driver bench: real session/agent/projection/subprocess/llm
- * services plus JSONL persistence in a temp root, with `AcpHarness` pointed
- * at the mock agent scripted by `env`.
- */
-async function setup(
-  env: Record<string, string> = {},
-  options: { approval?: boolean; questions?: boolean; config?: Record<string, unknown> } = {},
-): Promise<Bench> {
-  const root = await mkdtemp(join(tmpdir(), 'agent-acp-test-'))
-  const recordFile = join(root, 'record.jsonl')
-  const ctx = new Context()
-  await ctx.plugin(SessionStore)
-  await ctx.plugin(SessionProjectionRegistry)
-  await ctx.plugin(AgentRegistry)
-  await ctx.plugin(LocalSubprocessRuntime)
-  await ctx.plugin(LlmRuntime)
-  await ctx.plugin(TypertRegistry)
-  await ctx.plugin(JsonlSessionPersistence, { root: join(root, 'sessions') })
-  if (options.approval === true) await ctx.plugin(ApprovalService)
-  if (options.questions === true) await ctx.plugin(FakeQuestions)
-  await ctx.plugin(AcpHarness, {
-    executable: process.execPath,
-    args: [mockAgent, 'acp'],
-    modelsArgs: [mockAgent, 'models', 'list', '--format', 'json'],
-    authStatusArgs: [mockAgent, 'auth', 'status'],
-    authLogoutArgs: [mockAgent, 'auth', 'logout'],
-    env: { MOCK_RECORD_FILE: recordFile, ...env },
-    ...options.config,
-  })
-  return { ctx, root, recordFile }
-}
-
-async function teardown(target: Bench | undefined): Promise<void> {
-  await target?.ctx.fiber.dispose()
-  if (target !== undefined) await rm(target.root, { recursive: true, force: true })
-}
+import {
+  type Bench,
+  events,
+  eventsOf,
+  recordedCalls,
+  send,
+  setup,
+  teardown,
+  turnEndKind,
+  waitForCall,
+  waitForFile,
+} from './bench.ts'
 
 let bench: Bench | undefined
 afterEach(async () => {
   await teardown(bench)
   bench = undefined
 })
-
-function send(agent: Agent, text: string): void {
-  agent.followup(createUserMessage({
-    content: [{ type: 'text', text }],
-    source: { kind: 'user' },
-  }))
-}
-
-function events(agent: Agent): readonly SessionEvent[] {
-  return agent.session.snapshotEvents()
-}
-
-function eventsOf(agent: Agent, type: string): SessionEvent[] {
-  return events(agent).filter(event => event.type === type)
-}
-
-function turnEndKind(agent: Agent): string | undefined {
-  const end = events(agent).findLast(event => event.type === 'turn/end')
-  const reason = end?.data['reason'] as { kind?: string } | undefined
-  return reason?.kind
-}
 
 const TEST_TIMEOUT = 30_000
 
@@ -388,6 +275,29 @@ describe('agent-acp driver', () => {
     expect(turnEndKind(agent)).toBe('aborted')
   }, TEST_TIMEOUT)
 
+  it('keeps a steered message queued because ACP has no mid-turn steering', async () => {
+    const ready = join(await mkdtemp(join(tmpdir(), 'agent-acp-steer-')), 'ready')
+    bench = await setup({ MOCK_HANG_ONCE: '1', MOCK_READY_FILE: ready })
+    const { agent } = await bench.ctx.agents.create({ sessionId: SessionId('s31'), agentOptions: {} })
+    send(agent, 'first')
+    await waitForFile(ready, TEST_TIMEOUT - 5000)
+
+    // The steer cannot reach the running prompt, so it stays pending and the
+    // next turn carries it.
+    agent.steer(createUserMessage({
+      content: [{ type: 'text', text: 'steered input' }],
+      source: { kind: 'user' },
+    }))
+    agent.cancel({ kind: 'user' }, { keepInbox: true })
+    await agent.whenIdle()
+
+    const prompts = (await recordedCalls(bench.recordFile)).filter(call => call.method === 'session/prompt')
+    expect(prompts).toHaveLength(2)
+    expect(JSON.stringify(prompts[1])).toContain('steered input')
+    expect(eventsOf(agent, 'user/message')).toHaveLength(2)
+    expect(turnEndKind(agent)).toBe('completed')
+  }, TEST_TIMEOUT)
+
   it('settles partial streams on a fatal child exit', async () => {
     bench = await setup({ MOCK_CRASH_AFTER_CHUNK: '1', MOCK_TEXT: 'partial answer' })
     const { agent } = await bench.ctx.agents.create({ sessionId: SessionId('s14'), agentOptions: {} })
@@ -430,19 +340,247 @@ describe('agent-acp driver', () => {
       MOCK_MODELS_JSON: JSON.stringify({
         families: [{
           variants: [
-            { model_uid: 'swe-1', label: 'SWE 1', cost_summary: 'standard', supports_images: true },
+            { model_uid: 'swe-1', label: 'SWE 1', cost_summary: 'standard' },
             { model_uid: 'swe-2', label: 'SWE 2' },
           ],
         }],
       }),
       MOCK_AUTH_DETAIL: 'logged in as mock@example.com',
+      MOCK_AGENT_INFO: JSON.stringify({ name: 'mock-agent', title: 'Mock Agent', version: '0.0.0' }),
+      MOCK_AUTH_METHODS: JSON.stringify([
+        { id: 'devin-browser', name: 'Log in with browser', description: 'Sign in via your browser' },
+        { id: 'devin-api-key', name: 'API key' },
+      ]),
     })
     const models = await bench.ctx.llm.listModels('devin')
     expect(models.map(model => model.id)).toEqual(['swe-1', 'swe-2'])
-    expect(models[0]!.inputModalities).toEqual(['text', 'image'])
+    expect(models[0]!.description).toBe('standard')
+    // `devin models list` reports no per-model modality, so the catalog
+    // leaves the field unknown rather than claiming text-only.
+    expect(models[0]!.inputModalities).toBeUndefined()
+
+    const disconnected = await bench.ctx.acpHarness.status(new AbortController().signal)
+    expect(disconnected.connected).toBe(false)
+    expect(disconnected.cliLoggedIn).toBe(true)
+    expect(disconnected.cliDetail).toBe('logged in as mock@example.com')
+    // A session connect publishes the agent's advertised auth facts.
+    await bench.ctx.agents.create({ sessionId: SessionId('s18'), agentOptions: {} })
     const status = await bench.ctx.acpHarness.status(new AbortController().signal)
-    expect(status.cliLoggedIn).toBe(true)
-    expect(status.cliDetail).toBe('logged in as mock@example.com')
+    expect(status.connected).toBe(true)
+    expect(status.authMethods).toEqual([
+      { id: 'devin-browser', name: 'Log in with browser', description: 'Sign in via your browser' },
+      { id: 'devin-api-key', name: 'API key' },
+    ])
+    expect(status.agentInfo).toEqual({ name: 'mock-agent', title: 'Mock Agent', version: '0.0.0' })
+  }, TEST_TIMEOUT)
+
+  it('applies a real Devin mode to a read-only session and reports the constraint once', async () => {
+    bench = await setup({
+      MOCK_CONFIG_OPTIONS: JSON.stringify([
+        {
+          id: 'mode',
+          name: 'Session Mode',
+          type: 'select',
+          currentValue: 'accept-edits',
+          options: [
+            { value: 'accept-edits', name: 'Code' },
+            { value: 'smart', name: 'Smart' },
+            { value: 'ask', name: 'Ask' },
+            { value: 'plan', name: 'Plan' },
+            { value: 'bypass', name: 'Bypass Permissions' },
+          ],
+        },
+      ]),
+    }, { config: { sandbox: 'read-only' } })
+    const warn = vi.spyOn(bench.ctx.logger, 'warn')
+    const { agent } = await bench.ctx.agents.create({ sessionId: SessionId('s19'), agentOptions: {} })
+
+    send(agent, 'first')
+    await agent.whenIdle()
+    send(agent, 'second')
+    await agent.whenIdle()
+
+    const sets = (await recordedCalls(bench.recordFile))
+      .filter(call => call.method === 'session/set_config_option')
+    expect(sets.map(call => (call.params as { value: string }).value)).toEqual(['ask'])
+    const warnings = warn.mock.calls.map(call => String(call[0]))
+    expect(warnings).toHaveLength(1)
+    expect(warnings[0]).toContain('read-only')
+    expect(warnings[0]).toContain('"ask"')
+    warn.mockRestore()
+  }, TEST_TIMEOUT)
+
+  it('honours the deployment mode override', async () => {
+    bench = await setup({
+      MOCK_CONFIG_OPTIONS: JSON.stringify([
+        {
+          id: 'mode',
+          name: 'Session Mode',
+          type: 'select',
+          currentValue: 'accept-edits',
+          options: [{ value: 'accept-edits', name: 'Code' }, { value: 'plan', name: 'Plan' }],
+        },
+      ]),
+    }, { config: { mode: 'plan' } })
+    const { agent } = await bench.ctx.agents.create({ sessionId: SessionId('s20'), agentOptions: {} })
+    send(agent, 'plan it')
+    await agent.whenIdle()
+
+    const sets = (await recordedCalls(bench.recordFile))
+      .filter(call => call.method === 'session/set_config_option')
+    expect((sets[0]!.params as { value: string }).value).toBe('plan')
+  }, TEST_TIMEOUT)
+
+  it('warns with the requested and effective model when the session does not advertise it', async () => {
+    bench = await setup({
+      MOCK_CONFIG_OPTIONS: JSON.stringify([
+        {
+          id: 'model',
+          name: 'Model',
+          type: 'select',
+          currentValue: 'swe-1',
+          options: [{ value: 'swe-1', name: 'SWE 1' }],
+        },
+      ]),
+    })
+    const warn = vi.spyOn(bench.ctx.logger, 'warn')
+    const { agent } = await bench.ctx.agents.create({
+      sessionId: SessionId('s21'),
+      agentOptions: { provider: 'devin', model: 'swe-9' },
+    })
+    send(agent, 'unknown model')
+    await agent.whenIdle()
+
+    const warnings = warn.mock.calls.map(call => String(call[0]))
+    expect(warnings.some(message => message.includes('"swe-9"') && message.includes('"swe-1"'))).toBe(true)
+    // The transcript reports the model the agent says it will run.
+    const header = events(agent).find(event => event.type === 'request/header')
+    expect((header?.data['header'] as { config: { model: string } }).config.model).toBe('swe-1')
+    warn.mockRestore()
+  }, TEST_TIMEOUT)
+
+  it('warns when a requested model cannot be applied because no model option exists', async () => {
+    bench = await setup()
+    const warn = vi.spyOn(bench.ctx.logger, 'warn')
+    const { agent } = await bench.ctx.agents.create({
+      sessionId: SessionId('s22'),
+      agentOptions: { provider: 'devin', model: 'swe-9' },
+    })
+    send(agent, 'no model option')
+    await agent.whenIdle()
+
+    const warnings = warn.mock.calls.map(call => String(call[0]))
+    expect(warnings.some(message => message.includes('"swe-9"') && message.includes('no model option'))).toBe(true)
+    warn.mockRestore()
+  }, TEST_TIMEOUT)
+
+  it('maps the never approval policy to the auto-approve mode', async () => {
+    bench = await setup({
+      MOCK_CONFIG_OPTIONS: JSON.stringify([
+        {
+          id: 'mode',
+          name: 'Session Mode',
+          type: 'select',
+          currentValue: 'accept-edits',
+          options: [{ value: 'accept-edits', name: 'Code' }, { value: 'bypass', name: 'Bypass Permissions' }],
+        },
+      ]),
+    }, { config: { approval: 'never' } })
+    const { agent } = await bench.ctx.agents.create({ sessionId: SessionId('s23'), agentOptions: {} })
+    send(agent, 'no prompts')
+    await agent.whenIdle()
+
+    const sets = (await recordedCalls(bench.recordFile))
+      .filter(call => call.method === 'session/set_config_option')
+    expect((sets[0]!.params as { value: string }).value).toBe('bypass')
+  }, TEST_TIMEOUT)
+
+  it('closes the ACP session on dispose and warns when close fails', async () => {
+    const pidFile = join(await mkdtemp(join(tmpdir(), 'agent-acp-close-')), 'pid')
+    bench = await setup({ MOCK_CLOSE: '1', MOCK_PID_FILE: pidFile })
+    const warn = vi.spyOn(bench.ctx.logger, 'warn')
+    const handle = await bench.ctx.agents.create({ sessionId: SessionId('s24'), agentOptions: {} })
+    await waitForFile(pidFile, TEST_TIMEOUT - 5000)
+    await handle.dispose()
+
+    let calls = await recordedCalls(bench.recordFile)
+    expect(calls.some(call => call.method === 'session/close')).toBe(true)
+
+    // A close against a dead child fails the request, and teardown still
+    // completes: the connection already released every session it carried.
+    const second = await bench.ctx.agents.create({ sessionId: SessionId('s25'), agentOptions: {} })
+    const pid = Number(await readFile(pidFile, 'utf8'))
+    process.kill(pid, 'SIGKILL')
+    await second.agent.whenIdle()
+    await second.dispose()
+    calls = await recordedCalls(bench.recordFile)
+    const warnings = warn.mock.calls.map(call => String(call[0]))
+    expect(warnings.some(message => message.includes('session/close'))).toBe(true)
+    expect(calls.filter(call => call.method === 'session/close').length).toBeGreaterThanOrEqual(1)
+    warn.mockRestore()
+  }, TEST_TIMEOUT)
+
+  it('logs out through the CLI when the agent advertises no ACP logout method', async () => {
+    bench = await setup()
+    const handle = await bench.ctx.agents.create({ sessionId: SessionId('s26'), agentOptions: {} })
+    await bench.ctx.acpHarness.logout(new AbortController().signal)
+
+    const calls = await recordedCalls(bench.recordFile)
+    expect(calls.some(call => call.method === 'logout')).toBe(false)
+    expect(calls.some(call => call.method === 'cli' && (call.params as { argv: string[] }).argv.includes('logout')))
+      .toBe(true)
+    await handle.dispose()
+  }, TEST_TIMEOUT)
+
+  it('uses the agent logout method when it is advertised', async () => {
+    bench = await setup({ MOCK_LOGOUT: '1' })
+    await bench.ctx.agents.create({ sessionId: SessionId('s27'), agentOptions: {} })
+    await bench.ctx.acpHarness.logout(new AbortController().signal)
+
+    const calls = await recordedCalls(bench.recordFile)
+    expect(calls.some(call => call.method === 'logout')).toBe(true)
+    expect(calls.some(call => call.method === 'cli' && (call.params as { argv: string[] }).argv.includes('logout')))
+      .toBe(false)
+  }, TEST_TIMEOUT)
+
+  it('authenticates through the advertised method and rejects an unadvertised request', async () => {
+    bench = await setup({
+      MOCK_AUTH_METHODS: JSON.stringify([{ id: 'devin-browser', name: 'Log in with browser' }]),
+    })
+    await bench.ctx.agents.create({ sessionId: SessionId('s28'), agentOptions: {} })
+    await bench.ctx.acpHarness.login({}, new AbortController().signal)
+
+    const calls = await recordedCalls(bench.recordFile)
+    const authenticate = calls.find(call => call.method === 'authenticate')
+    expect((authenticate?.params as { methodId: string }).methodId).toBe('devin-browser')
+  }, TEST_TIMEOUT)
+
+  it('rejects login when the agent advertises no auth methods', async () => {
+    bench = await setup()
+    await bench.ctx.agents.create({ sessionId: SessionId('s29'), agentOptions: {} })
+    await expect(bench.ctx.acpHarness.login({}, new AbortController().signal))
+      .rejects.toThrow('no auth methods')
+  }, TEST_TIMEOUT)
+
+  it('resolves a listed model and an unlisted id through the catalog adapter', async () => {
+    bench = await setup({
+      MOCK_MODELS_JSON: JSON.stringify({
+        families: [{ variants: [{ model_uid: 'swe-1', label: 'SWE 1', cost_summary: 'standard' }] }],
+      }),
+    })
+    const signal = new AbortController().signal
+    expect(await bench.ctx.llm.resolveModelInfo('devin', 'swe-1', signal)).toMatchObject({
+      provider: 'devin',
+      id: 'swe-1',
+      name: 'SWE 1',
+      description: 'standard',
+    })
+    // A picker-stored selection survives a model that dropped out of the listing.
+    expect(await bench.ctx.llm.resolveModelInfo('devin', 'retired-model', signal)).toMatchObject({
+      provider: 'devin',
+      id: 'retired-model',
+      name: 'retired-model',
+    })
   }, TEST_TIMEOUT)
 
   it('rejects stream calls as a catalog-only provider', async () => {

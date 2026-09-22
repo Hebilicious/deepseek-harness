@@ -9,7 +9,9 @@
 
 import type { Context } from '@deepseek-ai/cordis'
 import type { InitializeResponse } from '@agentclientprotocol/sdk'
+import type { SubprocessHandle, SubprocessOutcome } from '@deepseek-ai/dsh-subprocess'
 import { ExternalHarnessProcess } from '@deepseek-ai/dsh-agent-external'
+import { errorChain } from '@deepseek-ai/dsh-llm'
 import { AcpClientConnection } from './connection.ts'
 import { ACP_PREFIX } from './protocol.ts'
 
@@ -33,6 +35,8 @@ export interface AcpRuntimeOptions {
   readonly authStatusArgs: readonly string[]
   /** Auth-logout command arguments (default `['auth', 'logout']`). */
   readonly authLogoutArgs: readonly string[]
+  /** Deadline for one CLI verb (ms); `devin models list` refreshes over the network. */
+  readonly cliTimeoutMs: number
 }
 
 /** One catalog entry from `devin models list`. */
@@ -43,13 +47,10 @@ export interface DevinModelEntry {
   readonly name: string
   /** Cost/capability summary, when the CLI reports one. */
   readonly description?: string
-  /** Whether the model accepts image input, when the CLI reports it. */
-  readonly supportsImages?: boolean
 }
 
-function toError(value: unknown): Error {
-  return value instanceof Error ? value : new Error(String(value))
-}
+/** Every startup path's failure message once {@link AcpRuntime.dispose} latched. */
+const DISPOSED = `${ACP_PREFIX}: runtime is disposed`
 
 /**
  * The profile's shared ACP runtime. `connect` memoizes one live connection;
@@ -78,13 +79,17 @@ export class AcpRuntime {
   }
 
   /**
-   * Spawn and handshake the shared `devin acp` process exactly once.
+   * Spawn and handshake the shared `devin acp` process exactly once. A
+   * memoized endpoint whose child exited or whose connection went fatal is
+   * retired by its own observers, so this call respawns rather than handing
+   * back a dead endpoint.
    * @param signal - caller cancellation for the startup window.
    * @returns the live shared connection.
    */
   async connect(signal?: AbortSignal): Promise<AcpClientConnection> {
-    if (this.disposed) throw new Error(`${ACP_PREFIX}: runtime is disposed`)
-    if (this.connection !== undefined) return this.connection
+    if (this.disposed) throw new Error(DISPOSED)
+    const live = this.connection
+    if (live !== undefined) return live
     this.connecting ??= this.openConnection(signal)
     try {
       return await this.connecting
@@ -94,8 +99,10 @@ export class AcpRuntime {
   }
 
   /**
-   * Enumerate the Devin model catalog through the CLI (`devin models list
-   * --format json`), flattened into one entry per variant.
+   * Run `devin models list --format json`, flattened into one entry per
+   * variant. The command answers from a local cache or refreshes it over the
+   * network, so it is bounded by the caller's signal and the configured
+   * CLI deadline; an exit failure carries the CLI's own diagnostic.
    * @param signal - caller cancellation.
    * @returns catalog entries in CLI order.
    */
@@ -120,15 +127,11 @@ export class AcpRuntime {
         const id = typeof record.model_uid === 'string' ? record.model_uid : undefined
         const name = typeof record.label === 'string' ? record.label : undefined
         if (id === undefined || name === undefined) continue
-        const supportsImages = typeof record.supports_images === 'boolean'
-          ? record.supports_images
-          : undefined
         const cost = typeof record.cost_summary === 'string' ? record.cost_summary : undefined
         entries.push({
           id,
           name,
           ...cost === undefined ? {} : { description: cost },
-          ...supportsImages === undefined ? {} : { supportsImages },
         })
       }
     }
@@ -145,7 +148,7 @@ export class AcpRuntime {
       const output = await this.runCli(this.options.authStatusArgs, signal, true)
       return { loggedIn: output.exitCode === 0, detail: output.text.trim() }
     } catch (error: unknown) {
-      return { loggedIn: false, detail: toError(error).message }
+      return { loggedIn: false, detail: errorChain(error) }
     }
   }
 
@@ -169,12 +172,24 @@ export class AcpRuntime {
   }
 
   /**
-   * Forward the ACP `logout` request to the shared agent.
+   * Sign the account out: the ACP `logout` request when the connected agent
+   * advertises it, otherwise the `devin auth logout` CLI. Real Devin answers
+   * `agentCapabilities.auth` as `{}` — no logout method — so the CLI carries
+   * that deployment, and a request the agent does not serve is never sent.
    * @param signal - caller cancellation.
    */
   async logout(signal?: AbortSignal): Promise<void> {
-    const connection = await this.connect(signal)
+    const connection = this.connection
+    if (connection === undefined || !this.advertisesLogout()) {
+      await this.authLogout(signal)
+      return
+    }
     await connection.request('logout', {}, signal)
+  }
+
+  /** Whether the connected agent advertises the ACP `logout` method. */
+  private advertisesLogout(): boolean {
+    return this.initializeResponse?.agentCapabilities?.auth?.logout != null
   }
 
   /**
@@ -197,15 +212,21 @@ export class AcpRuntime {
 
   /**
    * Close the shared connection and dispose the managed process; resolves at
-   * whole-range quiescence.
+   * whole-range quiescence. The latch is set before the first await so a
+   * connect already in flight cannot publish an endpoint after this call
+   * returns; the in-flight startup is awaited and tears down whatever it
+   * produced.
    */
   async dispose(): Promise<void> {
     if (this.disposed) return
     this.disposed = true
+    const starting = this.connecting
+    if (starting !== undefined) await starting.catch(() => {})
     this.connection?.close()
+    this.connection = undefined
+    this.initializeResponse = undefined
     const process = this.process
     this.process = undefined
-    this.connection = undefined
     if (process !== undefined) await process.dispose(this.options.eofGraceMs)
   }
 
@@ -224,14 +245,59 @@ export class AcpRuntime {
         process.stdin,
         signal ?? new AbortController().signal,
       )
-      this.process = process
-      this.connection = connection
-      this.initializeResponse = initialize
+      // A handshake that settles after dispose() latched must not publish an
+      // endpoint nothing owns any more: close it and drop the child here, so
+      // disposal stays the only owner of the process range.
+      if (this.disposed) {
+        connection.close()
+        throw new Error(DISPOSED)
+      }
+      this.adopt(process, connection, initialize)
       return connection
     } catch (error: unknown) {
+      /* v8 ignore next -- teardown of a child whose handshake failed is
+         already best-effort at this point; the startup error is what callers act on. */
       await process.dispose(this.options.eofGraceMs).catch(() => {})
       throw error
     }
+  }
+
+  /**
+   * Publish a fresh endpoint and arrange for its removal when it dies. A
+   * later {@link connect} then spawns a new child instead of handing back an
+   * endpoint whose process or connection is already gone.
+   */
+  private adopt(
+    process: ExternalHarnessProcess,
+    connection: AcpClientConnection,
+    initialize: InitializeResponse,
+  ): void {
+    this.process = process
+    this.connection = connection
+    this.initializeResponse = initialize
+    const retired = (): void => { this.retire(connection, process) }
+    // Child exit and connection fatality are independent observations of the
+    // same endpoint dying; whichever lands first retires it once.
+    void process.done.then(retired, retired)
+    void connection.fatal.then(retired, retired)
+  }
+
+  /**
+   * Drop the endpoint owning `connection` and reap its child, which may
+   * outlive the connection that exposed the failure.
+   */
+  private retire(connection: AcpClientConnection, process: ExternalHarnessProcess): void {
+    // Disposal clears the endpoint before it closes the connection, so a
+    // retirement racing it finds a different (or no) connection and stops.
+    if (this.connection !== connection) return
+    this.connection = undefined
+    this.initializeResponse = undefined
+    this.process = undefined
+    /* v8 ignore next 3 -- a failed reap has no observable producer: the range
+       this child owns is already gone whenever retirement runs. */
+    void process.dispose(this.options.eofGraceMs).catch((error: unknown) => {
+      this.ctx.logger.warn(`${ACP_PREFIX}: reaping the failed devin acp child failed: ${errorChain(error)}`)
+    })
   }
 
   /**
@@ -262,22 +328,44 @@ export class AcpRuntime {
       this.options.env,
       signal,
     )
-    const handle = this.ctx.subprocess.spawn({
-      argv: [executable, ...args],
-      cwd: this.options.cwd,
-      stdio: {
-        stdin: 'ignore',
-        stdout: { maxBytes: 8 * 1024 * 1024 },
-        stderr: { maxBytes: 64 * 1024 },
-      },
-      graceMs: this.options.disposeGraceMs,
-      env: this.options.env,
-      ...signal === undefined ? {} : { signal },
-    })
-    const outcome = await handle.done
+    // The provider turns an abort into a signal exit, so the deadline is read
+    // back after settlement to report a timeout as one.
+    const deadline = new AbortController()
+    const timer = setTimeout(() => {
+      deadline.abort(new Error(`${ACP_PREFIX}: ${this.options.command} ${args.join(' ')} timed out`))
+    }, this.options.cliTimeoutMs)
+    const bound = signal === undefined
+      ? deadline.signal
+      : AbortSignal.any([signal, deadline.signal])
+    let outcome: SubprocessOutcome
+    let handle: SubprocessHandle
+    try {
+      handle = this.ctx.subprocess.spawn({
+        argv: [executable, ...args],
+        cwd: this.options.cwd,
+        stdio: {
+          stdin: 'ignore',
+          stdout: { maxBytes: 8 * 1024 * 1024 },
+          stderr: { maxBytes: 64 * 1024 },
+        },
+        graceMs: this.options.disposeGraceMs,
+        env: this.options.env,
+        signal: bound,
+      })
+      outcome = await handle.done
+    } finally {
+      clearTimeout(timer)
+    }
+    if (deadline.signal.aborted) {
+      throw new Error(
+        `${ACP_PREFIX}: ${this.options.command} ${args.join(' ')} did not answer within ${String(this.options.cliTimeoutMs)}ms`,
+      )
+    }
+    /* v8 ignore next -- the seam publishes a stdout reader for every collect-mode stream. */
     const text = handle.collected.stdout?.readFrom(0).text ?? ''
     if (capture) return { text, exitCode: outcome.exitCode }
     if (outcome.exitCode !== 0) {
+      /* v8 ignore next -- the seam publishes a stderr reader for every collect-mode stream. */
       const stderr = handle.collected.stderr?.readFrom(0).text.trim() ?? ''
       throw new Error(
         `${ACP_PREFIX}: ${this.options.command} ${args.join(' ')} exited ${String(outcome.exitCode)}${stderr === '' ? '' : `: ${stderr}`}`,

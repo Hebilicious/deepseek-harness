@@ -28,7 +28,7 @@ import {
   type SessionId,
 } from '@deepseek-ai/dsh-session'
 import type { SessionHandle, SessionPersistence } from '@deepseek-ai/dsh-session-persistence'
-import type { ExternalAgent } from './agent.ts'
+import type { ManagedAgent } from './base.ts'
 import { assertAgentOptions, FactoryOwnership, raceAbort, raceAbortCall } from './lifecycle.ts'
 import { externalModelSelectionProjection } from './model-selection.ts'
 import { turnBoundaryProjectionDefinition } from './turn-boundary.ts'
@@ -40,7 +40,7 @@ interface StoredSession {
 }
 
 /** Prepared-but-unpublished agent resources sharing one memoized teardown. */
-interface PreparedAgent<TAgent extends ExternalAgent> {
+interface PreparedAgent<TAgent extends ManagedAgent> {
   agent: TAgent
   /** Aborts when the factory unloads, the caller cancels, or teardown begins — ends any setup await. */
   signal: AbortSignal
@@ -61,23 +61,52 @@ interface PreparedAgent<TAgent extends ExternalAgent> {
  * teardown, and registers this host as the `ctx.agents` factory — all
  * effect-scoped to the service's fiber.
  */
-export abstract class ExternalAgentHost<TAgent extends ExternalAgent> implements AgentFactory {
+/** Host-wide choices a driver makes when it mounts the shared transaction. */
+export interface ExternalAgentHostOptions {
+  /**
+   * Register the durable `model/selection` fold this host's drivers read
+   * through `ExternalAgent.currentSelection`. The in-process loop reads
+   * selection through the session controller's own fold and opts out.
+   */
+  readonly modelSelection?: boolean
+  /**
+   * Effect-label prefix for the units this host registers. Owners and
+   * diagnostic tooling match on it, so a driver that already publishes a
+   * prefix keeps it.
+   */
+  readonly effectPrefix?: string
+}
+
+/**
+ * Abstract AgentFactory for drivers that own a session's agent lifecycle. The
+ * host owns every session/registry/persistence step; the subclass owns agent
+ * construction (`constructAgent`) and, on the agent itself, harness binding,
+ * turn driving, steering, injection, and interrupt.
+ */
+export abstract class ExternalAgentHost<TAgent extends ManagedAgent> implements AgentFactory {
   /** Factory-level ownership shared by create/resume wrappers and live agents. */
   protected readonly ownership: FactoryOwnership
   /** Plain holder prevents Cordis from re-tracing the factory's dependency context through a caller shadow. */
   protected readonly runtime: { ctx: Context }
+  /** Prefix of every effect label this host registers. */
+  private readonly effectPrefix: string
+  /** Driver name used in lifecycle abort reasons and inactive-factory errors. */
+  private readonly label: string
 
   /**
    * @param ctx - the driver service's registration context (dependency origin for everything the host owns).
    * @param label - driver name used in lifecycle abort reasons (`"<label> is not active"`).
+   * @param options - host-wide choices; omitted, the model-selection fold is registered.
    */
-  constructor(ctx: Context, label: string) {
+  constructor(ctx: Context, label: string, options: ExternalAgentHostOptions = {}) {
     this.ownership = new FactoryOwnership(ctx.fiber, label)
     this.runtime = { ctx }
+    this.effectPrefix = options.effectPrefix ?? 'externalAgentHost'
+    this.label = label
     ctx.sessionProjections.register(turnBoundaryProjectionDefinition)
-    ctx.sessionProjections.register(externalModelSelectionProjection)
-    ctx.effect(() => () => this.ownership.dispose(), 'externalAgentHost.transactions()')
-    ctx.effect(() => ctx.agents.setFactory(this), 'externalAgentHost.setFactory()')
+    if (options.modelSelection !== false) ctx.sessionProjections.register(externalModelSelectionProjection)
+    ctx.effect(() => () => this.ownership.dispose(), `${this.effectPrefix}.transactions()`)
+    ctx.effect(() => ctx.agents.setFactory(this), `${this.effectPrefix}.setFactory()`)
   }
 
   /**
@@ -216,7 +245,7 @@ export abstract class ExternalAgentHost<TAgent extends ExternalAgent> implements
           await unfollowOwner()
         }
         ownerCtx.fiber.assertActive()
-        if (!this.ownership.isActive()) throw new Error('external agent driver is not active')
+        if (!this.ownership.isActive()) throw new Error(`${this.label} is not active`)
         const owned = stored
         handle = undefined // ownership passes to setupAndPublish/prepare
         return await this.setupAndPublish(
@@ -259,7 +288,7 @@ export abstract class ExternalAgentHost<TAgent extends ExternalAgent> implements
     // Every caller reaches prepare() synchronously from a service method
     // whose Cordis dispatch already requires the live factory fiber, or
     // re-checks ownership itself after its awaits (resume's load barrier).
-    if (!this.ownership.isActive()) throw new Error('external agent driver is not active')
+    if (!this.ownership.isActive()) throw new Error(`${this.label} is not active`)
     if (callerSignal?.aborted) {
       throw callerSignal.reason instanceof Error
         ? callerSignal.reason
@@ -347,7 +376,7 @@ export abstract class ExternalAgentHost<TAgent extends ExternalAgent> implements
           abort.abort(new Error(`agent "${id}" setup aborted: owner disposed during setup`))
           return dispose(true)
         }
-      }, `externalAgentHost.lifecycle(${id})`)
+      }, `${this.effectPrefix}.lifecycle(${id})`)
       /* v8 ignore start -- ctx.effect throws only on an inactive fiber, which assertActive() above already rejected */
     } catch (error: unknown) {
       machineReady.resolve()
@@ -474,7 +503,7 @@ export abstract class ExternalAgentHost<TAgent extends ExternalAgent> implements
    */
   private async appendUnstoredSuffix(stored: StoredSession | undefined, session: Session): Promise<void> {
     if (stored === undefined) return
-    // Existing Session history read; migration deferred.
+    // oxlint-disable-next-line typescript/no-deprecated -- Existing Session history read; migration deferred.
     const suffix = session.snapshotEvents(SessionLogOffset(stored.storedCount))
     if (suffix.length > 0) await stored.handle.append(suffix)
     // Advance by what was stored, not to `session.seq`: an event appended

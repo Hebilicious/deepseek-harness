@@ -22,7 +22,6 @@ import type {} from '@deepseek-ai/dsh-user-questions'
 import type {} from '@deepseek-ai/dsh-sandbox-policy'
 import type {} from '@deepseek-ai/dsh-attachment'
 import type {} from '@deepseek-ai/dsh-session-projection'
-import type {} from '@deepseek-ai/dsh-session-persistence'
 import type {} from '@deepseek-ai/dsh-subprocess'
 import type {} from '@deepseek-ai/dsh-credentials'
 import type {} from '@deepseek-ai/dsh-typert-protocol'
@@ -168,15 +167,16 @@ export class CodexAppServer extends TypertRemoteService {
       eofGraceMs: config.eofGraceMs ?? DEFAULT_EOF_GRACE_MS,
     }
     this.runtime = new CodexAppServerRuntime(ctx, runtimeOptions)
+    const credentialName = config.credentialRef
     const agentConfig: CodexAgentConfig = {
       sandbox: config.sandbox ?? 'workspace-write',
       approval: config.approval ?? 'ask',
       networkAccess: config.networkAccess ?? false,
       ...config.model === undefined ? {} : { model: config.model },
       ...config.reasoningEffort === undefined ? {} : { reasoningEffort: config.reasoningEffort },
-      ...config.credentialRef === undefined
+      ...credentialName === undefined
         ? {}
-        : { loginWithApiKey: () => this.loginWithConfiguredKey() },
+        : { loginWithApiKey: () => this.loginWithConfiguredKey(credentialName) },
     }
     // The host constructor owns its registrations: the codexThread
     // projection, shared transaction ownership, and `agents.setFactory`.
@@ -311,12 +311,11 @@ export class CodexAppServer extends TypertRemoteService {
    * Resolve the configured credential and run `account/login/start
    * {type:'apiKey'}` — at most once per process lifetime, and only while the
    * agent-side bind still reports signed out.
+   * @param refName - the configured credential reference (env-var name).
    */
-  private async loginWithConfiguredKey(): Promise<void> {
+  private async loginWithConfiguredKey(refName: string): Promise<void> {
     if (this.apiKeyLoginAttempted) return
     this.apiKeyLoginAttempted = true
-    const refName = this.config.credentialRef
-    if (refName === undefined) return
     const credentials = this.ctx.get('credentials')
     if (credentials === undefined) {
       throw new Error(`${CODEX_PREFIX}: apiKey login needs a credential provider (mount dsh-credentials)`)
@@ -331,6 +330,9 @@ export class CodexAppServer extends TypertRemoteService {
 
 /** Wrap a runtime failure as a Remote error under one Codex code. */
 function asRemoteError(code: RemoteErrorCode, error: unknown): RemoteError {
+  // Every rejection a Remote method sees is an Error: the runtime normalizes
+  // non-Error reasons at its process and transport boundaries.
+  /* v8 ignore next -- see above */
   const message = error instanceof Error ? error.message : String(error)
   return new RemoteError(code, message, {})
 }

@@ -8,7 +8,7 @@
 
 import type { JsonValue } from '@deepseek-ai/dsh-util-values'
 
-declare module '@deepseek-ai/dsh-typert-protocol/types' {
+declare module '@deepseek-ai/dsh-typert-protocol' {
   interface RemoteErrorDetailsMap {
     /** A Codex account or rate-limit request failed at the app-server. */
     'codex/account-failed': {}

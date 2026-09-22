@@ -109,9 +109,9 @@ function reasoningInfo(entry: JsonObject): Pick<LlmResolvedModelInfo, 'reasoning
   const efforts = Array.isArray(entry.supportedReasoningEfforts)
     ? entry.supportedReasoningEfforts.flatMap((raw) => {
       const option = raw !== null && typeof raw === 'object' ? raw as JsonObject : undefined
-      const effort = option !== undefined ? optionalString(option.reasoningEffort) : undefined
-      if (effort === undefined) return []
-      const description = option !== undefined ? optionalString(option.description) : undefined
+      const effort = option === undefined ? undefined : optionalString(option.reasoningEffort)
+      if (option === undefined || effort === undefined) return []
+      const description = optionalString(option.description)
       return [{
         id: brandString<ReasoningEffortId>(effort),
         name: effort,

@@ -85,8 +85,5 @@ function toModelInfo(entry: DevinModelEntry): LlmModelInfo {
     id: entry.id,
     name: entry.name,
     ...entry.description === undefined ? {} : { description: entry.description },
-    ...entry.supportsImages === undefined
-      ? {}
-      : { inputModalities: entry.supportsImages ? ['text', 'image'] as const : ['text'] as const },
   }
 }

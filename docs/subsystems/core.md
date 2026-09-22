@@ -417,6 +417,38 @@ The two core IDs are `ToolCallId` (correlates a tool call with its result; dsh-l
 
 Generated from source by `scripts/gen-cordis-catalog.ts` (verified fresh by `pnpm run verify-cordis-catalog` in doc-sync; regenerate with `pnpm run gen-cordis-catalog`) — the language sides differ only in locale-specific paired document paths. Signature blocks use a `ts cordis-catalog` fence and keep the original source JSDoc; dispatch modes are defined in the [primer](../cordis-primer.md#dispatch-modes), and the framework-inherited `ctx` API lives in [cordis-api/inherited.md](../cordis-api/inherited.md).
 
+<a id="ctxacpharness--acpharness"></a>
+
+### `ctx.acpHarness` — `AcpHarness`
+
+The `acpHarness` service (`acp` Remote namespace). Owns the shared `devin acp` process and connection, the agent-factory host, the `devin` catalog adapter, and every auth operation — none of which belong to a session.
+
+```ts cordis-catalog
+/**
+ * Read the Devin account state: the agent's advertised auth methods plus
+ * the `devin auth status` CLI verdict.
+ * @param signal - caller lifetime.
+ * @returns normalized account facts.
+ */
+@Remote async status(signal: AbortSignal): Promise<DevinAccountSnapshot>
+
+/**
+ * Start the agent's browser authentication flow (`devin-browser`).
+ * @param request - `{methodId}`; defaults to the first advertised method.
+ * @param signal - caller lifetime.
+ */
+@Remote('login') async login(request: { methodId?: string }, signal: AbortSignal): Promise<void>
+
+/**
+ * Sign the Devin account out — the ACP `logout` request when the agent
+ * advertises it, the `devin auth logout` CLI otherwise.
+ * @param signal - caller lifetime.
+ */
+@Remote async logout(signal: AbortSignal): Promise<void>
+```
+
+Source: [`packages/core/agent-acp/src/index.ts`](../../packages/core/agent-acp/src/index.ts)
+
 <a id="ctxagentdefaultmodel--agentdefaultmodelconfig"></a>
 
 ### `ctx.agentDefaultModel` — `AgentDefaultModelConfig`
@@ -449,10 +481,7 @@ Concrete agent factory and driver service.
 
 ```ts cordis-catalog
 /**
- * Create an agent and session under one caller-supplied identity, owned by
- * the accessing fiber. Constructor-driven config calls mint a fresh combined
- * id before entering this boundary. When a persistence backend is mounted,
- * the session's durable identity and any seed are stored before publication.
+ * Create and publish a fresh agent around a caller-supplied session id.
  * @param id - shared agent/session identity.
  * @param options - concrete loop options.
  * @param meta - optional fresh-session workspace metadata.
@@ -461,7 +490,9 @@ Concrete agent factory and driver service.
 async create(id: SessionId, options: AgentOptions = {}, meta: Pick<SessionHeader, 'cwd'> = {}): Promise<Agent>
 
 /**
- * Create an owned agent on a caller-supplied session id.
+ * Create an owned agent on a caller-supplied session id. The registered
+ * factory is the shared host; this delegate keeps the service's published
+ * {@link AgentFactory} surface identical to it.
  * @param ownerCtx - caller context that structurally owns the lifecycle.
  * @param options - identities, optional live parent, session seed/metadata, loop options, setup, and cancellation.
  * @returns the published handle.
@@ -469,7 +500,9 @@ async create(id: SessionId, options: AgentOptions = {}, meta: Pick<SessionHeader
 async createAgent(ownerCtx: Context, options: CreateAgentOptions): Promise<AgentHandle>
 
 /**
- * Resume an owned agent from the configured persistence service.
+ * Resume an owned agent from the configured persistence service. The
+ * registered factory is the shared host; this delegate keeps the service's
+ * published {@link AgentFactory} surface identical to it.
  * @param ownerCtx - caller context that owns load, setup, and the live lifecycle.
  * @param options - persisted identity, optional live parent, loop options, setup, and cancellation.
  * @returns the published handle.
@@ -897,6 +930,66 @@ roots(): Agent[]
 ```
 
 Source: [`packages/core/agent/src/index.ts`](../../packages/core/agent/src/index.ts)
+
+<a id="ctxcodexappserver--codexappserver"></a>
+
+### `ctx.codexAppServer` — `CodexAppServer`
+
+The `codexAppServer` service (`codex` Remote namespace). Owns the shared app-server process and connection, the agent-factory host, the `codex` catalog adapter, and every account/login/rate-limit operation — none of which belong to a session.
+
+```ts cordis-catalog
+/**
+ * Read the Codex account state.
+ * @param signal - caller lifetime.
+ * @returns normalized account facts.
+ */
+@Remote async status(signal: AbortSignal): Promise<CodexAccountSnapshot>
+
+/**
+ * Start a device-code login; the panel shows the URL and code.
+ * @param signal - caller lifetime.
+ * @returns the attempt id, verification URL, and one-time code.
+ */
+@Remote('loginDeviceCode') async beginDeviceCode(signal: AbortSignal): Promise<CodexDeviceCodeLogin>
+
+/**
+ * Start a browser OAuth login; usable only where a browser can reach the
+ * app-server's localhost callback.
+ * @param signal - caller lifetime.
+ * @returns the attempt id and authorization URL.
+ */
+@Remote('loginBrowser') async beginBrowser(signal: AbortSignal): Promise<CodexBrowserLogin>
+
+/**
+ * Cancel one in-flight login attempt.
+ * @param request - `{loginId}` from a login start.
+ * @param signal - caller lifetime.
+ */
+@Remote('cancelLogin') async cancelLogin(request: { loginId?: string }, signal: AbortSignal): Promise<void>
+
+/**
+ * Sign the Codex account out.
+ * @param signal - caller lifetime.
+ */
+@Remote async logout(signal: AbortSignal): Promise<void>
+
+/**
+ * Read account quota.
+ * @param signal - caller lifetime.
+ * @returns the normalized rate-limit payload.
+ */
+@Remote async rateLimits(signal: AbortSignal): Promise<CodexRateLimits>
+
+/**
+ * Stream connection-global account notifications
+ * (`account/login/completed`, `account/updated`, `account/rateLimits/updated`).
+ * @param signal - caller lifetime; aborting ends the stream.
+ * @returns account notifications as they arrive.
+ */
+@Remote({ mode: 'stream' }) async *events(signal: AbortSignal): AsyncIterable<CodexAccountNotification>
+```
+
+Source: [`packages/core/agent-codex/src/index.ts`](../../packages/core/agent-codex/src/index.ts)
 
 <a id="agent-events"></a>
 

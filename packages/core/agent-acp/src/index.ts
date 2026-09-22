@@ -9,6 +9,7 @@
 
 import { Context } from '@deepseek-ai/cordis'
 import z from '@deepseek-ai/schemastery'
+import { errorChain } from '@deepseek-ai/dsh-llm'
 import type {} from '@deepseek-ai/dsh-llm'
 import {
   Remote,
@@ -86,10 +87,13 @@ export interface Config {
   authStatusArgs?: string[]
   /** Auth-logout CLI arguments (default `['auth', 'logout']`). */
   authLogoutArgs?: string[]
+  /** Deadline in milliseconds for one CLI verb (default 180000); the model catalog refreshes over the network. */
+  cliTimeoutMs?: number
 }
 
 const DEFAULT_DISPOSE_GRACE_MS = 5000
 const DEFAULT_EOF_GRACE_MS = 2000
+const DEFAULT_CLI_TIMEOUT_MS = 180_000
 
 declare module '@deepseek-ai/cordis' {
   interface Context {
@@ -129,6 +133,7 @@ export class AcpHarness extends TypertRemoteService {
     modelsArgs: z.array(z.string()).default(['models', 'list', '--format', 'json']),
     authStatusArgs: z.array(z.string()).default(['auth', 'status']),
     authLogoutArgs: z.array(z.string()).default(['auth', 'logout']),
+    cliTimeoutMs: z.number().default(DEFAULT_CLI_TIMEOUT_MS),
   })
 
   private readonly runtime: AcpRuntime
@@ -149,6 +154,7 @@ export class AcpHarness extends TypertRemoteService {
       modelsArgs: config.modelsArgs ?? ['models', 'list', '--format', 'json'],
       authStatusArgs: config.authStatusArgs ?? ['auth', 'status'],
       authLogoutArgs: config.authLogoutArgs ?? ['auth', 'logout'],
+      cliTimeoutMs: config.cliTimeoutMs ?? DEFAULT_CLI_TIMEOUT_MS,
     }
     this.runtime = new AcpRuntime(ctx, runtimeOptions)
     const agentConfig: AcpAgentConfig = {
@@ -207,6 +213,8 @@ export class AcpHarness extends TypertRemoteService {
           },
       }
     } catch (error: unknown) {
+      /* v8 ignore next -- authStatus converts every CLI failure into a value, so
+         this arm has no producer on the current runtime. */
       throw asRemoteError('acp/auth-failed', error)
     }
   }
@@ -231,15 +239,14 @@ export class AcpHarness extends TypertRemoteService {
   }
 
   /**
-   * Sign the Devin account out through the agent's `logout` method, falling
-   * back to the `devin auth logout` CLI when the connection is down.
+   * Sign the Devin account out — the ACP `logout` request when the agent
+   * advertises it, the `devin auth logout` CLI otherwise.
    * @param signal - caller lifetime.
    */
   @Remote
   async logout(signal: AbortSignal): Promise<void> {
     try {
-      if (this.runtime.active !== undefined) await this.runtime.logout(signal)
-      else await this.runtime.authLogout(signal)
+      await this.runtime.logout(signal)
     } catch (error: unknown) {
       throw asRemoteError('acp/login-failed', error)
     }
@@ -248,8 +255,7 @@ export class AcpHarness extends TypertRemoteService {
 
 /** Wrap a runtime failure as a Remote error under one ACP code. */
 function asRemoteError(code: RemoteErrorCode, error: unknown): RemoteError {
-  const message = error instanceof Error ? error.message : String(error)
-  return new RemoteError(code, message, {})
+  return new RemoteError(code, errorChain(error), {})
 }
 
 export default AcpHarness

@@ -16,17 +16,17 @@ There is no privileged core to patch: you extend dsh by mounting a plugin beside
 
 A running `dsh` is a plugin tree composed at boot from ordered layers.
 
-A **profile** is a named composition stored in the Harness home. It lists the bundles it stacks, holds any out-of-tree plugins it installs, and keeps the user's own `cordis.patch.yml`. `web`, `headless`, `sdk`, `sdk-minimal`, and `acp` ship as templates.
+A **profile** is a named composition stored in the Harness home. It lists the bundles it stacks, holds any out-of-tree plugins it installs, and keeps the user's own `cordis.patch.yml`. `web`, `web-codex`, `web-acp`, `headless`, `sdk`, `sdk-minimal`, and `acp` ship as templates.
 
 A **bundle** is a distribution format for Cordis config rows and the code they mount, so whatever it inserts stays patchable by the layers above it.
 
 Each declares itself in its own `package.json` under a `dsh` field: `dsh.profile` lists a profile's bundles, and `dsh.bundle` points at a bundle's patch file.
 
-[`dsh-base`](../packages/bundle/base/README.md) is the shared first layer of the `web`, `headless`, `sdk`, and `acp` profiles: model adapters, tools, persistence, sandbox and approval policy, settings, credentials, telemetry. [`dsh-web-app`](../packages/bundle/web-app/README.md) adds the browser application, [`dsh-headless`](../packages/bundle/headless/README.md) adds a one-shot runner with no server, [`dsh-sdk-app`](../packages/bundle/sdk-app/README.md) adds the SDK JSON-RPC server, and [`dsh-acp-app`](../packages/bundle/acp-app/README.md) adds the automation-only ACP server. [`dsh-sdk-minimal`](../packages/bundle/sdk-minimal/README.md) is the deliberate exception: one bundle owns its complete explicit SDK tree and does not apply `dsh-base`.
+[`dsh-base`](../packages/bundle/base/README.md) is the shared first layer of the `web`, `web-codex`, `web-acp`, `headless`, `sdk`, and `acp` profiles: model adapters, tools, persistence, sandbox and approval policy, settings, credentials, telemetry. [`dsh-web-app`](../packages/bundle/web-app/README.md) adds the browser application, [`dsh-headless`](../packages/bundle/headless/README.md) adds a one-shot runner with no server, [`dsh-sdk-app`](../packages/bundle/sdk-app/README.md) adds the SDK JSON-RPC server, and [`dsh-acp-app`](../packages/bundle/acp-app/README.md) adds the automation-only ACP server; [`dsh-web-codex`](../packages/bundle/web-codex/README.md) and [`dsh-web-acp`](../packages/bundle/web-acp/README.md) run that browser surface on Codex or Devin. [`dsh-sdk-minimal`](../packages/bundle/sdk-minimal/README.md) is the deliberate exception: one bundle owns its complete explicit SDK tree and does not apply `dsh-base`.
 
 Layers apply to an empty entry list in this order: each bundle in the profile's listed order, then the profile's `cordis.patch.yml`, then the home-level one, then any `--patch` overlay. A patch targets a row by id and replaces its whole config, or inserts new rows.
 
-Custom profiles default to live patch reload. The shipped `web` profile is live; `headless`, `sdk`, `sdk-minimal`, and `acp` apply all layers once at startup because replacing a one-shot or stdio application's dependencies after it owns work would invalidate that lifecycle.
+Custom profiles default to live patch reload, as do the shipped `web`, `web-codex`, and `web-acp` profiles; `headless`, `sdk`, `sdk-minimal`, and `acp` apply all layers once at startup because replacing a one-shot or stdio application's dependencies after it owns work would invalidate that lifecycle.
 
 To see the tree your machine boots:
 
@@ -62,7 +62,9 @@ Here are some core packages that contribute to the Cordis tree.
 | [`core/system-prompt`](subsystems/system-prompt.md) | Prompt-section and tool-schema assembly | `ctx.systemPrompt` |
 | [`core/tools`](subsystems/tools.md) | The scoped tool registry and guarded execution pipeline | `ctx.tools` |
 | [`core/agent`](subsystems/core.md) | The `Agent` interface, live registry, and `agent/*` events | `ctx.agents` |
-| [`core/agent-loop`](subsystems/core.md) | The default driver implementing that interface | `ctx.agentLoop` |
+| [`core/agent-external`](../packages/core/agent-external/README.md) | The shared driver base: inbox, turn/step projection, create/resume/publish host | library, no key |
+| [`core/agent-loop`](subsystems/core.md) | The in-process driver behind `ctx.agents` | `ctx.agentLoop` |
+| [`core/agent-codex`](../packages/core/agent-codex/README.md), [`core/agent-acp`](../packages/core/agent-acp/README.md) | Drivers over `codex app-server` and `devin acp` | `ctx.codexAppServer`, `ctx.acpHarness` |
 | [`core/scope`](subsystems/scope.md) | The per-agent scoped-registration primitive | library, no key |
 | [`llm/llm`](subsystems/llm-streaming.md) | Message and stream vocabulary plus the adapter seam | `ctx.llm` |
 | [`webhook/webhook`](subsystems/webhook.md) | Authenticated-delivery dispatch and Workspace Session creation | `ctx.webhookRuntime` |
@@ -104,11 +106,13 @@ turn/end
 
 `turn/*`, `step/*`, `system/message`, `user/message`, `assistant/message`, `assistant/attempt`, and `tool/*` are durable session events; the rest are live extension points across three domains. `agent/assistant-stream` publishes process-local start, transient chunk, and end frames. The loop commits the complete compact stream as one message or log-only attempt before a committed end frame, and the Web Session-follow adapter is the live event's only remote consumer. `agent/pre-step`, `agent/request`, `llm/stream`, and the three `tools/*` events are waterfalls, whose listeners must call `next()` to delegate; `agent/turn-stopping` is serial and has no `next()`.
 
-Input reaches the driver through one inbox. Some messages wake it immediately; injected context waits in the inbox until another message does.
+Input reaches the driver through one inbox: some messages wake it immediately, while injected context waits until another message does.
 
-`agent/pre-step` decides the accepted input. Listeners may rewrite or reject claimed messages; a rejected or empty first claim closes a durable turn without a step. An enter decision may set `startsRequestSeries`: the loop logs a fresh `request/header` (reason `series`, or `change` with `startsSeries: true` when the envelope also changed). Wrapping listeners preserve that declaration with `{ ...decision, messages }`. After assembly and `step/start`, `agent/request` and `prepareCall()` resolve the actual route before the system prompt and accepted users are committed; cancellation during either async phase commits neither. The prepared call capability governs prompt admission, not the preceding `request/context`. Every attempt synchronously reconciles the same rendered assembly, appends users only on the first attempt, logs header/context as needed, and derives and freezes the request before streaming the bound call. Retries do not repeat assembly or `agent/pre-step`. Surface replacements after attachment start a new request series, including during the first resumed pre-step; unchanged resume continues the series. The first admitted step reserves the system head before user messages even for an empty prompt (no wire message). The prompt travels only as `system/message` history: an empty rendering clears all active system nodes, leaving no old prompt model-visible; capable routes can append non-empty updates after the cached prefix; incapable routes and new request series consolidate non-empty prompt text at the first system node, with logged empty replacements for non-empty later system nodes ([decision](../.agents/notes/implemented/architecture/2026-09-02-system-prompt-as-surface-node.md); [decision rule](../packages/core/agent-loop/README.md#understand-the-implementation)).
+`agent/pre-step` decides the accepted input: listeners may rewrite or reject claimed messages, and a rejected or empty first claim closes the turn without a step. An enter decision may set `startsRequestSeries`, which logs a `request/header` (reason `series`, or `change` with `startsSeries: true` when the envelope also changed). After assembly and `step/start`, `agent/request` and `prepareCall()` resolve the actual route before the system prompt and accepted users are committed, so cancellation during either phase commits neither. Every attempt reconciles the same rendered assembly against the surviving `system/message` nodes, appends users only on the first attempt, and derives and freezes the request before streaming the bound call; retries repeat none of the assembly. Surface replacements after attachment start a new series; an unchanged resume continues it. The prompt travels only as `system/message` history: an empty rendering clears every active system node so no old prompt stays model-visible, capable routes can append non-empty updates after the cached prefix, and incapable routes or new request series consolidate non-empty text at the first system node with logged empty replacements for later ones ([decision](../.agents/notes/implemented/architecture/2026-09-02-system-prompt-as-surface-node.md); [decision rule](../packages/core/agent-loop/README.md#understand-the-implementation)).
 
 The loop sends immutable requests while keeping cancellation live. It reuses message-freeze provenance only for identities it has fully frozen; [agent-loop](../packages/core/agent-loop/README.md) owns the request construction rules.
+
+Every driver shares [`dsh-agent-external`](../packages/core/agent-external/README.md): the durable inbox, turn/step projection, and create/resume/publish transaction. `dsh-agent-loop` adds the in-process step loop; `dsh-agent-codex` and `dsh-agent-acp` hand the inside of a step to a foreign harness that owns the prompt, tools, and MCP servers.
 
 Details: the [sequence diagram](agent-lifecycle.md), the [tool pipeline](tool-execution-pipeline.md), and [cancellation and error recovery](subsystems/core.md#the-agent-handle).
 
@@ -120,7 +124,7 @@ Session consumers know only the current logical format. Header-only `stat` and `
 
 **Model-visible means logged.** Anything that reaches a model request must be reconstructable from the log, and a runtime invariant asserts it. This is why a new model-visible input requires a new session event: extend `SessionEventMap` and render from the log.
 
-**Projection seam.** `dsh-session-projection` owns `ctx.sessionProjections`: registered units fold committed events incrementally, host consumers read one typed state with `stateOf()`, and carriers batch cropped client views with `snapshot()`. A host reader either requires this service during activation or fails explicitly when the registry or required key is absent. Contributors may retain `ctx.inject(['sessionProjections'], ...)` registration without silently defaulting a missing host value. The agent loop registers shared `turnBoundary` state for its readers ([decision](../.agents/notes/implemented/architecture/2026-08-19-session-projection-mandatory-seam.md)).
+**Projection seam.** `dsh-session-projection` owns `ctx.sessionProjections`: registered units fold committed events incrementally, host consumers read one typed state with `stateOf()`, and carriers batch cropped client views with `snapshot()`. A host reader either requires this service during activation or fails explicitly when the registry or required key is absent. Contributors may retain `ctx.inject(['sessionProjections'], ...)` registration without silently defaulting a missing host value. The shared driver host registers `turnBoundary` state for its readers ([decision](../.agents/notes/implemented/architecture/2026-08-19-session-projection-mandatory-seam.md)).
 
 ## Capability seams
 
@@ -153,7 +157,7 @@ New behavior attaches to a documented extension point. Changing the loop itself 
 | Add durable session state | extend `SessionEventMap`; render and replay from the log |
 | Generate session titles | register the sole `ctx.sessionTitle` provider |
 | Manage a same-session objective | use `ctx.goals`; continue through `agent/*` |
-| Fork a session at a turn boundary | `ctx.agents.create({ sessionId, seed, meta: { parentSession, seedLength } })` — only agent-loop-published sessions persist |
+| Fork a session at a turn boundary | `ctx.agents.create({ sessionId, seed, meta: { parentSession, seedLength } })` — only driver-published sessions persist |
 | Store sessions in a new backend | implement `SessionPersistence` (`create`/`open`/`stat`/`list`/`export`) over the shared handle scaffolding |
 | Scope a registration to one agent | use that agent's `agent.ctx` |
 

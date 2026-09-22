@@ -46,11 +46,6 @@ export interface AcpSessionPeer {
   elicitation(params: CreateElicitationRequest): Promise<CreateElicitationResponse>
 }
 
-function thrown(value: unknown): Error {
-  /* v8 ignore next -- typed protocol and stream failures reject with Error. */
-  return value instanceof Error ? value : new Error(String(value))
-}
-
 /**
  * One ACP stdio connection plus its session-peer routing table. The ACP SDK
  * owns schema validation and request/response correlation; this class owns
@@ -70,10 +65,11 @@ export class AcpClientConnection {
     // Fatal connection state can settle after the current guarded operation.
     // Keep the shared rejection observed without another adoption hop.
     void this.fatalPromise.promise.catch(() => {})
-    this.connection.closed.then(
-      () => { this.fail(new Error(`${ACP_PREFIX}: ACP connection closed`)) },
-      (error: unknown) => { this.fail(thrown(error)) },
-    )
+    // The SDK resolves `closed` for every closure, transport failures
+    // included; the failing request itself carries the transport error.
+    void this.connection.closed.then(() => {
+      this.fail(new Error(`${ACP_PREFIX}: ACP connection closed`))
+    })
   }
 
   /**

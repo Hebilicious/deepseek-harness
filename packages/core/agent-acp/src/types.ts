@@ -6,7 +6,7 @@
  * @module @deepseek-ai/dsh-agent-acp/types
  */
 
-declare module '@deepseek-ai/dsh-typert-protocol/types' {
+declare module '@deepseek-ai/dsh-typert-protocol' {
   interface RemoteErrorDetailsMap {
     /** A Devin auth status/logout read failed at the CLI or ACP endpoint. */
     'acp/auth-failed': {}

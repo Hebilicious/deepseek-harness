@@ -394,15 +394,48 @@ describe('agent-codex driver', () => {
     await resumed.dispose()
   }, TEST_TIMEOUT)
 
-  it('rejects resume when thread/resume refuses', async () => {
+  it('rebinds a session whose recorded thread has no rollout', async () => {
+    bench = await setup()
+    // A session created and never prompted owns a thread with no rollout on
+    // disk, so the mock refuses thread/resume exactly as 0.153.4 does.
+    const first = await bench.ctx.agents.create({ sessionId: SessionId('s15'), agentOptions: {} })
+    const original = codexThreadOf(bench.ctx.sessionProjections, first.agent.session)
+    expect(original).toBeDefined()
+    await first.dispose()
+
+    const recovered = await bench.ctx.agents.resume({ resumeSessionId: SessionId('s15') })
+    send(recovered.agent, 'recovered turn')
+    await recovered.agent.whenIdle()
+
+    const rebound = codexThreadOf(bench.ctx.sessionProjections, recovered.agent.session)
+    expect(rebound).toBeDefined()
+    expect(rebound).not.toBe(original)
+    expect(eventsOf(recovered.agent, 'agent-codex/thread')).toHaveLength(2)
+    expect(turnEndKind(recovered.agent)).toBe('completed')
+    await recovered.dispose()
+
+    // The rebound identity is the durable one: the next resume targets it and
+    // succeeds without another thread/start.
+    const again = await bench.ctx.agents.resume({ resumeSessionId: SessionId('s15') })
+    expect(codexThreadOf(bench.ctx.sessionProjections, again.agent.session)).toBe(rebound)
+    await again.dispose()
+
+    const calls = await recordedCalls(bench.recordFile)
+    const resumes = calls.filter(call => call.method === 'thread/resume')
+    expect(resumes.map(call => (call.params as { threadId: string }).threadId))
+      .toEqual([original, rebound])
+    expect(calls.filter(call => call.method === 'thread/start')).toHaveLength(2)
+  }, TEST_TIMEOUT)
+
+  it('keeps a resume failure other than a missing rollout fatal', async () => {
     // `thread/start` still succeeds; only the resume call errors.
     bench = await setup({ MOCK_CODEX_FAIL_RESUME: '1' })
-    const first = await bench.ctx.agents.create({ sessionId: SessionId('s15'), agentOptions: {} })
+    const first = await bench.ctx.agents.create({ sessionId: SessionId('s15b'), agentOptions: {} })
     send(first.agent, 'first turn')
     await first.agent.whenIdle()
     await first.dispose()
 
-    await expect(bench.ctx.agents.resume({ resumeSessionId: SessionId('s15') }))
+    await expect(bench.ctx.agents.resume({ resumeSessionId: SessionId('s15b') }))
       .rejects.toThrow('thread/resume')
   }, TEST_TIMEOUT)
 
@@ -518,6 +551,92 @@ describe('agent-codex driver', () => {
     await waitForFile(flushMarker, TEST_TIMEOUT - 5000)
   }, TEST_TIMEOUT)
 
+  it('settles the live turn and rebinds on a fresh child after the child dies', async () => {
+    const ready = join(await mkdtemp(join(tmpdir(), 'agent-codex-dead-')), 'ready')
+    const pidFile = join(await mkdtemp(join(tmpdir(), 'agent-codex-pid-')), 'pid')
+    bench = await setup({
+      MOCK_CODEX_SCENARIO: 'never',
+      MOCK_CODEX_READY_FILE: ready,
+      MOCK_CODEX_PID_FILE: pidFile,
+    })
+    const first = await bench.ctx.agents.create({ sessionId: SessionId('s26'), agentOptions: {} })
+    send(first.agent, 'never answers')
+    await waitForFile(ready, TEST_TIMEOUT - 5000)
+
+    process.kill(Number(await readFile(pidFile, 'utf8')), 'SIGKILL')
+    // The dead child must settle the in-flight turn instead of hanging it.
+    await first.agent.whenIdle()
+    expect(turnEndKind(first.agent)).not.toBe('completed')
+
+    // The dead connection must not stay memoized: a later session binds on a
+    // freshly spawned child.
+    const second = await bench.ctx.agents.create({ sessionId: SessionId('s27'), agentOptions: {} })
+    expect(codexThreadOf(bench.ctx.sessionProjections, second.agent.session)).toBeDefined()
+
+    const calls = await recordedCalls(bench.recordFile)
+    expect(calls.filter(call => call.method === 'initialize')).toHaveLength(2)
+  }, TEST_TIMEOUT)
+
+  it('fails only the owning thread when a notification cannot be folded', async () => {
+    bench = await setup({ MOCK_CODEX_SCENARIO: 'bad-item-first' })
+    const errors: unknown[] = []
+    bench.ctx.on('agent/error', ({ agent: subject, error }) => {
+      if (subject.id === SessionId('s28')) errors.push(error)
+    })
+    const first = await bench.ctx.agents.create({ sessionId: SessionId('s28'), agentOptions: {} })
+    send(first.agent, 'malformed frame')
+    await first.agent.whenIdle()
+
+    expect(turnEndKind(first.agent)).toBe('error')
+    expect(errors).toHaveLength(1)
+
+    // The shared connection is still live: a second session on the same child
+    // runs its own turn to completion.
+    const second = await bench.ctx.agents.create({ sessionId: SessionId('s29'), agentOptions: {} })
+    send(second.agent, 'healthy turn')
+    await second.agent.whenIdle()
+    expect(turnEndKind(second.agent)).toBe('completed')
+
+    const calls = await recordedCalls(bench.recordFile)
+    expect(calls.filter(call => call.method === 'initialize')).toHaveLength(1)
+  }, TEST_TIMEOUT)
+
+  it('reports an unfoldable frame outside a turn on the agent error channel', async () => {
+    const started = await setup({ MOCK_CODEX_SCENARIO: 'late-frame' })
+    bench = started
+    const reported = new Promise<unknown>((resolve) => {
+      started.ctx.on('agent/error', ({ error }) => { resolve(error) })
+    })
+    const { agent } = await started.ctx.agents.create({ sessionId: SessionId('s30'), agentOptions: {} })
+    send(agent, 'late frame')
+    await agent.whenIdle()
+
+    // The frame arrives after settlement, so the turn still completes and the
+    // failure surfaces only on the error channel.
+    expect(turnEndKind(agent)).toBe('completed')
+    expect(String(await reported)).toContain('turn/started')
+  }, TEST_TIMEOUT)
+
+  it('reaps a child still handshaking when the plugin unloads during creation', async () => {
+    const markers = await mkdtemp(join(tmpdir(), 'agent-codex-startup-'))
+    const initialized = join(markers, 'initialized')
+    const exited = join(markers, 'exited')
+    bench = await setup({
+      MOCK_CODEX_INITIALIZE_FILE: initialized,
+      MOCK_CODEX_INITIALIZE_GATE_FILE: join(markers, 'release'),
+      MOCK_CODEX_FLUSH_ON_EOF: exited,
+      MOCK_CODEX_FLUSH_DELAY_MS: '20',
+    })
+    const creating = bench.ctx.agents.create({ sessionId: SessionId('s31'), agentOptions: {} })
+    await waitForFile(initialized, TEST_TIMEOUT - 5000)
+
+    // Unload the plugin while the initialize response is still gated: the
+    // disposal must reach the child instead of returning on a live process.
+    bench.ctx.registry.delete(CodexAppServer)
+    await expect(creating).rejects.toThrow()
+    await waitForFile(exited, TEST_TIMEOUT - 5000)
+  }, TEST_TIMEOUT)
+
   it('enumerates the codex catalog over model/list pages', async () => {
     bench = await setup({
       MOCK_CODEX_MODELS: JSON.stringify([
@@ -542,7 +661,9 @@ describe('agent-codex driver', () => {
     expect(status.authenticated).toBe(true)
     expect(status.accountType).toBe('chatgpt')
     const limits = await bench.ctx.codexAppServer.rateLimits(new AbortController().signal)
-    expect(JSON.stringify(limits.rateLimits)).toContain('42')
+    expect(limits.rateLimits).toMatchObject({
+      primary: { usedPercent: 42, windowDurationMins: 10_080, resetsAt: null },
+    })
     await bench.ctx.codexAppServer.logout(new AbortController().signal)
     const calls = await recordedCalls(bench.recordFile)
     expect(calls.some(call => call.method === 'account/logout')).toBe(true)

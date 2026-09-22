@@ -1,5 +1,6 @@
 /** Lazy libc execve and descriptor bindings used by the one-shot Linux bootstrap. */
 
+import { constants } from 'node:fs'
 import { getSystemErrorMessage, getSystemErrorName } from 'node:util'
 import koffi from 'koffi'
 
@@ -18,9 +19,12 @@ type NativeExecve = (
 
 type NativeFcntl = (fd: number, command: number, argument: number) => number
 
+/** Descriptor flags belong to one descriptor; status flags belong to the shared open file description. */
 const STANDARD_FILE_DESCRIPTORS = [0, 1, 2] as const
 const F_GETFD = 1
 const F_SETFD = 2
+const F_GETFL = 3
+const F_SETFL = 4
 const FD_CLOEXEC = 1
 
 let cachedExecve: LinuxExecve | undefined
@@ -38,8 +42,28 @@ function systemError(errno: number, syscall: string, path?: string): Error {
   return path === undefined ? error : Object.assign(error, { path })
 }
 
+/** Clear one inherited flag on a standard descriptor while preserving the remaining flags. */
+function clearInheritedFlag(
+  nativeFcntl: NativeFcntl,
+  fd: number,
+  command: number,
+  setCommand: number,
+  flag: number,
+): void {
+  const flags = nativeFcntl(fd, command, 0)
+  if (flags === -1) throw systemError(koffi.errno(), 'fcntl')
+  if ((flags & flag) === 0) return
+  if (nativeFcntl(fd, setCommand, flags & ~flag) === -1) {
+    throw systemError(koffi.errno(), 'fcntl')
+  }
+}
+
 /**
  * Load libc's execve and fcntl symbols on first use and retain the native bindings.
+ * The target inherits fd 0 through fd 2 with close-on-exec and O_NONBLOCK cleared:
+ * a piped standard stream is non-blocking for the runner runtime and its loaders,
+ * which would make the target's own writes fail with EAGAIN on a full pipe, while
+ * a directly spawned child receives the same descriptors blocking.
  * @returns a process-replacing execve operation that throws Node-style errors on failure.
  */
 export function loadLinuxExecve(): LinuxExecve {
@@ -53,12 +77,8 @@ export function loadLinuxExecve(): LinuxExecve {
   ) as NativeFcntl
   cachedExecve = (file, argv, env) => {
     for (const fd of STANDARD_FILE_DESCRIPTORS) {
-      const flags = nativeFcntl(fd, F_GETFD, 0)
-      if (flags === -1) throw systemError(koffi.errno(), 'fcntl')
-      if ((flags & FD_CLOEXEC) === 0) continue
-      if (nativeFcntl(fd, F_SETFD, flags & ~FD_CLOEXEC) === -1) {
-        throw systemError(koffi.errno(), 'fcntl')
-      }
+      clearInheritedFlag(nativeFcntl, fd, F_GETFD, F_SETFD, FD_CLOEXEC)
+      clearInheritedFlag(nativeFcntl, fd, F_GETFL, F_SETFL, constants.O_NONBLOCK)
     }
     nativeExecve(
       file,

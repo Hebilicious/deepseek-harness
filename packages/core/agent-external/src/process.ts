@@ -7,6 +7,7 @@
  */
 
 import type { Readable, Writable } from 'node:stream'
+import { disposeSubprocessChild } from '@deepseek-ai/dsh-subprocess'
 import type {
   SubprocessHandle,
   SubprocessOutcome,
@@ -16,21 +17,6 @@ import type {
 
 /** Default in-memory stderr tail: enough for a startup diagnostic, never a transcript. */
 const DEFAULT_STDERR_TAIL_BYTES = 64 * 1024
-
-function toError(value: unknown): Error {
-  return value instanceof Error ? value : new Error(String(value))
-}
-
-/** Bounded managed-range exit wait: observes the handle's range until it is empty or `ms` elapses. */
-async function rangeExitsWithin(child: SubprocessHandle, ms: number): Promise<boolean> {
-  const controller = new AbortController()
-  const timer = setTimeout(() => { controller.abort() }, ms)
-  try {
-    return await child.waitForExit(controller.signal)
-  } finally {
-    clearTimeout(timer)
-  }
-}
 
 /** Fully-specified harness-process spawn request; the seam applies no defaults. */
 export interface ExternalHarnessSpawnRequest {
@@ -126,38 +112,24 @@ export class ExternalHarnessProcess {
     return this.handle.done
   }
 
-  /** The retained stderr tail, for diagnostics after a failure or unexpected exit. */
+  /**
+   * The retained stderr tail, for diagnostics after a failure or unexpected exit.
+   * @returns the collected stderr text, or an empty string when the provider collected none.
+   */
   stderrTail(): string {
     return this.stderrReader?.readFrom(0).text ?? ''
   }
 
   /**
    * Cooperative teardown ladder over the seam's public verbs; resolves only
-   * at whole-range quiescence: stdin EOF (the child's window to flush
-   * persistence and reap its own descendants), then the terminate()
-   * escalation and its whole-range exit proof.
+   * at whole-range quiescence. Delegates to {@link disposeSubprocessChild},
+   * which closes stdin, holds the child on the EOF grace, and escalates
+   * through the terminate() procedure and its whole-range exit proof when that
+   * grace expires.
    * @param eofGraceMs - tier-1 window after stdin EOF.
+   * @returns resolves at managed-range quiescence; rejects with the single tier failure, or an `AggregateError` when several tiers failed.
    */
-  async dispose(eofGraceMs: number): Promise<void> {
-    const failures: Error[] = []
-    this.handle.stdin?.end()
-    let exited = false
-    try {
-      exited = await rangeExitsWithin(this.handle, eofGraceMs)
-    } catch (error: unknown) {
-      failures.push(toError(error))
-    }
-    if (!exited) {
-      // terminate() owns the bounded SIGTERM→SIGKILL timer. Its unbounded wait
-      // is the process owner's exit proof, not a second derived grace.
-      this.handle.terminate()
-      try {
-        await this.handle.waitForExit()
-      } catch (error: unknown) {
-        failures.push(toError(error))
-      }
-    }
-    if (failures.length === 1) throw failures[0]
-    if (failures.length > 1) throw new AggregateError(failures, 'harness subprocess teardown failed')
+  dispose(eofGraceMs: number): Promise<void> {
+    return disposeSubprocessChild(this.handle, eofGraceMs)
   }
 }
