@@ -14,6 +14,7 @@ import type { HarnessId } from '@deepseek-ai/dsh-agent/types'
 import type { RemoteResult } from '@deepseek-ai/dsh-typert-protocol'
 import type { SessionHarnessCatalog } from '@deepseek-ai/dsh-api-session-controller/types'
 import { AgentHarnessSeat } from '../src/client/AgentHarnessSeat.tsx'
+import { HarnessBadgeSeat } from '../src/client/HarnessBadgeSeat.tsx'
 import type { AgentHarnessSeatInjected } from '../src/client/AgentHarnessSeat.tsx'
 import { apply, inject } from '../src/client/index.ts'
 import { apply as hostApply } from '../src/index.ts'
@@ -29,12 +30,13 @@ const CATALOG: SessionHarnessCatalog = {
 
 const SINGLE: SessionHarnessCatalog = { harnesses: [{ id: hid('dsh'), name: 'DeepSeek Harness' }] }
 
-/** A root frame declaring the seat the chip waits for. */
+/** A root frame declaring both seats this plugin waits for. */
 function declareConversation(slots: SlotRegistry): () => void {
   return slots.register({
     name: 'root',
     children: {
       'conversation.hero.agentHarness': { kind: 'single', scope: 'session-maybe' },
+      'conversation.session.header.harness': { kind: 'single', scope: 'session' },
     },
   } as never, () => null)
 }
@@ -98,18 +100,36 @@ describe('ui-agent-harness apply', () => {
     expect(inject).toEqual(['slots', 'sessions', 'locale', 'remote', 'remote.session'])
   })
 
-  it('registers the chip only while the conversation declares the seat', async () => {
+  it('registers the chip and the header mark only while the conversation declares those seats', async () => {
     const b = await bench()
 
-    // A bare register into an undeclared slot is an error, so the chip waits
-    // on the actual declaration instead of on apply order.
+    // A bare register into an undeclared slot is an error, so each surface
+    // waits on the actual declaration instead of on apply order.
     expect(b.slots.entries('conversation.hero.agentHarness')).toHaveLength(0)
+    expect(b.slots.entries('conversation.session.header.harness')).toHaveLength(0)
 
     const dispose = declareConversation(b.slots)
     expect(b.slots.entries('conversation.hero.agentHarness')[0]!.component).toBe(AgentHarnessSeat)
+    expect(b.slots.entries('conversation.session.header.harness')[0]!.component).toBe(HarnessBadgeSeat)
 
     dispose()
     expect(b.slots.entries('conversation.hero.agentHarness')).toHaveLength(0)
+    expect(b.slots.entries('conversation.session.header.harness')).toHaveLength(0)
+  })
+
+  it('gives the header mark the same catalog and staging face as the chip', async () => {
+    const b = await bench()
+    declareConversation(b.slots)
+
+    const entry = b.slots.entries('conversation.session.header.harness')[0]
+    if (entry === undefined) throw new Error('the header mark is not registered')
+    const injectFace = entry.inject
+    if (injectFace === undefined) throw new Error('the header mark declares no injection face')
+    const injected = injectFace() as { hooks: unknown; load: () => Promise<void> }
+    expect(injected.hooks).toBeDefined()
+
+    await injected.load()
+    expect(b.reads()).toBeGreaterThan(0)
   })
 
   it('removes the chip with its fiber', async () => {

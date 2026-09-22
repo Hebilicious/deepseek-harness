@@ -22,6 +22,8 @@ import type {} from '@deepseek-ai/dsh-client-ui-conversation/client'
 import type {} from '@deepseek-ai/dsh-client-ui-renderer/client'
 import type { Context as ClientContext } from '@deepseek-ai/cordis'
 import { AgentHarnessSeat } from './AgentHarnessSeat.tsx'
+import { HarnessBadgeSeat } from './HarnessBadgeSeat.tsx'
+import type { HarnessBadgeSeatInjected } from './HarnessBadgeSeat.tsx'
 import type { AgentHarnessSeatInjected } from './AgentHarnessSeat.tsx'
 import { AgentHarnessSeatController } from './seat-store.ts'
 import { en, type AgentHarnessKey, zh } from './locales.ts'
@@ -37,6 +39,7 @@ declare module '@deepseek-ai/dsh-client-ui-slots' {
 }
 
 export type { AgentHarnessSeatInjected, AgentHarnessSeatProps } from './AgentHarnessSeat.tsx'
+export type { HarnessBadgeSeatInjected, HarnessBadgeSeatProps } from './HarnessBadgeSeat.tsx'
 export type { AgentHarnessSeatState } from './seat-store.ts'
 
 /** Required services (cordis fiber inject). */
@@ -71,6 +74,15 @@ export function apply(ctx: ClientContext): void {
       select: (harness) => { controller.select(harness) },
     }),
   }, AgentHarnessSeat))
+
+  ctx.slots.inject('conversation.session.header.harness', () => ctx.slots.register({
+    name: 'conversation.session.header.harness',
+    locale: AGENT_HARNESS_NS,
+    inject: (): HarnessBadgeSeatInjected => ({
+      hooks: { agentHarnessSeat: controller.store },
+      load: () => controller.load(),
+    }),
+  }, HarnessBadgeSeat))
 
   // The catalog is read before the chip can render: a New Session started from
   // anywhere else in the shell still sends the create request a deployment

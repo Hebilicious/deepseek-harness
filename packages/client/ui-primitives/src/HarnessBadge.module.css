@@ -1,0 +1,46 @@
+/* One square mark per harness: the monogram carries the identity, the tone
+ * separates harnesses at a glance. Tones are the theme's static palette, not
+ * alias tokens, so a session row's mark keeps its color across themes the same
+ * way a provider brand color would. */
+.badge {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  border-radius: 4px;
+  corner-shape: round;
+  background: var(--dsh-harness-mark-tone, var(--dsw-static-neutral-400));
+  color: var(--dsw-static-neutral-00);
+  font-weight: 600;
+  line-height: 1;
+  letter-spacing: 0.01em;
+  user-select: none;
+}
+
+.badge[data-tone='brand'] {
+  --dsh-harness-mark-tone: var(--dsw-static-deepseek-500);
+}
+
+.badge[data-tone='graphite'] {
+  --dsh-harness-mark-tone: var(--dsw-static-neutral-600);
+}
+
+.badge[data-tone='clay'] {
+  --dsh-harness-mark-tone: var(--dsw-static-amber-600);
+}
+
+.badge[data-tone='blue'] {
+  --dsh-harness-mark-tone: var(--dsw-static-blue-600);
+}
+
+.badge[data-tone='green'] {
+  --dsh-harness-mark-tone: var(--dsw-static-green-500);
+}
+
+.badge[data-tone='red'] {
+  --dsh-harness-mark-tone: var(--dsw-static-red-500);
+}
+
+.badge[data-tone='neutral'] {
+  --dsh-harness-mark-tone: var(--dsw-static-neutral-400);
+}

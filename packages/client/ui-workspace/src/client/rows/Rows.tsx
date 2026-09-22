@@ -9,6 +9,7 @@
 import { useEffect, useRef, useState } from 'react'
 import clsx from 'clsx'
 import {
+  HarnessBadge,
   HoverCard, IconAlarmClockOutline16, IconArchiveOutline20, IconBranchOutline16,
   IconEditOutline16, IconEllipsisOutline16, IconFolderClose16, IconFolderOpen16,
   IconPlusOutline16, IconTrashOutline16, IconTriangleRightFill14, Menu, relativeTime,
@@ -389,7 +390,8 @@ export function SearchResultItem({ result, currentId, onOpen, t }: {
 
 /**
  * One top-level 34px session row: status dot (pending user interaction outranks
- * own or descendant activity), title, relative time, and the row actions menu.
+ * own or descendant activity), the owning harness badge, title, relative time,
+ * and the row actions menu.
  * @param props.node - derived session node.
  * @param props.currentId - selected session id (row highlight).
  * @param props.now - epoch ms for relative-time formatting.
@@ -400,11 +402,13 @@ export function SearchResultItem({ result, currentId, onOpen, t }: {
  * @param props.onReveal - scroll this row into view after search navigation, then acknowledge it.
  * @param props.drag - optional row-drag target wiring; blank rows cannot start a drag.
  * @param props.flat - omit the empty status slot in the hierarchy-free flat list.
+ * @param props.harnessLabel - name of a harness the catalog mounts, by recorded id.
  * @param props.t - the browser root's locale seat.
  * @returns the session row.
  */
 export function SessionNodeItem({
-  node, currentId, now, onOpen, onRename, onFork, onArchive, onReveal, drag, flat = false, t,
+  node, currentId, now, onOpen, onRename, onFork, onArchive, onReveal, drag, flat = false,
+  harnessLabel, t,
 }: {
   node: SessionNode
   currentId: string | undefined
@@ -422,6 +426,12 @@ export function SessionNodeItem({
   drag?: RowDragProps | undefined
   /** The row is rendered without a parent Workspace header. */
   flat?: boolean | undefined
+  /**
+   * Display name of a harness recorded on this row's session (the catalog
+   * lookup). Absent, or returning nothing for the id, the badge labels itself
+   * with the id: an unmounted harness still says which harness wrote the log.
+   */
+  harnessLabel?: ((harnessId: string) => string) | undefined
   t: RowTranslate
 }) {
   const row = node
@@ -494,6 +504,13 @@ export function SessionNodeItem({
         <span className={css.slot}>
           {showStatus && <SessionStatusDots statuses={statuses} />}
         </span>
+      )}
+      {row.harnessId !== undefined && (
+        <HarnessBadge
+          harnessId={row.harnessId}
+          label={harnessLabel === undefined ? row.harnessId : harnessLabel(row.harnessId)}
+          className={css.harnessBadge}
+        />
       )}
       <span ref={titleRef} className={css.title}>{title}</span>
       {row.hasActiveSchedule && <ActiveScheduleIndicator t={t} />}

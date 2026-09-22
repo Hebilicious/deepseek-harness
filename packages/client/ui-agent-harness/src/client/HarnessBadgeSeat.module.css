@@ -1,0 +1,6 @@
+/* Harness mark in the Session header, directly left of the title. The seat
+   wrapper adds no gap of its own, so the mark owns the space between itself
+   and the title. */
+.mark {
+  margin-right: 8px;
+}

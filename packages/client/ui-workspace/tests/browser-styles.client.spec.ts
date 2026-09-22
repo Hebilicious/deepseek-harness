@@ -108,6 +108,13 @@ describe('WorkspaceBrowser.module.css list', () => {
       .toBe('var(--dsw-alias-interactive-bg-hover)')
   })
 
+  it('gives the harness badge the 4px title gap without moving a badge-less row', () => {
+    expect(rowDeclarations('.harnessBadge')?.get('margin-left')).toBe('4px')
+    expect(rowDeclarations('.flatSessionRowWithoutStatus .harnessBadge + .title')?.get('margin-left')).toBe('4px')
+    // The badge-less flat row keeps its title flush with the status-less cell.
+    expect(rowDeclarations('.flatSessionRowWithoutStatus .title')?.get('margin-left')).toBe('0')
+  })
+
   it('reveals a clipped session title by scrolling it on row hover', () => {
     // Smooth versus reduced motion is pinned as a computed style in
     // apps/web/tests/sidebar-title-hover-scroll.e2e.ts: this helper merges

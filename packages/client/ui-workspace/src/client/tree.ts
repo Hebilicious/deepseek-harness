@@ -3,6 +3,8 @@
  * Session order. Unassigned Sessions trail under Ungrouped; only the selected
  * blank Session remains visible.
  */
+// Type-only: pulls the agent harness projection merge into this program.
+import type {} from '@deepseek-ai/dsh-agent/types'
 import {
   type SessionListState, type SessionSearchResultItem, type SessionSummary,
 } from '@deepseek-ai/dsh-api-session-controller/client'
@@ -59,6 +61,11 @@ export interface SessionNode {
   completed: boolean
   /** The current list projection contains at least one active Schedule record. */
   hasActiveSchedule: boolean
+  /**
+   * Harness that owns this Session. Absent while the log records none: a
+   * Session created before the record existed has no harness to badge.
+   */
+  harnessId?: string
   updatedAt: number
 }
 
@@ -319,6 +326,9 @@ function sessionNode(
 ): SessionNode {
   const status = statuses.get(s.id)
   const pendingInteraction = visiblePendingKind(status?.pendingInteraction?.kind)
+  // A null projection means "no record yet", the same absence as a list that
+  // carries no projection values at all.
+  const harnessId = s.projectionValues?.agentHarness ?? undefined
   return {
     id: s.id,
     title: sessionTitle(s),
@@ -328,6 +338,7 @@ function sessionNode(
     completed: status?.completionUnread === true,
     hasActiveSchedule: hasActiveSchedule(s),
     updatedAt: s.updatedAt,
+    ...(harnessId === undefined ? {} : { harnessId }),
     ...(pendingInteraction === undefined ? {} : { pendingInteraction }),
   }
 }

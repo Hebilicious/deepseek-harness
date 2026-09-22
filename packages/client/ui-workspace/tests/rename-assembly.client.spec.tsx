@@ -36,9 +36,11 @@ async function createRuntime(): Promise<SlotTestRuntime> {
   runtime.ctx.provide('layout', { selectPanel: vi.fn() })
   runtime.releaseWorkspaceSource()
   // The rename flow never picks a directory; the namespace only has to be there
-  // for ui-workspace's inject to settle.
+  // for ui-workspace's inject to settle. The browsing region also reads the
+  // mounted-harness catalog, which badges no row of these fixtures.
   const directoryPicker = {}
-  runtime.remote.provideNamespaces({ directoryPicker })
+  const session = { harnessCatalog: () => Promise.resolve({ ok: true as const, value: { harnesses: [] } }) }
+  runtime.remote.provideNamespaces({ directoryPicker, session })
   const locale = new LocaleRuntime(runtime.ctx)
   runtime.ctx.provide('locale', locale)
   runtime.slots.installLocale(locale)

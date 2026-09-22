@@ -11,6 +11,7 @@
 import type { Context } from '@deepseek-ai/cordis'
 import type { RemoteHostFacts } from '@deepseek-ai/dsh-api-remotes/client'
 import type { ISessions } from '@deepseek-ai/dsh-api-session-controller/client'
+import type { SessionHarnessOption } from '@deepseek-ai/dsh-api-session-controller/types'
 import type { IWorkspaces, WorkspaceSnapshot } from '@deepseek-ai/dsh-api-workspace-controller/client'
 import type { HostObservable, SnapshotSelectorHook } from '@deepseek-ai/dsh-client-ui-slots'
 // Type-only: pulls the Controller service merges.
@@ -59,6 +60,43 @@ declare module '@deepseek-ai/dsh-api-session-controller/client' {
 const NS = 'workspace'
 
 /**
+ * Mounted-harness catalog behind the session-row badges: one read per
+ * connection generation, notified to the rows that bind it. A failed or
+ * rejected read keeps the catalog already published, so a row whose harness
+ * the catalog does not name keeps the recorded id as its label.
+ * @param ctx - client root context carrying the Session Remote namespace.
+ * @returns the catalog source the browsing region binds as `useHarnessCatalog`.
+ */
+function harnessCatalogSource(ctx: Context): HostObservable<readonly SessionHarnessOption[]> {
+  let harnesses: readonly SessionHarnessOption[] = []
+  let generation = 0
+  const listeners = new Set<() => void>()
+  const load = (): void => {
+    const current = ++generation
+    void ctx.remote.session.harnessCatalog().then((result) => {
+      // Overlapping reads: only the newest one publishes, so a reset's reply
+      // is never overwritten by the generation it replaced.
+      if (current !== generation || !result.ok) return
+      harnesses = result.value.harnesses
+      for (const listener of listeners) listener()
+    }).catch(() => {
+      // A rejected wire call keeps the catalog the rows already label with.
+    })
+  }
+  ctx.effect(() => {
+    load()
+    return ctx.on('connection/reset', load)
+  }, 'ui-workspace: harness catalog')
+  return {
+    getSnapshot: () => harnesses,
+    subscribe: (listener) => {
+      listeners.add(listener)
+      return () => { listeners.delete(listener) }
+    },
+  }
+}
+
+/**
  * Required services (cordis fiber inject). The target slots are declared by
  * the ui-sidebar / ui-conversation applies, whose activation order relative
  * to this one is NOT constrained: dsh.client.inject edges are informational
@@ -67,7 +105,8 @@ const NS = 'workspace'
  * declaration through `slots.inject()` instead of assuming order.
  */
 export const inject = [
-  'slots', 'sessions', 'workspaces', 'locale', 'remote', 'remote.directoryPicker', 'layout',
+  'slots', 'sessions', 'workspaces', 'locale', 'remote', 'remote.directoryPicker', 'remote.session',
+  'layout',
 ]
 
 /**
@@ -102,6 +141,7 @@ export function apply(ctx: Context): void {
     subscribe: listener => ctx.on('connection/reset', listener),
   }
   const pickerFlowSource = flowSource('conversation.hero.workspace.directoryFlow')
+  const harnessCatalog = harnessCatalogSource(ctx)
   const openSession: WorkspaceBrowserInjected['open'] = (sessionId) => {
     uiWorkspace.openSession(sessionId)
   }
@@ -133,7 +173,7 @@ export function apply(ctx: Context): void {
     },
     archiveSession: async (sessionId) => { await uiWorkspace.archiveSession(sessionId) },
     createWorkspace: input => workspaces.create(input),
-    hooks: { directoryFlow: browserFlowSource, hostInfo },
+    hooks: { directoryFlow: browserFlowSource, hostInfo, harnessCatalog },
   })
   const pickerInjected = (): WorkspacePickerInjected => ({
     createWorkspace: input => workspaces.create(input),

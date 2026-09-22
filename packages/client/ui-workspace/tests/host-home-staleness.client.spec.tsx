@@ -31,8 +31,11 @@ async function bench() {
   runtime.ctx.provide('layout', { selectPanel: vi.fn() })
   runtime.releaseWorkspaceSource()
   const directoryPicker = {}
+  // The browsing region reads the mounted-harness catalog; no fixture session
+  // records a harness, so the catalog badges nothing here.
+  const session = { harnessCatalog: () => Promise.resolve({ ok: true as const, value: { harnesses: [] } }) }
   const { remote } = runtime
-  remote.provideNamespaces({ directoryPicker })
+  remote.provideNamespaces({ directoryPicker, session })
   const locale = new LocaleRuntime(runtime.ctx)
   runtime.ctx.provide('locale', locale)
   runtime.slots.installLocale(locale)

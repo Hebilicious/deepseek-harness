@@ -224,6 +224,27 @@ describe('deriveGroups', () => {
     ).items.map(node => [node.id, node.hasActiveSchedule])).toEqual(expected)
   })
 
+  it('carries the recorded harness on grouped and flat rows and omits it without one', () => {
+    const recorded = { ...summary('recorded', 3), projectionValues: { agentHarness: 'codex' } }
+    // A null projection is the same absence as a list with nothing recorded.
+    const unrecorded = { ...summary('unrecorded', 2), projectionValues: { agentHarness: null } }
+    const legacy = summary('legacy', 1)
+    const sessions = list(recorded, unrecorded, legacy)
+    const workspaces = [workspace('project', ['recorded', 'unrecorded', 'legacy'], 'Project')]
+    const expected = [
+      [sid('recorded'), 'codex'],
+      [sid('unrecorded'), undefined],
+      [sid('legacy'), undefined],
+    ]
+
+    expect(deriveGroups(sessions, workspaces, noArchive, noAttention, view(['project']))[0]!.sessions
+      .map(node => [node.id, node.harnessId])).toEqual(expected)
+    const flat = deriveFlat(sessions, visibleSessionIds(sessions, noArchive), noAttention)
+    expect(flat.map(node => [node.id, node.harnessId])).toEqual(expected)
+    // Absent, not present-and-undefined: a legacy row carries no harness key.
+    expect('harnessId' in flat.find(node => node.id === legacy.id)!).toBe(false)
+  })
+
   it('hides subagent-origin sessions without hiding ordinary forks', () => {
     const parent = summary('parent', 1)
     const subagent = {

@@ -27,6 +27,8 @@ kind: "package-reference"
 
 把本插件与对话包一起挂载；新建会话界面随后在工作区与 agent 模式控件旁得到 `conversation.hero.agentHarness` chip。已挂载的 harness 来自宿主目录，加载时读取一次，重连后再读一次；读取失败时 chip 保持它已有的目录。
 
+在会话标题左侧，同一插件还提供 harness 标记：一个 `HarnessBadge`，显示当前打开的会话由哪个 harness 拥有；只要会话记录了 harness 就会渲染，无论部署挂载一个还是多个。它不承载任何操作，因为 harness 在创建时即已固定。
+
 ### 选择 harness
 
 chip 显示下一个会话将运行的 harness，并打开一个列出全部已挂载 harness 的菜单，每行带各自的名称与描述。第一个已挂载的 harness 是初始选择，选择后立即替换。该选择暂存在 Session Controller 上，因此工作区流程发出的创建请求会带上它：菜单在没有会话时提供，而挂载多个 harness 的部署会拒绝未指名 harness 的创建。

@@ -60,6 +60,18 @@
   min-width: 0;
 }
 
+/* Harness mark immediately left of the title; laid out only while its
+   occupant renders something, and the occupant owns its trailing gap. */
+.headerHarness {
+  display: flex;
+  flex: none;
+  align-items: center;
+}
+
+.headerHarness:empty {
+  display: none;
+}
+
 /* Leading seat before the breadcrumbs; laid out only while its occupant
    renders something, and the occupant owns its own trailing gap (a CSS-hidden
    occupant keeps the seat non-empty, so a seat-owned margin would push the

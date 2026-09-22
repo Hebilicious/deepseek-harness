@@ -118,6 +118,19 @@
   margin-left: 0;
 }
 
+/* The title's left margin is the gap after whatever precedes it, so the badge
+   takes the 4px gap from the status slot itself and leaves the title's margin
+   alone. A row without a badge renders exactly the cell it rendered before. */
+.harnessBadge {
+  margin-left: 4px;
+}
+
+/* The flat list drops the title's leading gap with its status slot; a badge
+   ahead of that title still needs the 4px between itself and the text. */
+.flatSessionRowWithoutStatus .harnessBadge + .title {
+  margin-left: 4px;
+}
+
 @keyframes row-in {
   from { opacity: 0; }
 }

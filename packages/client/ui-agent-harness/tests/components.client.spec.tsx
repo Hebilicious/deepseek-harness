@@ -14,6 +14,8 @@ import type { HarnessId } from '@deepseek-ai/dsh-agent/types'
 import type { SessionHarnessOption } from '@deepseek-ai/dsh-api-session-controller/types'
 import { SessionId } from '@deepseek-ai/dsh-session/types'
 import { AgentHarnessSeat } from '../src/client/AgentHarnessSeat.tsx'
+import { HarnessBadgeSeat } from '../src/client/HarnessBadgeSeat.tsx'
+import type { HarnessBadgeSeatProps } from '../src/client/HarnessBadgeSeat.tsx'
 import type { AgentHarnessSeatProps } from '../src/client/AgentHarnessSeat.tsx'
 import type { AgentHarnessSeatState } from '../src/client/seat-store.ts'
 import { en } from '../src/client/locales.ts'
@@ -157,5 +159,46 @@ describe('a session that already exists', () => {
     renderSeat({ session: 's1', recorded: 'dsh', state: { harnesses: [MOUNTED[0]!], current: hid('dsh') } })
 
     expect(screen.queryByRole('button')).toBeNull()
+  })
+})
+
+describe('the Session header harness mark', () => {
+  /** Render the header mark against one session projection value. */
+  function renderMark(recorded: string | null | undefined, state?: Partial<AgentHarnessSeatState>) {
+    const store = createSnapshotStore<AgentHarnessSeatState>({ ...READY, ...state })
+    render(<HarnessBadgeSeat {...({
+      load: vi.fn(() => Promise.resolve()),
+      useAgentHarnessSeat: bindSnapshotSelector(store),
+      useProjection: () => recorded,
+    } as unknown as HarnessBadgeSeatProps)} />)
+  }
+
+  it('marks the session with the recorded harness and its catalog name', () => {
+    renderMark('codex')
+
+    const mark = screen.getByRole('img', { name: 'Codex' })
+    expect(mark.getAttribute('data-harness')).toBe('codex')
+    expect(mark.getAttribute('title')).toBe('Codex')
+    expect(mark.textContent).toBe('CX')
+  })
+
+  it('still marks a harness the catalog no longer names, labelled by its id', () => {
+    renderMark('grok')
+
+    const mark = screen.getByRole('img', { name: 'grok' })
+    expect(mark.textContent).toBe('GK')
+  })
+
+  it('marks a single-harness deployment too, and renders nothing before the record', () => {
+    renderMark('dsh', { harnesses: [MOUNTED[0]!], current: hid('dsh') })
+    expect(screen.getByRole('img', { name: 'DeepSeek Harness' }).textContent).toBe('DS')
+    cleanup()
+
+    renderMark(null)
+    expect(screen.queryByRole('img')).toBeNull()
+    cleanup()
+
+    renderMark(undefined)
+    expect(screen.queryByRole('img')).toBeNull()
   })
 })

@@ -29,6 +29,8 @@ Mount this plugin alongside the conversation package; the new-session screen rec
 
 ### Choosing a harness
 
+Beside the Session title, the same plugin contributes the harness mark: a `HarnessBadge` showing which harness owns the open session, rendered for every session that records one, whether the deployment mounts one harness or several. It carries no control, because the harness is fixed at creation.
+
 The chip names the harness the next session will run and opens a menu of every mounted harness with its own name and description. The first mounted harness is the opening choice, and a pick replaces it at once. The choice is staged on the Session Controller, so the create request the Workspace flow sends carries it: the menu is offered while no session exists, and a deployment that mounts several harnesses refuses a create that names none.
 
 ### After the session exists

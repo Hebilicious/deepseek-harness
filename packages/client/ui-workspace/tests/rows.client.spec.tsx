@@ -169,6 +169,95 @@ describe('workspace browser rows', () => {
     expect(onOpen).toHaveBeenCalledWith(node.id)
   })
 
+  it('badges the owning harness between the status slot and the title', () => {
+    const node: SessionNode = {
+      id: sid('badged'), title: 'Badged', blank: false, running: false,
+      runningSubagentCount: 0, completed: false, hasActiveSchedule: false, updatedAt: 0,
+      harnessId: 'codex',
+    }
+    render(
+      <SessionNodeItem node={node} currentId={undefined} now={0} onOpen={vi.fn()}
+        onRename={vi.fn()} onFork={vi.fn()} onArchive={vi.fn()}
+        harnessLabel={() => 'Codex CLI'} t={t} />,
+    )
+    const badge = screen.getByRole('img', { name: 'Codex CLI' })
+    expect(badge.getAttribute('title')).toBe('Codex CLI')
+    expect(badge.getAttribute('data-harness')).toBe('codex')
+    const title = screen.getByText('Badged')
+    expect(badge.nextElementSibling).toBe(title)
+    expect(badge.previousElementSibling?.className).toMatch(/slot/)
+  })
+
+  it('labels the badge with the recorded id when no catalog names it', () => {
+    const node: SessionNode = {
+      id: sid('foreign'), title: 'Foreign', blank: false, running: false,
+      runningSubagentCount: 0, completed: false, hasActiveSchedule: false, updatedAt: 0,
+      harnessId: 'unmounted',
+    }
+    render(
+      <SessionNodeItem node={node} currentId={undefined} now={0} onOpen={vi.fn()}
+        onRename={vi.fn()} onFork={vi.fn()} onArchive={vi.fn()} t={t} />,
+    )
+    expect(screen.getByRole('img', { name: 'unmounted' }).getAttribute('data-harness')).toBe('unmounted')
+  })
+
+  it('renders no badge for a session whose log records no harness', () => {
+    const node: SessionNode = {
+      id: sid('legacy'), title: 'Legacy', blank: false, running: false,
+      runningSubagentCount: 0, completed: false, hasActiveSchedule: false, updatedAt: 0,
+    }
+    render(
+      <SessionNodeItem node={node} currentId={undefined} now={0} onOpen={vi.fn()}
+        onRename={vi.fn()} onFork={vi.fn()} onArchive={vi.fn()}
+        harnessLabel={() => 'Codex CLI'} t={t} />,
+    )
+    expect(screen.queryByRole('img')).toBeNull()
+    expect(screen.getByText('Legacy').previousElementSibling?.className).toMatch(/slot/)
+  })
+
+  it('keeps title, status, time, verbs, and drag on a badged row', () => {
+    const node: SessionNode = {
+      id: sid('badged-running'), title: 'Badged running', blank: false, running: true,
+      runningSubagentCount: 0, completed: false, hasActiveSchedule: false, updatedAt: 0,
+      harnessId: 'dsh',
+    }
+    const onOpen = vi.fn()
+    const onRename = vi.fn()
+    const drag = dragProps()
+    render(
+      <SessionNodeItem node={node} currentId={node.id} now={0} onOpen={onOpen}
+        onRename={onRename} onFork={vi.fn()} onArchive={vi.fn()} drag={drag}
+        harnessLabel={() => 'DeepSeek Harness'} t={t} />,
+    )
+    const row = screen.getByRole('treeitem')
+    expect(row.getAttribute('aria-selected')).toBe('true')
+    expect(row.querySelector('[data-state="ongoing"]')).not.toBeNull()
+    expect(screen.getByText('进行中')).toBeTruthy()
+    expect(screen.getByText('刚刚')).toBeTruthy()
+    expect(screen.getByRole('img', { name: 'DeepSeek Harness' })).toBeTruthy()
+
+    const title = screen.getByText(node.title)
+    Object.defineProperty(title, 'scrollWidth', { value: 320, configurable: true })
+    Object.defineProperty(title, 'clientWidth', { value: 180, configurable: true })
+    fireEvent.pointerEnter(row)
+    expect(title.scrollLeft).toBe(140)
+    fireEvent.pointerLeave(row)
+    expect(title.scrollLeft).toBe(0)
+
+    fireEvent.click(screen.getByRole('button', { name: '会话“Badged running”的操作' }))
+    expect(onOpen).not.toHaveBeenCalled()
+    fireEvent.click(screen.getByRole('menuitem', { name: '重命名' }))
+    expect(onRename).toHaveBeenCalledWith(node.id, 'Badged running')
+
+    stubRect(row)
+    fireEvent.dragStart(row, { dataTransfer })
+    expect(drag.start).toHaveBeenCalledOnce()
+    fireEvent.dragEnd(row)
+    expect(drag.end).toHaveBeenCalledOnce()
+    fireEvent.click(row)
+    expect(onOpen).toHaveBeenCalledWith(node.id)
+  })
+
   it('reveals a clipped session title by scrolling it while the row is hovered', () => {
     const node: SessionNode = {
       id: sid('clipped'), title: 'A Session Title Long Enough To Be Clipped (1)', blank: false,
