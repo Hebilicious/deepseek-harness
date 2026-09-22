@@ -44,7 +44,8 @@ kind: "package-library"
 | `Pill` | 可选中的胶囊按钮，用于视图切换与筛选器；接受 `active` 与 `onClick`。 |
 | `Tag` | 只读胶囊徽章；`tone` 选择八种配色之一。 |
 | `StateDot` | 状态标记：`done`、`warning`、`ongoing`、`error` 或 `idle`。它是 `aria-hidden` 的，名称由渲染点提供。 |
-| `HarnessBadge` | 拥有该会话的 agent harness 的双字符标记，使用静态调色板。它是 `role="img"` 并以 harness 名称作为标签；`harnessMark(id)` 暴露 id 到标记的映射。部署自定义的 harness id 会由该 id 推导出标记。 |
+| `HarnessBadge` | 拥有该会话的 agent harness 的标记：对本仓库提供条目的每个 harness 使用其官方符号，按发布时的几何数据绘制，并以当前标签色填充。没有公开符号的 harness（目前是 Devin）回退为双字符字母块，`harnessMark(id)` 暴露该回退。它是 `role="img"` 并以 harness 名称作为标签。 |
+| `HARNESS_LOGOS` | 按 id 索引的 harness 符号：源 viewBox 与形状，逐字取自 [`harness-logo-artwork.manifest.json`](src/harness-logo-artwork.manifest.json) 记录的来源文件。商标归其所有者所有，此处用于标识会话所运行的 harness。 |
 | `ConnectionIndicator` | 行内连接恢复控件，覆盖断线、重试与已恢复三种状态。 |
 | `DisclosureRow` | 24px 紧凑折叠行，标题与内容左右排列。 |
 | `Modal` | 页面遮罩之上的居中对话框。 |

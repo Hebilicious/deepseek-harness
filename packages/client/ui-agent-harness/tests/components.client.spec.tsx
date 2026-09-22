@@ -178,20 +178,23 @@ describe('the Session header harness mark', () => {
 
     const mark = screen.getByRole('img', { name: 'Codex' })
     expect(mark.getAttribute('data-harness')).toBe('codex')
-    expect(mark.getAttribute('title')).toBe('Codex')
-    expect(mark.textContent).toBe('CX')
+    // The harness's own symbol, named for assistive technology.
+    expect(mark.tagName).toBe('svg')
+    expect(mark.querySelector('title')?.textContent).toBe('Codex')
   })
 
   it('still marks a harness the catalog no longer names, labelled by its id', () => {
     renderMark('grok')
 
     const mark = screen.getByRole('img', { name: 'grok' })
-    expect(mark.textContent).toBe('GK')
+    expect(mark.getAttribute('data-harness')).toBe('grok')
+    expect(mark.querySelector('path, polygon')).not.toBeNull()
   })
 
   it('marks a single-harness deployment too, and renders nothing before the record', () => {
     renderMark('dsh', { harnesses: [MOUNTED[0]!], current: hid('dsh') })
-    expect(screen.getByRole('img', { name: 'DeepSeek Harness' }).textContent).toBe('DS')
+    const mark = screen.getByRole('img', { name: 'DeepSeek Harness' })
+    expect(mark.getAttribute('data-harness')).toBe('dsh')
     cleanup()
 
     renderMark(null)

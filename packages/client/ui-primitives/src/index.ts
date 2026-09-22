@@ -3,6 +3,8 @@
  */
 
 export { HarnessBadge, harnessMark } from './HarnessBadge.tsx'
+export { HARNESS_LOGOS } from './harness-logos.ts'
+export type { HarnessLogo, HarnessLogoShape } from './harness-logos.ts'
 export { StateDot } from './StateDot.tsx'
 export type { StateDotState } from './StateDot.tsx'
 export { DisclosureRow } from './DisclosureRow.tsx'

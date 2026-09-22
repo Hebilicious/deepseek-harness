@@ -181,7 +181,9 @@ describe('workspace browser rows', () => {
         harnessLabel={() => 'Codex CLI'} t={t} />,
     )
     const badge = screen.getByRole('img', { name: 'Codex CLI' })
-    expect(badge.getAttribute('title')).toBe('Codex CLI')
+    // The harness's own symbol, named by the catalog's display name.
+    expect(badge.tagName).toBe('svg')
+    expect(badge.querySelector('title')?.textContent).toBe('Codex CLI')
     expect(badge.getAttribute('data-harness')).toBe('codex')
     const title = screen.getByText('Badged')
     expect(badge.nextElementSibling).toBe(title)

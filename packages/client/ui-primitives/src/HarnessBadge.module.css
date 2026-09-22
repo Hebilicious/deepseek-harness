@@ -1,7 +1,13 @@
-/* One square mark per harness: the monogram carries the identity, the tone
- * separates harnesses at a glance. Tones are the theme's static palette, not
- * alias tokens, so a session row's mark keeps its color across themes the same
- * way a provider brand color would. */
+/* A harness mark: the official symbol in the surrounding label color, or the
+ * monogram tile where no symbol exists. Marks are drawn at 16px beside a
+ * session title, so they carry no background of their own and inherit the
+ * row's text color. */
+.logo {
+  display: inline-flex;
+  flex: none;
+  color: var(--dsw-alias-label-secondary);
+}
+
 .badge {
   display: inline-flex;
   flex: none;
@@ -17,30 +23,7 @@
   user-select: none;
 }
 
-.badge[data-tone='brand'] {
-  --dsh-harness-mark-tone: var(--dsw-static-deepseek-500);
-}
-
-.badge[data-tone='graphite'] {
-  --dsh-harness-mark-tone: var(--dsw-static-neutral-600);
-}
-
-.badge[data-tone='clay'] {
-  --dsh-harness-mark-tone: var(--dsw-static-amber-600);
-}
-
-.badge[data-tone='blue'] {
+/* The one tile that stands in for a published symbol. */
+.badge[data-harness='devin'] {
   --dsh-harness-mark-tone: var(--dsw-static-blue-600);
-}
-
-.badge[data-tone='green'] {
-  --dsh-harness-mark-tone: var(--dsw-static-green-500);
-}
-
-.badge[data-tone='red'] {
-  --dsh-harness-mark-tone: var(--dsw-static-red-500);
-}
-
-.badge[data-tone='neutral'] {
-  --dsh-harness-mark-tone: var(--dsw-static-neutral-400);
 }

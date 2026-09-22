@@ -1,0 +1,42 @@
+{
+  "version": 1,
+  "owner": "DeepSeek Harness product design",
+  "note": "Agent-harness marks rendered by HarnessBadge. Shapes are copied verbatim from the sources below; only the fill follows the theme through currentColor. Trademarks belong to their owners and are used here to identify the harness a session runs, not to imply endorsement.",
+  "marks": [
+    {
+      "harness": "codex",
+      "source": "https://commons.wikimedia.org/wiki/File:OpenAI_logo_2025_(symbol).svg",
+      "terms": "Public domain on Wikimedia Commons; the OpenAI mark is a trademark of OpenAI.",
+      "viewBox": "1.68 1.75 16.65 16.5",
+      "shapes": 1
+    },
+    {
+      "harness": "claude",
+      "source": "https://cdn.simpleicons.org/claude",
+      "terms": "Simple Icons file (CC0-1.0); the Claude mark is a trademark of Anthropic.",
+      "viewBox": "0 0 24 24",
+      "shapes": 1
+    },
+    {
+      "harness": "grok",
+      "source": "https://commons.wikimedia.org/wiki/File:XAI-Logo.svg",
+      "terms": "Public domain on Wikimedia Commons; the xAI mark is a trademark of xAI.",
+      "viewBox": "0 0 466.04 516.93",
+      "shapes": 4
+    },
+    {
+      "harness": "opencode",
+      "source": "https://cdn.simpleicons.org/opencode",
+      "terms": "Simple Icons file (CC0-1.0); the opencode mark belongs to its project.",
+      "viewBox": "0 0 24 24",
+      "shapes": 1
+    },
+    {
+      "harness": "mimo",
+      "source": "https://github.com/XiaomiMiMo/MiMo-Code/blob/main/packages/ui/src/assets/favicon/favicon-v3.svg",
+      "terms": "MiMo-Code project asset (MIT-licensed repository); the mark belongs to Xiaomi.",
+      "viewBox": "0 0 512 512",
+      "shapes": 2
+    }
+  ]
+}
