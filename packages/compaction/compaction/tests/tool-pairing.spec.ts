@@ -6,6 +6,9 @@ import type { SessionEvent, SessionSeq as SessionSeqType } from '@deepseek-ai/ds
 
 const SURFACE = { surfaceOp: 'append' as const }
 
+/** Stable empty set: the real Session returns one shared set until its surface or step state changes. */
+const UNANSWERABLE: ReadonlySet<ToolCallId> = new Set<ToolCallId>()
+
 function seqOf(session: Session, type: SessionEvent['type'], nth = 0): SessionSeqType {
   return session.snapshotEvents().filter(event => event.type === type)[nth]!.seq
 }
@@ -80,6 +83,36 @@ describe('tool-pairing boundaries', () => {
       }),
     }, SURFACE)
     expect(toolPairingBalancedAfter(open, open.surface.nodes[0]!)).toBe(false)
+  })
+
+  it('does not constrain cuts with a call its closed step never answered', () => {
+    const session = Session.create(SessionId('abandoned-call'))
+    session.append('turn/start', { turn: 1 })
+    session.append('step/start', { turn: 1, step: 1 })
+    session.append('assistant/message', {
+      stream: [],
+      turn: 1,
+      step: 1,
+      message: createMessage({
+        role: 'assistant',
+        content: [{ type: 'tool-call', id: ToolCallId('abandoned'), name: 'bash', arguments: '{}' }],
+        source: {
+          kind: 'model',
+          ...{ provider: 'mock', model: 'mock' },
+        },
+      }),
+    }, SURFACE)
+    session.append('step/end', { turn: 1, step: 1 })
+    session.append('user/message', createUserMessage({
+      content: [{ type: 'text', text: 'next prompt' }],
+      source: { kind: 'user' },
+    }), SURFACE)
+    expect([...session.unanswerableToolCalls()]).toEqual([ToolCallId('abandoned')])
+
+    // Derived history omits the call, so every cut after it stays usable.
+    expect(after(session, 'assistant/message')).toBe(true)
+    expect(before(session, 'user/message')).toBe(true)
+    expect(after(session, 'user/message')).toBe(true)
   })
 
   it('requires every result from a multiple-call assistant message', () => {
@@ -257,6 +290,7 @@ describe('tool-pairing cache refresh', () => {
         eventReads += 1
         return events[seq]
       },
+      unanswerableToolCalls: () => UNANSWERABLE,
     } as unknown as Session
 
     expect(toolPairingBalancedAfter(session, nodes[2]!)).toBe(true)
@@ -349,6 +383,7 @@ describe('tool-pairing cache refresh', () => {
     const nodes: SessionSeqType[] = [SessionSeq(0), SessionSeq(1)]
     const session = {
       eventAt: (seq: number) => events[seq],
+      unanswerableToolCalls: () => UNANSWERABLE,
       surface: { nodes, replaceGeneration: 0 },
     } as unknown as Session
     expect(toolPairingBalancedAfter(session, nodes[1]!)).toBe(true)
@@ -398,6 +433,7 @@ describe('tool-pairing corrupt surfaces', () => {
           content: [], source: { kind: 'user' },
         }), surfaceOp: 'append',
       } satisfies SessionEvent][seq],
+      unanswerableToolCalls: () => UNANSWERABLE,
       surface: { nodes: [missingSeq], replaceGeneration: 0 },
     } as unknown as Session
     expect(() => toolPairingBalancedBefore(missing, missingSeq)).toThrow(/no matching session event/)
@@ -410,6 +446,7 @@ describe('tool-pairing corrupt surfaces', () => {
           content: [], source: { kind: 'user' },
         }), surfaceOp: 'append',
       } satisfies SessionEvent][seq],
+      unanswerableToolCalls: () => UNANSWERABLE,
       surface: { nodes: [mismatchedSeq], replaceGeneration: 0 },
     } as unknown as Session
     expect(() => toolPairingBalancedBefore(mismatched, mismatchedSeq)).toThrow(/no matching session event/)

@@ -88,7 +88,7 @@ Expected manual failures throw `ManualCompactionError` with a stable `code` from
 <a id="tool-pairing-boundaries"></a>
 ### Tool-pairing boundaries
 
-The Service Definition exports `toolPairingBalancedBefore(session, seq)` and `toolPairingBalancedAfter(session, seq)` for snapping and validating compaction edges. A safe edge has no unanswered assistant tool call crossing it. Each helper validates that the event sequence is in the current surface and answers from balances cached per cut in surface order, so repeated checks read no events; a replace generation rebuilds the cache, and missing seqs or an orphan `tool/result` reject as corrupt surface state.
+The Service Definition exports `toolPairingBalancedBefore(session, seq)` and `toolPairingBalancedAfter(session, seq)` for snapping and validating compaction edges. A safe edge has no assistant tool call crossing it that an answer or an open step still owns; a call whose closed step never answered it is absent from derived history, so it constrains no cut. Each helper validates that the event sequence is in the current surface and answers from balances cached per cut in surface order, so repeated checks read no events; a replace generation or a changed unanswerable-call set rebuilds the cache, and missing seqs or an orphan `tool/result` reject as corrupt surface state.
 
 ### The surface contract
 

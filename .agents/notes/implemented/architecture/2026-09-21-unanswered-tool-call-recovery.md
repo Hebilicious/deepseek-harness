@@ -18,7 +18,9 @@ The writer closes the calls it abandons, and the derived history exposes no call
 
 On a terminal failure, `executeToolCalls` records the recovery result for every uncommitted call of the failing group and for every call that never started, then rethrows the scheduler failure. Cancellation already closes undispatched calls with `ABORTED_BEFORE_DISPATCH` results ([decision](2026-08-10-cancelled-stream-prefix-finalize.md)); this extends the same closure to a failure that leaves the step. A refused recovery append must not replace that failure, so the append is contained and the failure surfaces unchanged.
 
-`Session.deriveMessages()` omits an assistant tool call that no user turn answers, and omits the message when the call was its only content. The rule mirrors the protocol requirement, so a history written by an earlier build repairs itself on the next request instead of refusing to run. The durable log keeps the call, and the human transcript still shows it.
+`Session.deriveMessages()` omits an assistant tool call that no user turn answers and no open step can answer later, and omits the message when the call was its only content. A call whose step is still open is pending: that step will answer it, so it stays visible. `Session.unanswerableToolCalls()` reports the omitted set and caches it per surface and step state.
+
+The rule mirrors the protocol requirement, so a history written by an earlier build repairs itself on the next request instead of refusing to run. The durable log keeps the call, and the human transcript still shows it. Compaction reads the same set: its cut-balance fold counts only calls an answer or an open step still owns, because an omitted call has no pair to split. Before that, such a call made every cut after it unbalanced, so range selection could only shadow the nodes before it; a session with the damage near its head re-summarized its own checkpoint forever and never fit its window again.
 
 ## Alternatives considered
 
@@ -34,10 +36,14 @@ On a terminal failure, `executeToolCalls` records the recovery result for every 
 
 A session whose history contains an unanswered call runs again on every route without touching durable data. The model does not see that call in such a legacy history; the human transcript still shows it, and a failure recorded by this build carries an explicit recovery result instead. A scheduler failure still ends its turn with the original error code.
 
+Compaction keeps working on the same history: an abandoned call no longer pins range selection to the nodes recorded before it, so overflow recovery can shadow the damaged prefix and bring the request back under the window.
+
 The recovery result is model-visible, so it participates in snapshots and in the request the next step builds; the derivation rule removes nothing from a history whose calls are all answered.
 
 ## Verification
 
-`packages/core/session/tests/unanswered-tool-calls.spec.ts` pins the derivation: an unanswered call is dropped while the rest of its message survives, a message that held only the call disappears, an answered call stays, a call answered by a later user turn returns, and a detached replay of the same log derives the same history.
+`packages/core/session/tests/unanswered-tool-calls.spec.ts` pins the derivation: a call whose closed step never answered it is dropped while the rest of its message survives, a call in the step still open stays, a message that held only the dropped call disappears, an answered call stays, and a detached replay of the same log derives the same history.
 
 `packages/core/agent-loop/tests/tool-calls.spec.ts` pins the writer: a failing exclusive group closes its recorded call with `TOOL_OUTCOME_UNKNOWN` and the never-started call with `TOOL_NOT_STARTED`, a failing parallel group closes its unstarted sibling, the derived history has no unanswered call afterwards, and a refused recovery append still reports the scheduler failure.
+
+`packages/compaction/compaction/tests/tool-pairing.spec.ts` pins that a call its closed step never answered constrains no cut, while an open call still does. `packages/compaction/compaction-basic/tests/compaction-basic.spec.ts` pins range selection across such a call instead of stopping before it.

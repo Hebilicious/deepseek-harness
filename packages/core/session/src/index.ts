@@ -822,6 +822,8 @@ export class Session {
   private derivedGeneration = 0
   /** Tool-block-free history reuse, keyed by the unanswered-call set and cache length it was built for. */
   private representable: { signature: string; messages: readonly Message[] } | undefined
+  /** Unanswerable-call set reuse, keyed by the surface and log the walk consumed. */
+  private unanswerable: { key: string; calls: ReadonlySet<ToolCallId> } | undefined
 
   /**
    * Derive the LLM message history by walking the ordered sequences of
@@ -867,30 +869,80 @@ export class Session {
   }
 
   /**
-   * Remove assistant tool calls that no user turn answers. Every provider
-   * protocol requires each call to carry its result in the user turn that
-   * follows, so an unanswered call left in the derived history makes the whole
-   * session unusable on any provider that enforces that rule. The durable log
-   * keeps the call: the agent loop records a canonical recovery result when a
-   * step fails after committing one, and this projection covers histories
-   * written before it did.
-   * @returns the derived history without unanswered calls.
+   * Tool calls in the current surface that no user turn answers and that no
+   * open step can answer later. Every provider protocol requires each call to
+   * carry its result in the user turn that follows, so such a call can never
+   * enter a request: derived history omits it, and compaction treats it as
+   * absent content rather than as a pair whose cut would split it from a
+   * result. A call in the step still open is pending and stays visible until
+   * its result lands, because that step will answer it.
+   *
+   * CACHED: the set is shared and reused until the surface content or the step
+   * boundaries change, so consumers comparing the returned identity see one
+   * stable value per state. Callers must not mutate it.
+   * @returns the unanswerable call ids, in surface order.
    */
-  private representableHistory(): Message[] {
-    const unanswered = new Set<ToolCallId>()
-    let pending = new Set<ToolCallId>()
-    for (const message of this.derived) {
+  unanswerableToolCalls(): ReadonlySet<ToolCallId> {
+    const key = `${this.surface.contentGeneration}:${this.log.length}`
+    if (this.unanswerable?.key === key) return this.unanswerable.calls
+    const candidates = new Map<ToolCallId, SessionSeq>()
+    const open = new Map<ToolCallId, SessionSeq>()
+    for (const seq of this.surface.nodes) {
+      // oxlint-disable-next-line typescript/no-non-null-assertion -- surface nodes index this log by construction
+      const message = this.deriveEventMessage(this.log[seq]!)
+      if (message === null) continue
       if (message.role === 'assistant') {
         // The next assistant turn ends the previous calls' answer window.
-        for (const callId of pending) unanswered.add(callId)
-        pending = new Set(message.content.flatMap(block => block.type === 'tool-call' ? [block.id] : []))
+        for (const [callId, callSeq] of open) candidates.set(callId, callSeq)
+        open.clear()
+        for (const block of message.content) {
+          if (block.type === 'tool-call') open.set(block.id, seq)
+        }
       } else if (message.role === 'user') {
         for (const block of message.content) {
-          if (block.type === 'tool-result') pending.delete(block.toolCallId)
+          if (block.type === 'tool-result') open.delete(block.toolCallId)
         }
       }
     }
-    for (const callId of pending) unanswered.add(callId)
+    for (const [callId, callSeq] of open) candidates.set(callId, callSeq)
+    const calls = new Set<ToolCallId>()
+    for (const [callId, callSeq] of candidates) {
+      if (this.stepClosedAfter(callSeq)) calls.add(callId)
+    }
+    this.unanswerable = { key, calls }
+    return calls
+  }
+
+  /**
+   * Whether the step containing an event has closed, so no later result can
+   * answer a call it recorded. Steps never nest, so the most recent boundary
+   * marker decides: `step/end` closes every earlier step, and `step/start`
+   * leaves only the step it opened open. Without any boundary marker the step
+   * state is unknown, and the call counts as pending.
+   * @param seq - sequence of the event whose step is checked.
+   * @returns true when a recorded boundary proves the step ended.
+   */
+  private stepClosedAfter(seq: SessionSeq): boolean {
+    for (let index = this.log.length - 1; index >= 0; index -= 1) {
+      // oxlint-disable-next-line typescript/no-non-null-assertion -- bounded index into this log
+      const event = this.log[index]!
+      if (event.type === 'step/end') return true
+      if (event.type === 'step/start') return seq < event.seq
+    }
+    return false
+  }
+
+  /**
+   * Remove assistant tool calls that can never be answered. Derived history is
+   * the provider transcript, and every provider protocol requires each call to
+   * carry its result in the user turn that follows. The durable log keeps the
+   * call: the agent loop records a canonical recovery result when a step fails
+   * after committing one, and this projection covers histories written before
+   * it did.
+   * @returns the derived history without unanswerable calls.
+   */
+  private representableHistory(): Message[] {
+    const unanswered = this.unanswerableToolCalls()
     if (unanswered.size === 0) {
       this.representable = undefined
       return [...this.derived]

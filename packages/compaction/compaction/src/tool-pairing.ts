@@ -1,16 +1,20 @@
 /**
  * Tool-pairing balance over a session surface. Compaction changes surface
  * positions, so safe cuts are derived from tool-call/result content in current
- * surface order rather than step markers.
+ * surface order rather than step markers. A call the surface can never answer
+ * is not part of the model-visible transcript and does not constrain a cut.
  * @module @deepseek-ai/dsh-compaction/tool-pairing
  */
 
 import type { Session, SessionEvent, SessionSeq } from '@deepseek-ai/dsh-session'
+import type { ToolCallId } from '@deepseek-ai/dsh-llm'
 
 /** Incremental balance state for one session surface generation. */
 interface BalanceCache {
   /** Surface rewrite generation this state describes. */
   generation: number
+  /** Unanswerable-call set this state was folded with; a new set invalidates it. */
+  unanswerable: ReadonlySet<ToolCallId>
   /**
    * Balance of every surface cut in current order: a surface of N sequences has
    * N + 1 cuts, entry `i` being the cut before sequence `i` and the final entry
@@ -26,10 +30,11 @@ interface BalanceCache {
 const balanceCacheBySession = new WeakMap<Session, BalanceCache>()
 
 /** Return how one surface event changes the in-progress tool-call count. */
-function eventDelta(event: SessionEvent): number {
+function eventDelta(event: SessionEvent, unanswerable: ReadonlySet<ToolCallId>): number {
   switch (event.type) {
     case 'assistant/message':
-      return event.data.message.content.filter(block => block.type === 'tool-call').length
+      return event.data.message.content
+        .filter(block => block.type === 'tool-call' && !unanswerable.has(block.id)).length
     case 'tool/result':
       return -1
     default:
@@ -55,7 +60,7 @@ function extendCache(
     if (event === undefined || event.seq !== seq) {
       throw new Error(`tool-pairing balance: surface seq ${seq} has no matching session event (corrupt surface)`)
     }
-    inProgressToolCalls += eventDelta(event)
+    inProgressToolCalls += eventDelta(event, cache.unanswerable)
     if (inProgressToolCalls < 0) {
       throw new Error(`tool-pairing balance: tool/result at surface seq ${seq} has no matching tool-call (corrupt surface)`)
     }
@@ -73,13 +78,16 @@ function balanceCache(session: Session): BalanceCache {
   const surface = session.surface
   const seqs = surface.nodes
   const generation = surface.replaceGeneration
+  const unanswerable = session.unanswerableToolCalls()
   const cached = balanceCacheBySession.get(session)
 
-  if (cached === undefined || cached.generation !== generation || cached.cutBalanced.length - 1 > seqs.length) {
+  if (cached === undefined || cached.generation !== generation || cached.unanswerable !== unanswerable
+    || cached.cutBalanced.length - 1 > seqs.length) {
     // A rebuild is the same fold started from the empty-surface state, whose
     // single leading cut is trivially balanced.
     const rebuilt = extendCache(session, {
       generation,
+      unanswerable,
       cutBalanced: [true],
       indexBySeq: new Map(),
       inProgressToolCalls: 0,
@@ -105,7 +113,7 @@ function cutBalance(cache: BalanceCache, seq: SessionSeq, offset: 0 | 1): boolea
  * Whether the cut immediately before a current surface sequence is tool-pairing balanced.
  * @param session - session whose surface is checked.
  * @param seq - event sequence whose leading cut is checked.
- * @returns true when no unanswered tool call crosses the cut.
+ * @returns true when no call that an answer or an open step still owns crosses the cut.
  * @throws when the seq is absent from the current surface, a surface sequence has no
  * matching log event, or a tool result has no preceding open call.
  */
@@ -117,7 +125,7 @@ export function toolPairingBalancedBefore(session: Session, seq: SessionSeq): bo
  * Whether the cut immediately after a current surface sequence is tool-pairing balanced.
  * @param session - session whose surface is checked.
  * @param seq - event sequence whose trailing cut is checked.
- * @returns true when no unanswered tool call crosses the cut.
+ * @returns true when no call that an answer or an open step still owns crosses the cut.
  * @throws when the seq is absent from the current surface, a surface sequence has no
  * matching log event, or a tool result has no preceding open call.
  */

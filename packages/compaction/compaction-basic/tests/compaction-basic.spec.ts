@@ -644,6 +644,73 @@ describe('pressure measurement and retention', () => {
     expect(session.surface.nodes.length).toBeLessThan(8)
   })
 
+  it('selects past a call whose closed step never answered it', () => {
+    const ctx = createContext()
+    const session = Session.create(SessionId('abandoned-call-range'))
+    // One step failed after committing its assistant message, so the recorded
+    // call sits in a closed step that can never answer it. Derived history
+    // omits the call, and range selection must still reach past it.
+    session.append('turn/start', { turn: 1 })
+    session.append('request/header', {
+      header: { config: { provider: MODEL, model: MODEL } },
+      reason: 'initial',
+    })
+    session.append('user/message', createUserMessage({
+      content: [{ type: 'text', text: 'fixture user 1' }], source: { kind: 'user' },
+    }), { surfaceOp: 'append' })
+    session.append('step/start', { turn: 1, step: 1 })
+    const abandoned = session.append('assistant/message', {
+      stream: [],
+      turn: 1,
+      step: 1,
+      message: createMessage({
+        role: 'assistant',
+        content: [{ type: 'tool-call', id: ToolCallId('abandoned'), name: 'read', arguments: '{}' }],
+        source: {
+          kind: 'model',
+          ...{ provider: MODEL, model: MODEL },
+        },
+      }),
+    }, { surfaceOp: 'append' })
+    session.append('step/end', { turn: 1, step: 1 })
+    session.append('turn/end', {
+      turn: 1,
+      reason: { kind: 'error', error: { message: 'scheduler exploded', code: 'UNKNOWN' } },
+    })
+    for (let turn = 2; turn <= 6; turn += 1) {
+      session.append('turn/start', { turn })
+      session.append('user/message', createUserMessage({
+        content: [{ type: 'text', text: `${'x'.repeat(400)} user ${turn}` }], source: { kind: 'user' },
+      }), { surfaceOp: 'append' })
+      session.append('step/start', { turn, step: 1 })
+      session.append('assistant/message', {
+        stream: [],
+        turn,
+        step: 1,
+        message: createMessage({
+          role: 'assistant',
+          content: [{ type: 'text', text: `${'x'.repeat(400)} assistant ${turn}` }],
+          source: {
+            kind: 'model',
+            ...{ provider: MODEL, model: MODEL },
+          },
+        }),
+      }, { surfaceOp: 'append' })
+      session.append('step/end', { turn, step: 1 })
+      session.append('turn/end', { turn, reason: { kind: 'completed' } })
+    }
+    session.append('turn/start', { turn: 7 })
+
+    const range = selectCompactableRange(session, ctx.tokenMeter.measure(session), 0)
+    expect(range).not.toBeNull()
+    const nodes = session.surface.nodes
+    const startIdx = nodes.indexOf(range!.start)
+    const endIdx = nodes.indexOf(range!.end)
+    // Treating the abandoned call as a pair would stop the range before it.
+    expect(nodes[endIdx]!).toBeGreaterThan(abandoned.seq)
+    expect(endIdx - startIdx + 1).toBeGreaterThan(10)
+  })
+
   it('starts the range after a system head and keeps that node at surface position 0', async () => {
     const ctx = createContext()
     const compact = service(compactConfig, ctx)
