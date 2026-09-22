@@ -1774,9 +1774,6 @@ describe('agent loop', () => {
     })
     ctx.llm.registerAdapter(['mock'], adapter)
 
-    // Configured agents publish through the shared lifecycle transaction,
-    // which yields before publication; the assertion waits for the fact.
-    await vi.waitFor(() => { expect(ctx.agents.list()).toHaveLength(1) })
     const agent = ctx.agents.list()[0]!
     expect(agent).toBeDefined()
     expect(agent.id).toBe(agent.session.id)
@@ -1804,7 +1801,6 @@ describe('agent loop', () => {
       agents: [{ id: SessionId('config-agent'), provider: 'mock', model: 'mock', cwd: '/work/project' }],
     })
 
-    await vi.waitFor(() => { expect(ctx.agents.list()).toHaveLength(1) })
     const agent = ctx.agents.list()[0]!
     expect(agent.session.header.cwd).toBe('/work/project')
   })

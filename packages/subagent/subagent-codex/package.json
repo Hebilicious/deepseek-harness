@@ -41,7 +41,6 @@
     "@deepseek-ai/dsh-timeout": "workspace:^"
   },
   "dependencies": {
-    "@deepseek-ai/dsh-agent-codex": "workspace:^",
     "@deepseek-ai/dsh-brand": "workspace:^",
     "@deepseek-ai/dsh-sdk-protocol": "workspace:^",
     "@deepseek-ai/schemastery": "workspace:^",

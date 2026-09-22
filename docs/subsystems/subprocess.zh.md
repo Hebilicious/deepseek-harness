@@ -134,7 +134,7 @@ interface SubprocessSpawnSpec {
 
 ## 句柄：流、读取器与 managed-range 终止
 
-spawn 会同步返回活动句柄，目标与受管范围标识则保留在 provider 内部。收集模式的读取器接受全流字节偏移量且从不消费，因此独立读取器不会抢走彼此的增量；管道化的流归调用方所有。`terminate()` 启动 provider 记录的终止过程，`waitForExit()` 观察同一个 provider-managed range；分阶段 provider 可以使用 `graceMs`，立即终止的 provider 不会等待。本包在这两项操作之上提供唯一的分级清理流程：`disposeSubprocessChild(child, eofGraceMs)` 先关闭 stdin，在 EOF 宽限期内等待受管范围退出，再通过 `terminate()` 升级到整段范围的退出证明。
+spawn 会同步返回活动句柄，目标与受管范围标识则保留在 provider 内部。收集模式的读取器接受全流字节偏移量且从不消费，因此独立读取器不会抢走彼此的增量；管道化的流归调用方所有。`terminate()` 启动 provider 记录的终止过程，`waitForExit()` 观察同一个 provider-managed range；分阶段 provider 可以使用 `graceMs`，立即终止的 provider 不会等待。消费方可以在这两项操作上构建自己的分级清理流程；ACP 后端先关闭 stdin 的 `disposeAcpChild` 是参考实现。
 
 ```ts type-equiv
 /**

@@ -1,7 +1,7 @@
 /**
  * Driver-owned durable agent inbox projection and command facade.
  *
- * @module @deepseek-ai/dsh-agent-external/inbox
+ * @module @deepseek-ai/dsh-agent-loop/inbox
  */
 
 import type { MessageId } from '@deepseek-ai/dsh-llm'
@@ -65,14 +65,13 @@ export const inboxProjectionDefinition = {
 } satisfies ProjectionDefinition<'inbox', InboxState>
 
 /**
- * Durable Inbox implementation shared by every agent driver. Pending input is
- * the session log: each mutation commits one `agent/inbox/spliced` event, so
- * the queue survives process restart and replay.
- * @param projections - registry that owns the standard Inbox projection.
+ * Driver-owned durable Inbox implementation used by ReactLoopAgent and focused
+ * provider tests.
+ * @param projections - registry with the standard Inbox projection registered by AgentLoop.
  * @param session - session whose durable events store pending input.
  * @param dispatch - agent-scoped notifications for Inbox lifecycle events.
  */
-export class DurableAgentInbox implements InboxContract {
+export class ReactLoopInbox implements InboxContract {
   constructor(
     private readonly projections: SessionProjectionRegistry,
     private readonly session: Session,
@@ -102,7 +101,7 @@ export class DurableAgentInbox implements InboxContract {
   }
 
   /**
-   * Remove and return the complete batch proposed for one turn.
+   * Remove and return the complete batch proposed for one step.
    * @param target - whether this boundary also consumes one queued turn.
    * @param turn - turn that will own the claimed batch.
    * @returns next-step input followed by the queued turn, when requested.
@@ -112,22 +111,6 @@ export class DurableAgentInbox implements InboxContract {
     if (target === 'next-turn') claimed.push(...this.mutate('next-turn', 0, 1, [], false))
     for (const message of claimed) this.dispatch.emit('agent/inbox/claimed', { message, turn })
     return claimed
-  }
-
-  /**
-   * Durably consume one pending message whose work reached the driver through
-   * a live channel rather than a claim batch (mid-turn steering, injected
-   * context a harness accepted between turns).
-   * @param messageId - identity of the pending message to consume.
-   * @param turn - turn that owns the consumption, for the claimed notification.
-   * @returns whether the message was still pending.
-   */
-  consume(messageId: MessageId, turn: number): boolean {
-    const location = this.locate(messageId)
-    if (location === undefined) return false
-    const removed = this.mutate(location.target, location.index, 1, [], false)
-    for (const message of removed) this.dispatch.emit('agent/inbox/claimed', { message, turn })
-    return true
   }
 
   /**

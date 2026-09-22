@@ -67,11 +67,7 @@ const output = handle.collected.stdout?.readFrom(0)
 
 ### 管理进程生命周期
 
-终止与等待使用同一个由提供方管理的范围。`terminate()` 会启动提供方记录的流程，具有幂等性，并在该范围为空后成为空操作；请求的中止信号会启动同一流程。`waitForExit()` 观察同一范围，只在提供方证明它完全停稳后 resolve，因此直接命令结束不会掩盖仍存活的后代。所选 owner 无法再证明完全停稳时，它会 reject。提供方记录其 native owner 与较弱 fallback；下文共享阶梯覆盖常见的 stdin-EOF 配合方式，配合方式不同的子进程则把该顺序与原因分类留给调用方。
-
-### 拆卸子进程
-
-`disposeSubprocessChild(handle, eofGraceMs)` 执行本 seam 的协作式拆卸阶梯：先关闭 stdin，等待一个 EOF 宽限期让受管范围排空（这是子进程刷写持久化并回收自身后代的窗口）；若宽限期结束时范围仍非空，则终止该范围并再次等待整个范围退出。仅一个层级失败时它抛出该失败；多于一个时抛出 `AggregateError`，按观察顺序列出每个失败。子进程在 stdin EOF 时退出就用它；配合方式不同的子进程需要自己在 `terminate()` 与 `waitForExit()` 之上构建阶梯。
+终止与等待使用同一个由提供方管理的范围。`terminate()` 会启动提供方记录的流程，具有幂等性，并在该范围为空后成为空操作；请求的中止信号会启动同一流程。`waitForExit()` 观察同一范围，只在提供方证明它完全停稳后 resolve，因此直接命令结束不会掩盖仍存活的后代。所选 owner 无法再证明完全停稳时，它会 reject。提供方记录其 native owner 与较弱 fallback；时限、拆卸阶梯与原因分类归调用方所有。
 
 ### 运行终端会话
 
@@ -99,7 +95,7 @@ const output = handle.collected.stdout?.readFrom(0)
 
 ### 设计理念
 
-本 seam 建立在一个分离之上：服务负责进程坐标与生命周期；消费方负责定义进程的含义，以及决定塑造该进程的每一项默认值。正因如此，spawn 请求完全明确——没有任何隐藏的子进程服务默认值——`SubprocessOutcome` 也只携带退出事实：时限、配合顺序与原因分类归调用方所有。`dsh-shell` 的 request/spec 拆分是这条规则的所属模板。
+本 seam 建立在一个分离之上：服务负责进程坐标与生命周期；消费方负责定义进程的含义，以及决定塑造该进程的每一项默认值。正因如此，spawn 请求完全明确——没有任何隐藏的子进程服务默认值——`SubprocessOutcome` 也只携带退出事实：时限、拆卸阶梯与原因分类归调用方所有。`dsh-shell` 的 request/spec 拆分是这条规则的所属模板。
 
 ### 源码地图
 
@@ -107,7 +103,6 @@ const output = handle.collected.stdout?.readFrom(0)
 |---|---|
 | [`src/index.ts`](src/index.ts) | 插件入口：抽象 `SubprocessRuntime`、`ctx.subprocess` 注册、共享的 `scrubbedParentEnv` 清除 |
 | [`src/types.ts`](src/types.ts) | 词汇：spawn spec、stdio 模式、句柄、读取器、结果、`DSH_*` 命名空间 |
-| [`src/dispose.ts`](src/dispose.ts) | 共享的协作式拆卸阶梯：stdin EOF、一次有界排空等待，以及带整个范围退出证明的终止升级 |
 | — | 不发布运行时不变式伴生入口；这个无状态 Service Definition 负责 spawn spec 与句柄类型，观察则由 Service Providers 负责。 |
 
 ### 数据模型与流程
@@ -153,7 +148,7 @@ spawn 会立即返回活动句柄，而不公开目标身份。`done` 独立报�
 这些限制说明该 seam 何时不合适，或何时把工作留给消费方。它们是当前包约束，不是对比或任务积压。
 
 - **由 SDK 管理的 spawn 仍在服务之外**——拥有内部 spawn 的传输（SDK 客户端、MCP）无法把该调用路由到本服务；它仍可导入 `scrubbedParentEnv`，使环境策略保持单一来源。
-- **只提供一种拆卸顺序**——`disposeSubprocessChild` 编码的是 stdin EOF 打头的配合方式；以其他信号或协议帧停稳的子进程仍需自己在 `terminate()` 与 `waitForExit()` 之上构建阶梯。
+- **拆卸阶梯归消费方所有**——该 seam 只提供信号动词与受管范围等待，不提供现成的完全停稳序列；每个进程外消费方自行编码其子进程的配合方式（ACP 后端以 stdin EOF 打头的阶梯是仓库内模板）。
 - **可观察性取决于提供方**——native 提供方可以通过 systemd scope 或 Windows Job 拥有逃逸后代，fallback 提供方则只暴露较弱的进程组、进程树或会话可见性。该 seam 不新增持续的进程表监视器。
 
 <a id="dev-note"></a>

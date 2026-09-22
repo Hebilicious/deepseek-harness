@@ -1187,12 +1187,10 @@ describe('creation and resume cancellation edges', () => {
     const sessionId = SessionId('resume-loop-inactive-after-open')
     const root = await persistSession(sessionId)
     const ctx = await mountPersistentHarness(root, new MockAdapter([]))
-    // The factory-owned check now lives on the shared lifecycle host the
-    // service mounts; forcing it inactive exercises the same path.
-    const host = (ctx.agentLoop as unknown as {
-      host: { ownership: { isActive: () => boolean } }
-    }).host
-    vi.spyOn(host.ownership, 'isActive').mockReturnValueOnce(false)
+    const loop = ctx.agentLoop as unknown as {
+      ownership: { isActive: () => boolean }
+    }
+    vi.spyOn(loop.ownership, 'isActive').mockReturnValueOnce(false)
 
     await expect(ctx.agents.resume({
       resumeSessionId: sessionId,

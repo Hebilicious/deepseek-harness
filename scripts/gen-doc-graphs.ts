@@ -527,22 +527,6 @@ const SERVICE_ROLES: ServiceRole[] = [
     note: 'Layers the default ModelSelection through settings so direct and Host-backed Agent entry points share one state owner.',
   },
   {
-    key: 'acpHarness',
-    pkg: 'agent-acp',
-    title: 'Devin ACP session driver',
-    mode: 'bundle',
-    consumers: ['web-acp'],
-    note: 'One shared devin acp process per profile; every session binds its own ACP session, and the driver registers the sole ctx.agents factory, so mounting it replaces the in-process loop.',
-  },
-  {
-    key: 'codexAppServer',
-    pkg: 'agent-codex',
-    title: 'Codex app-server session driver',
-    mode: 'bundle',
-    consumers: ['web-codex'],
-    note: 'One shared codex app-server process per profile; every session binds its own Codex thread, and the driver registers the sole ctx.agents factory, so mounting it replaces the in-process loop.',
-  },
-  {
     key: 'agentLoop',
     pkg: 'agent-loop',
     title: 'Concrete loop driver',
