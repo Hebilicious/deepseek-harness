@@ -27,6 +27,7 @@ This group maps the installable patch layers used by `dsh --profile`. Each packa
 | [`web-app`](web-app/README.md) | Browser application layer over base | mounts Web rows |
 | [`web-codex`](web-codex/README.md) | Browser application over base running Codex app-server sessions | mounts the Codex driver |
 | [`web-acp`](web-acp/README.md) | Browser application over base running Devin ACP sessions | mounts the Devin driver |
+| [`web-harnesses`](web-harnesses/README.md) | Browser application over base offering every mounted harness per session | mounts the loop, Codex, and the ACP harnesses |
 | [`headless`](headless/README.md) | One-shot command-line task application over base | `headless-runner` |
 | [`sdk-app`](sdk-app/README.md) | SDK JSON-RPC stdio application over base | mounts the SDK server |
 | [`sdk-minimal`](sdk-minimal/README.md) | Standalone minimal SDK application without base or Web | — (complete patch tree) |

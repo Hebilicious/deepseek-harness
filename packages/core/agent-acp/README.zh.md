@@ -65,8 +65,10 @@ kind: "package-reference"
 | `harnesses[].mode` | — | 对会话 `mode` 配置选项的部署级覆盖 |
 | `harnesses[].model` | — | 位于会话 `model/selection` 之下的部署默认值 |
 | `harnesses[].reasoningEffort` | — | 位于会话选择之下的部署默认值 |
-| `harnesses[].catalogArgs` | — | 模型目录 CLI 参数；省略时目录仅取自会话声明 |
-| `harnesses[].authStatusArgs` | `['auth', 'status']` | 认证状态命令参数 |
+| `harnesses[].catalogArgs` | — | 模型目录 CLI 参数；省略时目录取自会话声明 |
+| `harnesses[].probeCatalog` | `true` | 在任何会话绑定之前，通过开启一个一次性会话来读取目录 |
+| `catalogCacheMs` | `300000` | 复用某 harness 目录读取结果的时长 |
+| `harnesses[].authStatusArgs` | `['auth', 'status']` | 认证状态命令参数；显式空列表表示没有 CLI 命令 |
 | `harnesses[].authLogoutArgs` | `['auth', 'logout']` | 认证登出命令参数 |
 | `disposeGraceMs` | `5000` | 受管范围终止层级之间的宽限期 |
 | `eofGraceMs` | `2000` | stdin EOF 之后、升级终止之前的窗口 |
@@ -74,7 +76,7 @@ kind: "package-reference"
 
 ### 首个会话之前
 
-每个 harness 都需要各自已认证的 CLI：运行一次 `devin auth login`、`grok login` 或该 harness 对应的命令，或通过 `acp` Remote 的 `login` 方法启动其浏览器流程。该服务同时上报 agent 声明的认证方法与该 harness 认证状态 CLI 的判定结果，因此设置界面可以指出缺失的是哪一半。`acp` Remote 接收 harness id：`status({harness})`、`login({harness, methodId})` 与 `logout({harness})`；没有条目挂载该 id 时会以 `gateway/bad-request` 失败并列出已挂载的 id。
+每个 harness 都需要各自已认证的 CLI：运行一次 `devin auth login`、`grok login` 或该 harness 对应的命令，或通过 `acp` Remote 的 `login` 方法启动其浏览器流程。该服务同时上报 agent 声明的认证方法与该 harness 认证状态 CLI 的判定结果，因此设置界面可以指出缺失的是哪一半。`acp` Remote 接收 harness id：`status({harness})`、`login({harness, methodId})` 与 `logout({harness})`；没有条目挂载该 id 时会以 `gateway/bad-request` 失败并列出已挂载的 id。若 harness 通过 ACP 方法而非 CLI 命令报告授权状态，则把 `authStatusArgs` 与 `authLogoutArgs` 配置为空：此时状态会直接说明这一情况且不会启动任何进程，而登出会在 agent 未声明自身 `logout` 方法时明确失败。由适配器驱动的 harness（例如 Claude Code）正是这样挂载的。
 
 -----
 
@@ -102,7 +104,7 @@ kind: "package-reference"
 
 ### 模型目录
 
-每个 harness id 同时也是一个 `ctx.llm` 提供方路由，由为该 id 注册的 `AcpCatalogAdapter` 服务。目录就是该 harness 自己的会话声明：agent 发送 `models.availableModels` 时用它，否则用 `model` 配置选项的可选值。已绑定会话最近一次非空声明胜出，因此选择器反映正在运行的 harness。配置了 `catalogArgs` 的条目还会在尚无会话声明时运行该 CLI 列表命令；未配置时，尚无绑定会话的 harness 不列出任何模型。该路由不提供 stream，流请求会明确失败。
+每个 harness id 同时也是一个 `ctx.llm` 提供方路由，由为该 id 注册的 `AcpCatalogAdapter` 服务。目录就是该 harness 自己的会话声明：agent 发送 `models.availableModels` 时用它，否则用 `model` 配置选项的可选值。已绑定会话最近一次非空声明胜出，因此选择器反映正在运行的 harness。在任何会话绑定之前，条目按以下顺序读取目录：先运行配置好的 `catalogArgs` CLI 列表命令，然后在 `probeCatalog` 保持默认值时开启一个一次性会话，发布其声明，并在 agent 声明 `close` 或 `delete` 时关闭该会话。两者都不声明的 agent 会让该探测会话保留到进程退出，因为不关闭就断开连接会让 harness 认为该会话仍然存活；若不愿为读取目录而启动 harness，可设置 `probeCatalog: false`，此时该路由在真实会话绑定前不列出任何模型。一次读取服务所有调用方，其结果（包括空结果）在 `catalogCacheMs` 内被复用，因此轮询的选择器不会为每个请求启动 harness CLI 或探测会话；会话绑定后会用自身声明取代缓存结果。该路由不提供 stream，流请求会明确失败。
 
 ### 权限、模式与推理强度
 

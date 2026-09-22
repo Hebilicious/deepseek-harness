@@ -12,7 +12,7 @@ import { afterEach, describe, expect, it } from 'vitest'
 import { HarnessId } from '@deepseek-ai/dsh-agent'
 import type { AcpHarnessEntry } from '@deepseek-ai/dsh-agent-acp'
 import { SessionId } from '@deepseek-ai/dsh-session'
-import { type Bench, mockAgent, setup, teardown } from './bench.ts'
+import { type Bench, mockAgent, recordedCalls, setup, teardown } from './bench.ts'
 
 let bench: Bench | undefined
 const scratch: string[] = []
@@ -83,6 +83,56 @@ describe('AcpCatalogAdapter', () => {
     ])
     // The probe published the catalog, so a second read answers without a new session.
     expect(await bench.ctx.llm.listModels('devin')).toHaveLength(2)
+  }, TEST_TIMEOUT)
+
+  it('closes the probe session through whichever capability the agent advertises', async () => {
+    bench = await setup({ MOCK_CLOSE: '1', MOCK_SESSION_MODELS: JSON.stringify([{ modelId: 'opus', name: 'Opus' }]) })
+    await bench.ctx.llm.listModels('devin')
+    const closed = await recordedCalls(bench.recordFile)
+    expect(closed.filter(call => call.method === 'session/close')).toHaveLength(1)
+
+    await bench.ctx.fiber.dispose()
+    bench = await setup({ MOCK_DELETE: '1', MOCK_SESSION_MODELS: JSON.stringify([{ modelId: 'opus', name: 'Opus' }]) })
+    await bench.ctx.llm.listModels('devin')
+    const deleted = await recordedCalls(bench.recordFile)
+    expect(deleted.filter(call => call.method === 'session/delete')).toHaveLength(1)
+
+    // An agent that advertises neither keeps its probe session: dropping the
+    // connection without closing would leave it believing the session is live.
+    await bench.ctx.fiber.dispose()
+    bench = await setup({ MOCK_SESSION_MODELS: JSON.stringify([{ modelId: 'opus', name: 'Opus' }]) })
+    await bench.ctx.llm.listModels('devin')
+    const left = await recordedCalls(bench.recordFile)
+    expect(left.some(call => call.method === 'session/close' || call.method === 'session/delete')).toBe(false)
+  }, TEST_TIMEOUT)
+
+  it('reads the catalog once for repeated callers instead of spawning per read', async () => {
+    // A picker that polls must not start a harness CLI per request: the read
+    // is single-flight and cached for catalogCacheMs.
+    bench = await setup({
+      MOCK_MODELS_JSON: JSON.stringify({
+        families: [{ family_uid: 'family-1', variants: [{ model_uid: 'swe-2', label: 'SWE 2' }] }],
+      }),
+    })
+    const first = await bench.ctx.llm.listModels('devin')
+    expect(first.map(model => model.id)).toEqual(['swe-2'])
+    await bench.ctx.llm.listModels('devin')
+    await bench.ctx.llm.listModels('devin')
+    const calls = await recordedCalls(bench.recordFile)
+    expect(calls.filter(call => call.method === 'cli')).toHaveLength(1)
+
+    // A harness with neither a catalog verb nor probing spawns nothing at all,
+    // however often the picker asks.
+    await bench.ctx.fiber.dispose()
+    bench = await setup({}, { harnesses: [await extraEntry('bare', 'Bare harness', {}, { probeCatalog: false })] })
+    await expect(bench.ctx.llm.listModels('bare')).resolves.toEqual([])
+    await expect(bench.ctx.llm.listModels('bare')).resolves.toEqual([])
+    await expect(recordedCalls(bench.recordFile)).resolves.toEqual([])
+  }, TEST_TIMEOUT)
+
+  it('refuses a probe whose session/new returns no session id', async () => {
+    bench = await setup({ MOCK_MISSING_SESSION_ID: '1' })
+    await expect(bench.ctx.llm.listModels('devin')).rejects.toThrow('session/new returned no session id')
   }, TEST_TIMEOUT)
 
   it('keeps the picker route empty when probing is disabled and no session bound', async () => {

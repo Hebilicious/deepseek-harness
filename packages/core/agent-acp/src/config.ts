@@ -50,9 +50,17 @@ export interface AcpHarnessEntry {
    * binds.
    */
   probeCatalog?: boolean
-  /** Auth-status CLI arguments (default `['auth', 'status']`). */
+  /**
+   * Auth-status CLI arguments (default `['auth', 'status']`). An explicitly
+   * empty list declares that this harness reports authorization through its
+   * ACP methods and has no status verb, so nothing is spawned for it.
+   */
   authStatusArgs?: string[]
-  /** Auth-logout CLI arguments (default `['auth', 'logout']`). */
+  /**
+   * Auth-logout CLI arguments (default `['auth', 'logout']`). An explicitly
+   * empty list declares no logout verb: signing out then requires the agent's
+   * ACP logout method, and a deployment without one fails loud.
+   */
   authLogoutArgs?: string[]
 }
 
@@ -66,6 +74,12 @@ export interface Config {
   eofGraceMs?: number
   /** Deadline in milliseconds for one CLI verb (default 180000); Devin's catalog refresh runs over the network. */
   cliTimeoutMs?: number
+  /**
+   * How long one harness's catalog read is reused before the next read
+   * (default 300000). One read serves every caller, so a picker that polls
+   * never spawns a harness CLI per request.
+   */
+  catalogCacheMs?: number
 }
 
 /** One harness entry with every default except `cwd` applied. */
@@ -110,6 +124,8 @@ export const DEFAULT_DISPOSE_GRACE_MS = 5000
 export const DEFAULT_EOF_GRACE_MS = 2000
 /** Default deadline for one one-shot CLI verb. */
 export const DEFAULT_CLI_TIMEOUT_MS = 180_000
+/** Default reuse window for one harness's catalog read. */
+export const DEFAULT_CATALOG_CACHE_MS = 300_000
 /** Harness ids are lowercase slugs so they are usable as provider routes and registry keys. */
 const HARNESS_ID_PATTERN = /^[a-z][a-z0-9-]*$/
 /** Default arguments after a harness executable. */

@@ -1,14 +1,16 @@
 /**
- * Codex session driver plugin: one shared `codex app-server --stdio` process
- * per profile, one `ctx.agents` factory binding every session to its own
- * Codex thread, the `codex` catalog route for the model picker, and the
- * connection-global account Remote the settings panel drives.
+ * Codex session driver plugin: one `codex app-server --stdio` process per
+ * configured instance, one `ctx.agents` factory and one `ctx.llm` catalog
+ * route per instance, and the harness-scoped account Remote the settings
+ * panel drives. Every instance is effect-scoped, so unloading the plugin
+ * disposes each app-server process.
  *
  * @module @deepseek-ai/dsh-agent-codex
  */
 
 import { Context } from '@deepseek-ai/cordis'
 import z from '@deepseek-ai/schemastery'
+import { HarnessId } from '@deepseek-ai/dsh-agent'
 import type {} from '@deepseek-ai/dsh-llm'
 import {
   Remote,
@@ -23,15 +25,21 @@ import type {} from '@deepseek-ai/dsh-attachment'
 import type {} from '@deepseek-ai/dsh-session-projection'
 import type {} from '@deepseek-ai/dsh-subprocess'
 import type {} from '@deepseek-ai/dsh-credentials'
-import type {} from '@deepseek-ai/dsh-typert-protocol'
 import type { JsonValue } from '@deepseek-ai/dsh-util-values'
-import { CODEX_PROVIDER, type CodexAgentConfig } from './agent.ts'
+import type { CodexAgentConfig } from './agent.ts'
 import { CodexCatalogAdapter } from './catalog.ts'
+import {
+  codexHarnessEntrySchema,
+  DEFAULT_DISPOSE_GRACE_MS,
+  DEFAULT_EOF_GRACE_MS,
+  resolveHarnessEntries,
+  type Config,
+  type ResolvedCodexHarnessEntry,
+} from './config.ts'
 import { CodexAgentHost } from './host.ts'
 import {
   CodexAppServerRuntime,
   CODEX_PREFIX,
-  defaultCodexHome,
   type CodexRuntimeOptions,
 } from './runtime.ts'
 import type {
@@ -42,8 +50,15 @@ import type {
   CodexRateLimits,
 } from './types.ts'
 
-export { CodexAgent, CODEX_PROVIDER, type CodexAgentConfig } from './agent.ts'
+export { CodexAgent, type CodexAgentConfig } from './agent.ts'
 export { CodexCatalogAdapter } from './catalog.ts'
+export {
+  codexHarnessEntrySchema,
+  resolveHarnessEntries,
+  type CodexHarnessEntry,
+  type Config,
+  type ResolvedCodexHarnessEntry,
+} from './config.ts'
 export { CodexAppServerConnection } from './connection.ts'
 export { CodexAgentHost } from './host.ts'
 export {
@@ -77,49 +92,28 @@ export type {
   CodexRateLimits,
 } from './types.ts'
 
-/** Plugin config; every field optional — `static Config` supplies defaults. */
-export interface Config {
-  /** Codex executable name or absolute path (default `codex`). */
-  executable?: string
-  /** Arguments after the executable (default `['app-server']`). */
-  args?: string[]
-  /** `CODEX_HOME` handed to the child; owns auth, config.toml, MCP, hooks (default `~/.codex`). */
-  codexHome?: string
-  /** Explicit environment entries layered over the scrubbed parent environment. */
-  env?: Record<string, string>
-  /** Filesystem sandbox for sessions that log no `sandbox/mode` override (default `workspace-write`). */
-  sandbox?: 'read-only' | 'workspace-write' | 'danger-full-access'
-  /** `networkAccess` inside the structured `sandboxPolicy` overrides (default `false`). */
-  networkAccess?: boolean
-  /** Approval routing for sessions that log no `approval/policy` override (default `ask`). */
-  approval?: 'ask' | 'never'
-  /** Deployment default model beneath the session's `model/selection`. */
-  model?: string
-  /** Deployment default reasoning effort beneath the session's selection. */
-  reasoningEffort?: string
-  /** Credential reference (env-var name) resolved for unattended `account/login/start {type:'apiKey'}`. */
-  credentialRef?: string
-  /** Grace in milliseconds between managed-range termination tiers (default 5000). */
-  disposeGraceMs?: number
-  /** Tier-1 window in milliseconds after stdin EOF before escalation (default 2000). */
-  eofGraceMs?: number
-}
-
-const DEFAULT_DISPOSE_GRACE_MS = 5000
-const DEFAULT_EOF_GRACE_MS = 2000
-
 declare module '@deepseek-ai/cordis' {
   interface Context {
-    /** The Codex session driver: agent factory host plus connection-global account Remote. */
+    /** The Codex session driver: per-instance agent factories plus the harness-scoped account Remote. */
     codexAppServer: CodexAppServer
   }
 }
 
+/** One mounted Codex instance: its resolved entry, its own runtime, and its own unattended-login latch. */
+interface MountedCodexHarness {
+  /** Resolved config entry with every deployment default applied. */
+  readonly entry: ResolvedCodexHarnessEntry
+  /** The app-server runtime owning this instance's process and connection. */
+  readonly runtime: CodexAppServerRuntime
+  /** Set once this instance attempted its configured api-key login. */
+  apiKeyLoginAttempted: boolean
+}
+
 /**
- * The `codexAppServer` service (`codex` Remote namespace). Owns the shared
- * app-server process and connection, the agent-factory host, the `codex`
- * catalog adapter, and every account/login/rate-limit operation — none of
- * which belong to a session.
+ * The `codexAppServer` service (`codex` Remote namespace). Owns one app-server
+ * runtime, one agent-factory host, and one catalog adapter per configured
+ * instance, plus every account/login/rate-limit operation — none of which
+ * belong to a session.
  */
 export class CodexAppServer extends TypertRemoteService {
   static inject = [
@@ -133,160 +127,128 @@ export class CodexAppServer extends TypertRemoteService {
 
   /** Inline schema call: the config catalog walks `static Config` statically. */
   static Config: z<Config> = z.object({
-    executable: z.string().min(1).default('codex'),
-    args: z.array(z.string()).default(['app-server']),
-    codexHome: z.string().min(1),
-    env: z.dict(z.string()).default({}),
-    sandbox: z.union(['read-only', 'workspace-write', 'danger-full-access'] as const)
-      .default('workspace-write'),
-    networkAccess: z.boolean().default(false),
-    approval: z.union(['ask', 'never'] as const).default('ask'),
-    model: z.string().min(1),
-    reasoningEffort: z.string().min(1),
-    credentialRef: z.string().min(1),
+    harnesses: z.array(codexHarnessEntrySchema).required(),
     disposeGraceMs: z.number().default(DEFAULT_DISPOSE_GRACE_MS),
     eofGraceMs: z.number().default(DEFAULT_EOF_GRACE_MS),
   })
 
-  private readonly runtime: CodexAppServerRuntime
-  private apiKeyLoginAttempted = false
+  /** Mounted instances by id, in config order. */
+  private readonly mounted = new Map<string, MountedCodexHarness>()
 
   /**
    * @param ctx - the plugin fiber context.
-   * @param config - resolved plugin config.
+   * @param config - resolved plugin config; every entry is validated here, once.
    */
   constructor(ctx: Context, public config: Config) {
     super(ctx, 'codexAppServer', { namespace: 'codex' })
-    const runtimeOptions: CodexRuntimeOptions = {
-      command: config.executable ?? 'codex',
-      args: config.args ?? ['app-server'],
-      codexHome: config.codexHome ?? defaultCodexHome(),
-      env: config.env ?? {},
-      disposeGraceMs: config.disposeGraceMs ?? DEFAULT_DISPOSE_GRACE_MS,
-      eofGraceMs: config.eofGraceMs ?? DEFAULT_EOF_GRACE_MS,
+    for (const entry of resolveHarnessEntries(config)) {
+      const runtime = new CodexAppServerRuntime(ctx, runtimeOptionsFor(entry, config))
+      const mounted: MountedCodexHarness = { entry, runtime, apiKeyLoginAttempted: false }
+      this.mounted.set(entry.id, mounted)
+      // The host constructor owns its registrations: the codexThread
+      // projection, shared transaction ownership, and this instance in
+      // `ctx.agents`, all effect-scoped so unloading disposes only them.
+      new CodexAgentHost(ctx, runtime, this.agentConfigFor(mounted))
+      ctx.effect(() => () => runtime.dispose(), `codexAppServer(${entry.id}).dispose()`)
+      ctx.effect(
+        () => ctx.llm.registerAdapter([entry.id], new CodexCatalogAdapter(entry.id, entry.name, runtime)),
+        `codexAppServer(${entry.id}).catalog()`,
+      )
     }
-    this.runtime = new CodexAppServerRuntime(ctx, runtimeOptions)
-    const credentialName = config.credentialRef
-    const agentConfig: CodexAgentConfig = {
-      sandbox: config.sandbox ?? 'workspace-write',
-      approval: config.approval ?? 'ask',
-      networkAccess: config.networkAccess ?? false,
-      ...config.model === undefined ? {} : { model: config.model },
-      ...config.reasoningEffort === undefined ? {} : { reasoningEffort: config.reasoningEffort },
-      ...credentialName === undefined
-        ? {}
-        : { loginWithApiKey: () => this.loginWithConfiguredKey(credentialName) },
-    }
-    // The host constructor owns its registrations: the codexThread
-    // projection, shared transaction ownership, and `agents.setFactory`.
-    new CodexAgentHost(ctx, this.runtime, agentConfig)
-    ctx.effect(() => () => this.runtime.dispose(), 'codexAppServer.dispose()')
-    ctx.effect(
-      () => ctx.llm.registerAdapter([CODEX_PROVIDER], new CodexCatalogAdapter(this.runtime)),
-      'codexAppServer.catalog()',
-    )
   }
 
-  // ---- connection-global account Remote surface ----
+  // ---- harness-scoped account Remote surface ----
 
   /**
-   * Read the Codex account state.
+   * Read one instance's Codex account state.
+   * @param request - `{harness}` naming a mounted instance.
    * @param signal - caller lifetime.
    * @returns normalized account facts.
    */
   @Remote
-  async status(signal: AbortSignal): Promise<CodexAccountSnapshot> {
-    try {
-      return await this.runtime.readAccount(signal)
-    } catch (error: unknown) {
-      throw asRemoteError('codex/account-failed', error)
-    }
+  async status(request: { harness: string }, signal: AbortSignal): Promise<CodexAccountSnapshot> {
+    return await this.withRuntime(request.harness, 'codex/account-failed', runtime => runtime.readAccount(signal))
   }
 
   /**
    * Start a device-code login; the panel shows the URL and code.
+   * @param request - `{harness}` naming a mounted instance.
    * @param signal - caller lifetime.
    * @returns the attempt id, verification URL, and one-time code.
    */
   @Remote('loginDeviceCode')
-  async beginDeviceCode(signal: AbortSignal): Promise<CodexDeviceCodeLogin> {
-    try {
-      return await this.runtime.beginDeviceCodeLogin(signal)
-    } catch (error: unknown) {
-      throw asRemoteError('codex/login-failed', error)
-    }
+  async beginDeviceCode(request: { harness: string }, signal: AbortSignal): Promise<CodexDeviceCodeLogin> {
+    return await this.withRuntime(
+      request.harness,
+      'codex/login-failed',
+      runtime => runtime.beginDeviceCodeLogin(signal),
+    )
   }
 
   /**
    * Start a browser OAuth login; usable only where a browser can reach the
    * app-server's localhost callback.
+   * @param request - `{harness}` naming a mounted instance.
    * @param signal - caller lifetime.
    * @returns the attempt id and authorization URL.
    */
   @Remote('loginBrowser')
-  async beginBrowser(signal: AbortSignal): Promise<CodexBrowserLogin> {
-    try {
-      return await this.runtime.beginBrowserLogin(signal)
-    } catch (error: unknown) {
-      throw asRemoteError('codex/login-failed', error)
-    }
+  async beginBrowser(request: { harness: string }, signal: AbortSignal): Promise<CodexBrowserLogin> {
+    return await this.withRuntime(
+      request.harness,
+      'codex/login-failed',
+      runtime => runtime.beginBrowserLogin(signal),
+    )
   }
 
   /**
    * Cancel one in-flight login attempt.
-   * @param request - `{loginId}` from a login start.
+   * @param request - `{harness, loginId}`; the id comes from a login start.
    * @param signal - caller lifetime.
    */
   @Remote('cancelLogin')
-  async cancelLogin(request: { loginId?: string }, signal: AbortSignal): Promise<void> {
-    if (typeof request.loginId !== 'string' || request.loginId.length === 0) {
+  async cancelLogin(request: { harness: string; loginId?: string }, signal: AbortSignal): Promise<void> {
+    const loginId = request.loginId
+    if (typeof loginId !== 'string' || loginId.length === 0) {
       throw new RemoteError('gateway/bad-request', 'cancelLogin requires a loginId', {})
     }
-    try {
-      await this.runtime.cancelLogin(request.loginId, signal)
-    } catch (error: unknown) {
-      throw asRemoteError('codex/login-failed', error)
-    }
+    await this.withRuntime(request.harness, 'codex/login-failed', runtime => runtime.cancelLogin(loginId, signal))
   }
 
   /**
-   * Sign the Codex account out.
+   * Sign one instance's Codex account out.
+   * @param request - `{harness}` naming a mounted instance.
    * @param signal - caller lifetime.
    */
   @Remote
-  async logout(signal: AbortSignal): Promise<void> {
-    try {
-      await this.runtime.logout(signal)
-    } catch (error: unknown) {
-      throw asRemoteError('codex/login-failed', error)
-    }
+  async logout(request: { harness: string }, signal: AbortSignal): Promise<void> {
+    await this.withRuntime(request.harness, 'codex/login-failed', runtime => runtime.logout(signal))
   }
 
   /**
-   * Read account quota.
+   * Read one instance's account quota.
+   * @param request - `{harness}` naming a mounted instance.
    * @param signal - caller lifetime.
    * @returns the normalized rate-limit payload.
    */
   @Remote
-  async rateLimits(signal: AbortSignal): Promise<CodexRateLimits> {
-    try {
-      return await this.runtime.readRateLimits(signal)
-    } catch (error: unknown) {
-      throw asRemoteError('codex/account-failed', error)
-    }
+  async rateLimits(request: { harness: string }, signal: AbortSignal): Promise<CodexRateLimits> {
+    return await this.withRuntime(request.harness, 'codex/account-failed', runtime => runtime.readRateLimits(signal))
   }
 
   /**
-   * Stream connection-global account notifications
+   * Stream one instance's account notifications
    * (`account/login/completed`, `account/updated`, `account/rateLimits/updated`).
+   * @param request - `{harness}` naming a mounted instance.
    * @param signal - caller lifetime; aborting ends the stream.
    * @returns account notifications as they arrive.
    */
   @Remote({ mode: 'stream' })
-  async *events(signal: AbortSignal): AsyncIterable<CodexAccountNotification> {
+  async *events(request: { harness: string }, signal: AbortSignal): AsyncIterable<CodexAccountNotification> {
+    const { runtime } = this.require(request.harness)
     const queue: CodexAccountNotification[] = []
     let wake: (() => void) | undefined
-    const detach = this.runtime.onAccountNotification((method, params) => {
+    const detach = runtime.onAccountNotification((method, params) => {
       queue.push({ method, params: params as JsonValue })
       wake?.()
     })
@@ -307,14 +269,74 @@ export class CodexAppServer extends TypertRemoteService {
   }
 
   /**
-   * Resolve the configured credential and run `account/login/start
-   * {type:'apiKey'}` — at most once per process lifetime, and only while the
+   * Run one account operation on a mounted instance, reporting a runtime
+   * failure under the operation's Remote code.
+   * @param harness - instance id from the caller.
+   * @param code - Remote error code a runtime failure is reported under.
+   * @param operation - the runtime call to run on the resolved instance.
+   * @returns whatever the operation resolves.
+   */
+  private async withRuntime<T>(
+    harness: string,
+    code: RemoteErrorCode,
+    operation: (runtime: CodexAppServerRuntime) => Promise<T>,
+  ): Promise<T> {
+    const { runtime } = this.require(harness)
+    try {
+      return await operation(runtime)
+    } catch (error: unknown) {
+      throw asRemoteError(code, error)
+    }
+  }
+
+  /**
+   * Resolve one mounted instance by id.
+   * @param harness - instance id from the caller.
+   * @returns the mounted instance.
+   */
+  private require(harness: string): MountedCodexHarness {
+    const mounted = this.mounted.get(harness)
+    if (mounted === undefined) {
+      throw new RemoteError(
+        'gateway/bad-request',
+        `unknown Codex harness ${JSON.stringify(harness)} (mounted: ${[...this.mounted.keys()].join(', ')})`,
+        {},
+      )
+    }
+    return mounted
+  }
+
+  /** Bind one entry's identity and deployment defaults to the agents it constructs. */
+  private agentConfigFor(mounted: MountedCodexHarness): CodexAgentConfig {
+    const { entry } = mounted
+    const credentialName = entry.credentialRef
+    return {
+      harness: {
+        id: HarnessId(entry.id),
+        name: entry.name,
+        ...entry.description === undefined ? {} : { description: entry.description },
+      },
+      sandbox: entry.sandbox,
+      approval: entry.approval,
+      networkAccess: entry.networkAccess,
+      ...entry.model === undefined ? {} : { model: entry.model },
+      ...entry.reasoningEffort === undefined ? {} : { reasoningEffort: entry.reasoningEffort },
+      ...credentialName === undefined
+        ? {}
+        : { loginWithApiKey: () => this.loginWithConfiguredKey(mounted, credentialName) },
+    }
+  }
+
+  /**
+   * Resolve one instance's configured credential and run `account/login/start
+   * {type:'apiKey'}` — at most once per instance, and only while the
    * agent-side bind still reports signed out.
+   * @param mounted - the instance whose runtime receives the login.
    * @param refName - the configured credential reference (env-var name).
    */
-  private async loginWithConfiguredKey(refName: string): Promise<void> {
-    if (this.apiKeyLoginAttempted) return
-    this.apiKeyLoginAttempted = true
+  private async loginWithConfiguredKey(mounted: MountedCodexHarness, refName: string): Promise<void> {
+    if (mounted.apiKeyLoginAttempted) return
+    mounted.apiKeyLoginAttempted = true
     const credentials = this.ctx.get('credentials')
     if (credentials === undefined) {
       throw new Error(`${CODEX_PREFIX}: apiKey login needs a credential provider (mount dsh-credentials)`)
@@ -326,7 +348,19 @@ export class CodexAppServer extends TypertRemoteService {
     if (resolved === undefined) {
       throw new Error(`${CODEX_PREFIX}: credential "${refName}" is not configured`)
     }
-    await this.runtime.loginWithApiKey(resolved.value)
+    await mounted.runtime.loginWithApiKey(resolved.value)
+  }
+}
+
+/** Resolve one entry's process options, applying the plugin-wide termination graces. */
+function runtimeOptionsFor(entry: ResolvedCodexHarnessEntry, config: Config): CodexRuntimeOptions {
+  return {
+    command: entry.executable,
+    args: entry.args,
+    codexHome: entry.codexHome,
+    env: entry.env,
+    disposeGraceMs: config.disposeGraceMs ?? DEFAULT_DISPOSE_GRACE_MS,
+    eofGraceMs: config.eofGraceMs ?? DEFAULT_EOF_GRACE_MS,
   }
 }
 

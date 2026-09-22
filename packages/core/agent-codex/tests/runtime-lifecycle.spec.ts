@@ -1,5 +1,5 @@
 /**
- * Lifecycle tests for the profile-shared app-server runtime, driven directly
+ * Lifecycle tests for one instance's app-server runtime, driven directly
  * through a REAL subprocess: the scripted mock `codex app-server --stdio`
  * server. Each case owns one runtime and proves an externally observable fact
  * — the child is reaped, a later connect spawns a fresh one, a throwing

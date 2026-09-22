@@ -14,7 +14,7 @@ import type { SubprocessHandle, SubprocessOutcome } from '@deepseek-ai/dsh-subpr
 import { ExternalHarnessProcess } from '@deepseek-ai/dsh-agent-external'
 import { errorChain } from '@deepseek-ai/dsh-llm'
 import { AcpClientConnection } from './connection.ts'
-import { acpAdvertisedModels, acpPrefix, type AcpSessionAdvert } from './protocol.ts'
+import { AcpProtocolError, acpAdvertisedModels, acpPrefix, type AcpSessionAdvert } from './protocol.ts'
 import type { AcpCatalogModel } from './types.ts'
 
 /** Options the plugin resolves once per harness at construction; all fields required but the catalog verb. */
@@ -43,6 +43,8 @@ export interface AcpRuntimeOptions {
   readonly authLogoutArgs: readonly string[]
   /** Deadline for one CLI verb (ms); Devin's `models list` refreshes over the network. */
   readonly cliTimeoutMs: number
+  /** How long a catalog read is reused before the next read (ms; default 300000). */
+  readonly catalogCacheMs: number
 }
 
 /**
@@ -56,7 +58,8 @@ export class AcpRuntime {
   private connecting: Promise<AcpClientConnection> | undefined
   private initializeResponse: InitializeResponse | undefined
   private advert: readonly AcpCatalogModel[] = []
-  private probing: Promise<readonly AcpCatalogModel[]> | undefined
+  private catalogRead: { at: number; models: readonly AcpCatalogModel[] } | undefined
+  private catalogPending: Promise<readonly AcpCatalogModel[]> | undefined
   private disposed = false
 
   /**
@@ -135,28 +138,65 @@ export class AcpRuntime {
    */
   async catalog(signal?: AbortSignal): Promise<readonly AcpCatalogModel[]> {
     if (this.advert.length > 0) return this.advert
-    const listed = await this.listCatalogCli(signal)
-    if (listed.length > 0) return listed
-    if (!this.options.probeCatalog) return []
-    this.probing ??= this.probeCatalog(signal)
-    try {
-      return await this.probing
-    } finally {
-      this.probing = undefined
-    }
+    const cached = this.catalogRead
+    if (cached !== undefined && Date.now() - cached.at < this.options.catalogCacheMs) return cached.models
+    // One read serves every caller: a picker that polls must not spawn a
+    // harness CLI per request, and a failure is remembered for the cache
+    // window instead of retried on every read.
+    this.catalogPending ??= this.readCatalog()
+      .then((models) => {
+        this.catalogRead = { at: Date.now(), models }
+        return models
+      })
+      .finally(() => { this.catalogPending = undefined })
+    // The shared read owns its own deadline; a caller's cancellation must not
+    // cancel a read another caller is waiting on.
+    signal?.throwIfAborted()
+    return await this.catalogPending
   }
 
-  /** Open one throwaway session and publish the catalog it advertises. */
-  private async probeCatalog(signal?: AbortSignal): Promise<readonly AcpCatalogModel[]> {
-    const connection = await this.connect(signal)
+  /** Read the catalog once: the CLI verb when configured, otherwise one probe session. */
+  private async readCatalog(): Promise<readonly AcpCatalogModel[]> {
+    const listed = await this.listCatalogCli()
+    if (listed.length > 0) return listed
+    if (!this.options.probeCatalog) return []
+    return await this.probeCatalog()
+  }
+
+  /**
+   * Open one throwaway session, read the catalog it advertises, and close it
+   * again when the agent offers that. A probe is a catalog read, not a
+   * session the operator asked for, so it must not accumulate: an agent that
+   * advertises no close keeps the session until the process exits, because
+   * dropping the connection without closing would leave the harness believing
+   * the session is live.
+   */
+  private async probeCatalog(): Promise<readonly AcpCatalogModel[]> {
+    const connection = await this.connect()
     const response = await connection.request<AcpSessionAdvert & { sessionId?: string }>(
       'session/new',
       { cwd: this.options.cwd, mcpServers: [] },
-      signal,
     )
+    const sessionId = response.sessionId
+    if (typeof sessionId !== 'string' || sessionId.length === 0) {
+      throw new AcpProtocolError(`${this.prefix}: session/new returned no session id`)
+    }
     const models = acpAdvertisedModels(response)
     this.recordAdvert(models)
+    await this.closeProbeSession(connection, sessionId)
     return models
+  }
+
+  /** Close a probe session through whichever capability the agent advertises. */
+  private async closeProbeSession(connection: AcpClientConnection, sessionId: string): Promise<void> {
+    const capabilities = this.initializeResponse?.agentCapabilities?.sessionCapabilities
+    if (capabilities?.close !== undefined) {
+      await connection.request('session/close', { sessionId })
+      return
+    }
+    if (capabilities?.delete !== undefined) {
+      await connection.request('session/delete', { sessionId })
+    }
   }
 
   /**
@@ -207,6 +247,12 @@ export class AcpRuntime {
    * @returns the CLI's exit fact and diagnostic text.
    */
   async authStatus(signal?: AbortSignal): Promise<{ loggedIn: boolean; detail: string }> {
+    if (this.options.authStatusArgs.length === 0) {
+      return {
+        loggedIn: false,
+        detail: `${this.prefix}: this harness reports authorization through its ACP methods, not a CLI verb`,
+      }
+    }
     try {
       const output = await this.runCli(this.options.authStatusArgs, signal, true)
       return { loggedIn: output.exitCode === 0, detail: output.text.trim() }
@@ -220,6 +266,11 @@ export class AcpRuntime {
    * @param signal - caller cancellation.
    */
   async authLogout(signal?: AbortSignal): Promise<void> {
+    if (this.options.authLogoutArgs.length === 0) {
+      throw new Error(
+        `${this.prefix}: this harness configures no auth-logout command and advertises no ACP logout method`,
+      )
+    }
     await this.runCli(this.options.authLogoutArgs, signal)
   }
 

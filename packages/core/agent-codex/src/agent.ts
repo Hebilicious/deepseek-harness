@@ -1,6 +1,6 @@
 /**
  * Codex session driver: one {@link ExternalAgent} bound to one Codex thread on
- * the profile-shared app-server connection. Owns the thread lifecycle
+ * its instance's app-server connection. Owns the thread lifecycle
  * (start/resume/unsubscribe), turn driving (`turn/start` → `turn/completed`),
  * live steering and injection, item→session-event projection, and approval /
  * question routing into the DSH seams.
@@ -10,6 +10,7 @@
 
 import type {
   AgentCancelCause,
+  AgentHarness,
   AgentOptions,
 } from '@deepseek-ai/dsh-agent'
 import type { AssistantStreamAttempt } from '@deepseek-ai/dsh-agent-external'
@@ -45,11 +46,10 @@ import {
 import { CODEX_PREFIX, type CodexAppServerRuntime, type CodexThreadPeer } from './runtime.ts'
 import { codexThreadOf } from './thread-state.ts'
 
-/** The provider id under which the Codex catalog adapter registers. */
-export const CODEX_PROVIDER = 'codex'
-
 /** Per-driver deployment defaults the session's durable knobs override. */
 export interface CodexAgentConfig {
+  /** Identity this instance's host registered in `ctx.agents`; its id is also the catalog route. */
+  readonly harness: AgentHarness
   /** Filesystem sandbox when the session logs no `sandbox/mode` override. */
   readonly sandbox: SandboxMode
   /** Approval routing when the session logs no `approval/policy` override. */
@@ -134,7 +134,7 @@ function isMissingRollout(error: unknown): boolean {
 }
 
 /**
- * Agent whose turns run on a Codex app-server thread. The shared
+ * Agent whose turns run on a Codex app-server thread. The instance's
  * {@link CodexAppServerRuntime} owns the process and connection; this class
  * owns exactly one thread on it.
  */
@@ -162,7 +162,7 @@ export class CodexAgent extends ExternalAgent implements CodexThreadPeer {
   // ---- ExternalAgent harness surface ----
 
   /**
-   * Join the profile's shared app-server, prove the account is authenticated,
+   * Join the instance's app-server, prove the account is authenticated,
    * then resume the recorded thread or start a fresh durable one. Runs
    * unpublished: any rejection rolls the whole create/resume back.
    * @param signal - fused caller/lifecycle cancellation.
@@ -393,7 +393,7 @@ export class CodexAgent extends ExternalAgent implements CodexThreadPeer {
               reason: { kind: 'aborted', failure: { message: 'turn ended mid-stream', code: 'ABORTED' } },
             })
             drive.projector.commitAssistant(attempt, {
-              provider: CODEX_PROVIDER,
+              provider: this.driverConfig.harness.id,
               model: active.model,
             }, { interrupted: true })
           } else {
@@ -416,7 +416,7 @@ export class CodexAgent extends ExternalAgent implements CodexThreadPeer {
           })
           attempt.push({ type: 'finish', reason: { kind: 'stop' } })
           drive.projector.commitAssistant(attempt, {
-            provider: CODEX_PROVIDER,
+            provider: this.driverConfig.harness.id,
             model: active.model,
           })
         } catch (error: unknown) {
@@ -862,7 +862,7 @@ export class CodexAgent extends ExternalAgent implements CodexThreadPeer {
         tracked.attempt.push({ type: 'block-end', index: tracked.textIndex, block: { type: 'text', text } })
         tracked.attempt.push({ type: 'finish', reason: { kind: 'stop' } })
         active.drive.projector.commitAssistant(tracked.attempt, {
-          provider: CODEX_PROVIDER,
+          provider: this.driverConfig.harness.id,
           model: active.model,
         })
         active.attempts.delete(id)
@@ -1160,14 +1160,14 @@ export class CodexAgent extends ExternalAgent implements CodexThreadPeer {
    */
   private effectiveSelection(): CodexRoute {
     const selected = this.currentSelection()
-    const picked = selected.provider === CODEX_PROVIDER ? selected : undefined
+    const picked = selected.provider === this.driverConfig.harness.id ? selected : undefined
     const model = picked?.model !== undefined && picked.model !== ''
       ? picked.model
       : this.driverConfig.model ?? this.boundRoute.model
     const effort = picked?.reasoningEffort
       ?? this.driverConfig.reasoningEffort ?? this.boundRoute.reasoningEffort
     return {
-      provider: CODEX_PROVIDER,
+      provider: this.driverConfig.harness.id,
       ...model === undefined ? {} : { model },
       ...effort === undefined ? {} : { reasoningEffort: effort },
     }

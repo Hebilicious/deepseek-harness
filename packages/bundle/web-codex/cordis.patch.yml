@@ -7,8 +7,9 @@
 # config. DSH stays the shell: session create/resume, transcript, approvals,
 # notifications, model picker.
 
-# `ctx.agents.setFactory` accepts exactly one factory: the Codex driver mounts
-# it, so the base's in-process agent loop leaves the composition.
+# The profile is Codex-only: the in-process agent loop leaves the composition,
+# so the Codex driver is the sole registered harness and an unqualified session
+# create resolves to it.
 - id: agent-loop
   disabled: true
 
@@ -34,7 +35,13 @@
     timeoutMs: 60000
 
 - insert:
-    # One shared app-server per profile; every session binds its own Codex
-    # thread on it. `codexHome` owns auth, config.toml, MCP, and hooks.
+    # One app-server per configured instance; this profile mounts one Codex
+    # account, and every session binds its own Codex thread on that process.
+    # `codexHome` owns auth, config.toml, MCP, and hooks.
     - id: agent-codex
       name: '@deepseek-ai/dsh-agent-codex'
+      config:
+        harnesses:
+          - id: codex
+            name: Codex
+            description: OpenAI Codex runs the session through codex app-server

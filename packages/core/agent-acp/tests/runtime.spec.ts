@@ -80,6 +80,7 @@ async function runtimeBench(
     probeCatalog: true,
     authStatusArgs: [mockAgent, 'auth', 'status'],
     authLogoutArgs: [mockAgent, 'auth', 'logout'],
+    catalogCacheMs: 300_000,
     cliTimeoutMs: 60_000,
     ...options,
   })
@@ -208,6 +209,16 @@ describe('AcpRuntime auth', () => {
     const status = await bench.runtime.authStatus()
     expect(status).toEqual({ loggedIn: true, detail: 'logged in as mock@example.com' })
     expect((await recordedCalls(bench.recordFile)).some(call => call.method === 'authenticate')).toBe(true)
+  }, 30_000)
+
+  it('treats an explicitly empty auth verb list as no CLI verb', async () => {
+    // A harness whose authentication lives in its ACP methods configures no
+    // verb, and nothing may be spawned for a status or logout read.
+    bench = await runtimeBench({}, { authStatusArgs: [], authLogoutArgs: [] })
+    const status = await bench.runtime.authStatus()
+    expect(status.loggedIn).toBe(false)
+    expect(status.detail).toContain('reports authorization through its ACP methods')
+    await expect(bench.runtime.authLogout()).rejects.toThrow('configures no auth-logout command')
   }, 30_000)
 
   it('reports a non-zero auth-status exit and an unresolvable command as logged out', async () => {

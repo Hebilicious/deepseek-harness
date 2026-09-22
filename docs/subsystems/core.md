@@ -956,58 +956,64 @@ Source: [`packages/core/agent/src/index.ts`](../../packages/core/agent/src/index
 
 ### `ctx.codexAppServer` — `CodexAppServer`
 
-The `codexAppServer` service (`codex` Remote namespace). Owns the shared app-server process and connection, the agent-factory host, the `codex` catalog adapter, and every account/login/rate-limit operation — none of which belong to a session.
+The `codexAppServer` service (`codex` Remote namespace). Owns one app-server runtime, one agent-factory host, and one catalog adapter per configured instance, plus every account/login/rate-limit operation — none of which belong to a session.
 
 ```ts cordis-catalog
 /**
- * Read the Codex account state.
+ * Read one instance's Codex account state.
+ * @param request - `{harness}` naming a mounted instance.
  * @param signal - caller lifetime.
  * @returns normalized account facts.
  */
-@Remote async status(signal: AbortSignal): Promise<CodexAccountSnapshot>
+@Remote async status(request: { harness: string }, signal: AbortSignal): Promise<CodexAccountSnapshot>
 
 /**
  * Start a device-code login; the panel shows the URL and code.
+ * @param request - `{harness}` naming a mounted instance.
  * @param signal - caller lifetime.
  * @returns the attempt id, verification URL, and one-time code.
  */
-@Remote('loginDeviceCode') async beginDeviceCode(signal: AbortSignal): Promise<CodexDeviceCodeLogin>
+@Remote('loginDeviceCode') async beginDeviceCode(request: { harness: string }, signal: AbortSignal): Promise<CodexDeviceCodeLogin>
 
 /**
  * Start a browser OAuth login; usable only where a browser can reach the
  * app-server's localhost callback.
+ * @param request - `{harness}` naming a mounted instance.
  * @param signal - caller lifetime.
  * @returns the attempt id and authorization URL.
  */
-@Remote('loginBrowser') async beginBrowser(signal: AbortSignal): Promise<CodexBrowserLogin>
+@Remote('loginBrowser') async beginBrowser(request: { harness: string }, signal: AbortSignal): Promise<CodexBrowserLogin>
 
 /**
  * Cancel one in-flight login attempt.
- * @param request - `{loginId}` from a login start.
+ * @param request - `{harness, loginId}`; the id comes from a login start.
  * @param signal - caller lifetime.
  */
-@Remote('cancelLogin') async cancelLogin(request: { loginId?: string }, signal: AbortSignal): Promise<void>
+@Remote('cancelLogin') async cancelLogin(request: { harness: string; loginId?: string }, signal: AbortSignal): Promise<void>
 
 /**
- * Sign the Codex account out.
+ * Sign one instance's Codex account out.
+ * @param request - `{harness}` naming a mounted instance.
  * @param signal - caller lifetime.
  */
-@Remote async logout(signal: AbortSignal): Promise<void>
+@Remote async logout(request: { harness: string }, signal: AbortSignal): Promise<void>
 
 /**
- * Read account quota.
+ * Read one instance's account quota.
+ * @param request - `{harness}` naming a mounted instance.
  * @param signal - caller lifetime.
  * @returns the normalized rate-limit payload.
  */
-@Remote async rateLimits(signal: AbortSignal): Promise<CodexRateLimits>
+@Remote async rateLimits(request: { harness: string }, signal: AbortSignal): Promise<CodexRateLimits>
 
 /**
- * Stream connection-global account notifications
+ * Stream one instance's account notifications
  * (`account/login/completed`, `account/updated`, `account/rateLimits/updated`).
+ * @param request - `{harness}` naming a mounted instance.
  * @param signal - caller lifetime; aborting ends the stream.
  * @returns account notifications as they arrive.
  */
-@Remote({ mode: 'stream' }) async *events(signal: AbortSignal): AsyncIterable<CodexAccountNotification>
+@Remote({ mode: 'stream' }) async *events(request: { harness: string }, signal: AbortSignal): AsyncIterable<CodexAccountNotification>
 ```
 
 Source: [`packages/core/agent-codex/src/index.ts`](../../packages/core/agent-codex/src/index.ts)

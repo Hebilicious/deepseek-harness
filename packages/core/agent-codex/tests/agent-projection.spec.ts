@@ -170,11 +170,13 @@ async function setup(env: Record<string, string> = {}, options: BenchOptions = {
   if (options.questions !== undefined) await ctx.plugin(QuestionsStub, options.questions)
   if (options.attachments !== undefined) await ctx.plugin(AttachmentStub, options.attachments)
   await ctx.plugin(CodexAppServer, {
-    executable: process.execPath,
-    args: [mockServer],
-    codexHome: root,
-    env: { MOCK_CODEX_RECORD_FILE: recordFile, ...env },
-    ...options.config,
+    harnesses: [{
+      executable: process.execPath,
+      args: [mockServer],
+      codexHome: root,
+      env: { MOCK_CODEX_RECORD_FILE: recordFile, ...env },
+      ...options.config,
+    }],
   })
   return { ctx, root, recordFile }
 }
@@ -1160,7 +1162,7 @@ describe('unowned and foreign frames', () => {
     // The notification was written before the marker, and this round trip after
     // it, so the client has consumed the frame before the turn starts.
     await waitForFile(early)
-    await bench.ctx.codexAppServer.status(new AbortController().signal)
+    await bench.ctx.codexAppServer.status({ harness: 'codex' }, new AbortController().signal)
     send(agent, 'hi')
     await agent.whenIdle()
 
@@ -1221,7 +1223,7 @@ describe('context injection details', () => {
       content: [{ type: 'text', text: 'tool output' }],
       isError: false,
     }))
-    await bench.ctx.codexAppServer.status(new AbortController().signal)
+    await bench.ctx.codexAppServer.status({ harness: 'codex' }, new AbortController().signal)
     const calls = await recordedCalls(bench.recordFile)
     expect(calls.filter(call => call.method === 'thread/inject_items')).toHaveLength(1)
     expect(JSON.stringify(eventsOf(agent, 'user/message'))).not.toContain('tool output')
@@ -1235,7 +1237,7 @@ describe('context injection details', () => {
       source: { kind: 'user' },
     }))
     await waitForRecordedCall(bench.recordFile, 'thread/inject_items')
-    await bench.ctx.codexAppServer.status(new AbortController().signal)
+    await bench.ctx.codexAppServer.status({ harness: 'codex' }, new AbortController().signal)
 
     expect(JSON.stringify(eventsOf(agent, 'user/message'))).not.toContain('refused context')
   }, TEST_TIMEOUT)
@@ -1261,7 +1263,7 @@ describe('context injection details', () => {
     // flight, so the queued one only runs after the binding is gone.
     await handle.dispose()
     await writeFile(release, 'go')
-    await bench.ctx.codexAppServer.status(new AbortController().signal)
+    await bench.ctx.codexAppServer.status({ harness: 'codex' }, new AbortController().signal)
 
     const calls = await recordedCalls(bench.recordFile)
     const injects = calls.filter(call => call.method === 'thread/inject_items')

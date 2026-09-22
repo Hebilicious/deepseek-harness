@@ -9,7 +9,7 @@ kind: "package-bundle"
 
 ## 概述
 
-运行 `dsh web`，为每个会话选择由哪个 agent harness 运行。该层叠放在 [`dsh-base`](../base/README.zh.md) 与 [`dsh-web-app`](../web-app/README.zh.md) 之上，把进程内 agent 循环保留为 `dsh` harness，并加入 Codex 驱动器以及每个已配置 harness 对应的一条 ACP 驱动器条目。每个 harness 保留自己的循环、提示词、工具、MCP 服务器与配置，而 dsh 保留会话、transcript、审批、通知与模型选择器。每个 harness 都必须在本机安装并已登录，且各自启动自己的进程。
+运行 `dsh web`，为每个会话选择由哪个 agent harness 运行。该层叠放在 [`dsh-base`](../base/README.zh.md) 与 [`dsh-web-app`](../web-app/README.zh.md) 之上，把进程内 agent 循环保留为 `dsh` harness，并加入 Codex 驱动器以及每个已配置 harness 对应的一条 ACP 驱动器条目：Devin、Grok Build、opencode、mimocode 与 Claude Code。每个 harness 保留自己的循环、提示词、工具、MCP 服务器与配置，而 dsh 保留会话、transcript、审批、通知与模型选择器。每个 harness 都必须在本机安装并已登录，且各自启动自己的进程。
 
 ## 目录
 
@@ -49,9 +49,13 @@ dsh plugin --profile <name> remove @deepseek-ai/dsh-web-harnesses
 | `agent-default-model` | `provider: ''`、`model: ''`：部署级默认值只属于某一个 harness 的目录路由，因此在选择器或 `model/selection` 选定之前，会话不携带默认值 |
 | `session-title-llm` | 固定为 `deepseek-official` / `deepseek-flash`，因为外部 harness 的会话记录路由是仅提供目录的 adapter，不提供流式输出 |
 | `agent-codex` | 插入：每个 profile 一个共享 app-server，每个会话一个 Codex 线程 |
-| `agent-acp` | 插入四条 harness 条目，各一个进程：`devin`、`grok`、`opencode`、`mimo` |
+| `agent-acp` | 插入五条 harness 条目，各一个进程：`devin`、`grok`、`opencode`、`mimo`、`claude` |
 
 harness 行本身就是普通的 profile 配置。在 profile 自己的 `cordis.patch.yml` 中改写、添加或移除 ACP 条目，选择器会跟随已挂载的集合。
+
+### Claude Code 通过适配器运行
+
+Claude Code 自身不使用 Agent Client Protocol，因此 `claude` 条目运行 [Zed 的适配器](https://github.com/zed-industries/claude-code-acp)，由该适配器在底层驱动 `claude` CLI。条目固定了适配器版本并用 `npx` 解析；若机器已全局安装适配器，可把这两个字段替换为 `executable: claude-code-acp` 且不带参数。该适配器通过 ACP 方法而非 CLI 命令报告授权状态，因此两个命令列表为空，并且服务进程的 `PATH` 中必须有 `claude`。
 
 驱动器约定、配置与限制见 [`dsh-agent-codex`](../../core/agent-codex/README.zh.md) 与 [`dsh-agent-acp`](../../core/agent-acp/README.zh.md)。
 
@@ -138,7 +142,8 @@ harness 行本身就是普通的 profile 配置。在 profile 自己的 `cordis.
 这些限制说明该 profile 何时不适合使用，或需要运维上的注意。它们是当前包约束，不是任务积压。
 
 - **该 profile 不提供部署级默认模型**——默认值只属于某一个 harness 的目录路由，因此本层将其清空。运行在进程内 `dsh` harness 上的会话需要在首轮之前于选择器中选定模型，而外部 harness 会在会话记录 `model/selection` 之前应用自己的默认值。
-- **每个外部 harness 都是独立程序**——Codex 与每条 ACP 条目各自启动进程：app-server 在首个会话绑定时启动，ACP harness 在首个会话绑定或模型选择器首次请求其目录时启动。每个可执行文件都必须已安装、已登录，并且能被服务进程按名称或绝对路径找到；对 mimocode 而言通常意味着把其安装目录加入 `PATH`。
+- **每个外部 harness 都是独立程序**——Codex 与每条 ACP 条目各自启动进程：app-server 在首个会话绑定时启动，ACP harness 在首个会话绑定或模型选择器首次请求其目录时启动。每个可执行文件都必须已安装、已登录，并且能被服务进程按名称或绝对路径找到；对 mimocode 而言通常意味着把其安装目录加入 `PATH`，对 Claude Code 而言则意味着 `claude` 与可解析的适配器都要存在。
+- **Claude Code 依赖第三方适配器**——`claude` 条目运行 Zed 的 `claude-code-acp`，版本在本 bundle 中固定，并在首次使用时由 `npx` 获取；因此在适配器被缓存之前该 harness 需要网络访问，并且适配器必须与其驱动的 `claude` CLI 保持同步。Anthropic 未提供 ACP 模式，本 bundle 中该适配器是唯一受支持的路径。
 - **一个会话只属于一个 harness**——记录的 `agent/harness` 事件在创建时将其固定。以其他 harness 恢复该会话会被拒绝，因为另一个 harness 无法继续这段对话。
 - **审批与沙箱策略按 harness 各自生效**——每条 ACP 条目携带自己的 `sandbox` 与 `approval` 默认值；不提供只读模式的 harness 无法满足只读预期，驱动器会记录实际生效的模式。
 - **模型目录来自 harness**——条目读取自已绑定会话自身的通告或配置好的目录命令，因此不可达或损坏的 harness 可执行文件会让其分组在选择器中为空。

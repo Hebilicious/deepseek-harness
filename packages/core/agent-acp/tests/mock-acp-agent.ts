@@ -11,6 +11,9 @@
  * - `MOCK_LOAD_SESSION` — advertise `loadSession: true` and serve `session/load`.
  * - `MOCK_CLOSE`        — advertise `sessionCapabilities.close` and serve
  *                         `session/close`.
+ * - `MOCK_DELETE`       — advertise `sessionCapabilities.delete` and serve
+ *                         `session/delete`, the other capability the catalog
+ *                         probe closes a throwaway session through.
  * - `MOCK_CONFIG_OPTIONS` — JSON `SessionConfigOption[]` returned by
  *                         `session/new` and `session/load`; the mock tracks
  *                         `session/set_config_option` writes and echoes the
@@ -169,6 +172,7 @@ const CRASH_AFTER_CHUNK = process.env.MOCK_CRASH_AFTER_CHUNK === '1'
 const READY_FILE = process.env.MOCK_READY_FILE
 const LOAD_SESSION = process.env.MOCK_LOAD_SESSION === '1'
 const CLOSE = process.env.MOCK_CLOSE === '1'
+const DELETE = process.env.MOCK_DELETE === '1'
 const EMIT_TOOL = process.env.MOCK_TOOL === '1'
 const EMIT_TOOL_OPEN = process.env.MOCK_TOOL_OPEN === '1'
 const FLUSH_ON_EOF = process.env.MOCK_FLUSH_ON_EOF
@@ -292,6 +296,7 @@ function makeAgent() {
         agentCapabilities: {
           ...LOAD_SESSION ? { loadSession: true } : {},
           ...CLOSE ? { sessionCapabilities: { close: {} } } : {},
+          ...DELETE ? { sessionCapabilities: { delete: {} } } : {},
           // Real Devin answers `auth: {}` (no logout method); MOCK_LOGOUT
           // advertises it so the driver's ACP logout arm stays exercised.
           ...WANT_LOGOUT ? { auth: { logout: {} } } : {},
@@ -327,6 +332,11 @@ function makeAgent() {
         ...models === undefined ? {} : { models },
       })
     },
+    deleteSession(params: unknown): Promise<Record<string, never>> {
+      record('session/delete', params)
+      return Promise.resolve({})
+    },
+
     closeSession(params: unknown): Promise<Record<string, never>> {
       record('session/close', params)
       return Promise.resolve({})
@@ -580,6 +590,7 @@ const app = createAcpAgentApp({ name: 'dsh-agent-acp-test-agent' })
   .onRequest(methods.agent.session.new, ({ params }) => implementation.newSession(params))
   .onRequest(methods.agent.session.load, ({ params }) => implementation.loadSession(params))
   .onRequest(methods.agent.session.close, ({ params }) => implementation.closeSession(params))
+  .onRequest(methods.agent.session.delete, ({ params }) => implementation.deleteSession(params))
   .onRequest(methods.agent.session.setConfigOption, ({ params }) => implementation.setConfigOption(params))
   .onRequest(methods.agent.session.prompt, ({ params, client }) => implementation.prompt(params, client))
   .onNotification(methods.agent.session.cancel, ({ params }) => implementation.cancel(params))

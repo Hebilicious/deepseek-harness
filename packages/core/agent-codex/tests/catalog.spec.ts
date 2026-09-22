@@ -1,7 +1,7 @@
 /**
- * Unit tests for the `codex` catalog route. The adapter reads the shared
- * app-server's `model/list`; these cases drive it through a stand-in runtime
- * so every mapping branch of the picker payload is exercised without a child
+ * Unit tests for the per-instance catalog route. The adapter reads its
+ * instance's `model/list`; these cases drive it through a stand-in runtime so
+ * every mapping branch of the picker payload is exercised without a child
  * process.
  */
 
@@ -10,14 +10,20 @@ import { CodexCatalogAdapter } from '../src/catalog.ts'
 import type { CodexAppServerRuntime } from '../src/runtime.ts'
 
 /** An adapter over a runtime whose `model/list` answers one fixed catalog. */
-function adapterOver(models: Array<Record<string, unknown>>): CodexCatalogAdapter {
+function adapterOver(
+  models: Array<Record<string, unknown>>,
+  provider = 'codex',
+  displayName = 'Codex',
+): CodexCatalogAdapter {
   const runtime = { listCodexModels: async () => models } as unknown as CodexAppServerRuntime
-  return new CodexCatalogAdapter(runtime)
+  return new CodexCatalogAdapter(provider, displayName, runtime)
 }
 
 describe('CodexCatalogAdapter', () => {
-  it('names the provider route', () => {
+  it('names the provider route after its instance', () => {
     expect(adapterOver([]).providerInfo('codex')).toEqual({ id: 'codex', name: 'Codex' })
+    expect(adapterOver([], 'personal', 'Personal Codex').providerInfo('personal'))
+      .toEqual({ id: 'personal', name: 'Personal Codex' })
   })
 
   it('refuses every stream request as a catalog-only route', () => {
@@ -45,6 +51,11 @@ describe('CodexCatalogAdapter', () => {
       },
       { provider: 'codex', id: 'codex-b', name: 'codex-b', inputModalities: ['text'] },
     ])
+  })
+
+  it('tags every entry with the instance route it serves', async () => {
+    const models = await adapterOver([{ model: 'codex-a' }], 'personal').listModels('personal')
+    expect(models[0]?.provider).toBe('personal')
   })
 
   it('refuses an entry that names no model', async () => {

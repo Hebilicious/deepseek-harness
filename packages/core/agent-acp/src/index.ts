@@ -30,6 +30,7 @@ import type { AcpAgentConfig } from './agent.ts'
 import { AcpCatalogAdapter } from './catalog.ts'
 import {
   acpHarnessEntrySchema,
+  DEFAULT_CATALOG_CACHE_MS,
   DEFAULT_CLI_TIMEOUT_MS,
   DEFAULT_DISPOSE_GRACE_MS,
   DEFAULT_EOF_GRACE_MS,
@@ -114,6 +115,7 @@ export class AcpHarness extends TypertRemoteService {
     disposeGraceMs: z.number().default(DEFAULT_DISPOSE_GRACE_MS),
     eofGraceMs: z.number().default(DEFAULT_EOF_GRACE_MS),
     cliTimeoutMs: z.number().default(DEFAULT_CLI_TIMEOUT_MS),
+    catalogCacheMs: z.number().default(DEFAULT_CATALOG_CACHE_MS),
   })
 
   /** Mounted harnesses by id, in config order. */
@@ -261,6 +263,7 @@ function runtimeOptionsFor(entry: ResolvedAcpHarnessEntry, config: Config): AcpR
     authStatusArgs: entry.authStatusArgs,
     authLogoutArgs: entry.authLogoutArgs,
     cliTimeoutMs: config.cliTimeoutMs ?? DEFAULT_CLI_TIMEOUT_MS,
+    catalogCacheMs: config.catalogCacheMs ?? DEFAULT_CATALOG_CACHE_MS,
   }
 }
 

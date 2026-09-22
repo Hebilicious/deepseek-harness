@@ -91,10 +91,10 @@ interface LiveAppServer {
 }
 
 /**
- * One app-server process and connection per mounted profile. Sessions bind
- * threads over the shared connection; the account and model-catalog surfaces
- * use the same connection outside any session. Construction is cheap —
- * {@link connect} spawns lazily and memoizes startup so concurrent session
+ * One app-server process and connection for one configured instance. Sessions
+ * bind threads over that instance's connection; its account and model-catalog
+ * surfaces use the same connection outside any session. Construction is cheap
+ * — {@link connect} spawns lazily and memoizes startup so concurrent session
  * binds share one handshake.
  */
 export class CodexAppServerRuntime {

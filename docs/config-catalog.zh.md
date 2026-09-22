@@ -52,6 +52,12 @@ export interface Config {
   eofGraceMs?: number
   /** Deadline in milliseconds for one CLI verb (default 180000); Devin's catalog refresh runs over the network. */
   cliTimeoutMs?: number
+  /**
+   * How long one harness's catalog read is reused before the next read
+   * (default 300000). One read serves every caller, so a picker that polls
+   * never spawns a harness CLI per request.
+   */
+  catalogCacheMs?: number
 }
 
 /** One configured ACP harness: how to spawn it and the deployment defaults for its sessions. */
@@ -94,16 +100,24 @@ export interface AcpHarnessEntry {
    * binds.
    */
   probeCatalog?: boolean
-  /** Auth-status CLI arguments (default `['auth', 'status']`). */
+  /**
+   * Auth-status CLI arguments (default `['auth', 'status']`). An explicitly
+   * empty list declares that this harness reports authorization through its
+   * ACP methods and has no status verb, so nothing is spawned for it.
+   */
   authStatusArgs?: string[]
-  /** Auth-logout CLI arguments (default `['auth', 'logout']`). */
+  /**
+   * Auth-logout CLI arguments (default `['auth', 'logout']`). An explicitly
+   * empty list declares no logout verb: signing out then requires the agent's
+   * ACP logout method, and a deployment without one fails loud.
+   */
   authLogoutArgs?: string[]
 }
 ```
 
 依赖：[`SandboxMode`](subsystems/sandbox.zh.md)
 
-来源： [`packages/core/agent-acp/src/config.ts:53`](../packages/core/agent-acp/src/config.ts)
+来源： [`packages/core/agent-acp/src/config.ts:68`](../packages/core/agent-acp/src/config.ts)
 
 <a id="deepseek-aidsh-agent-codex"></a>
 
@@ -112,8 +126,24 @@ export interface AcpHarnessEntry {
 需要： `agents` · `sessions` · `sessionProjections` · `subprocess` · `llm` · `typert`
 
 ```ts config-catalog
-/** Plugin config; every field optional — `static Config` supplies defaults. */
+/** Plugin config; {@link Config.harnesses} is the only required field. */
 export interface Config {
+  /** One entry per Codex instance this plugin instance drives; ids must be unique. */
+  harnesses: CodexHarnessEntry[]
+  /** Grace in milliseconds between managed-range termination tiers (default 5000). */
+  disposeGraceMs?: number
+  /** Tier-1 window in milliseconds after stdin EOF before escalation (default 2000). */
+  eofGraceMs?: number
+}
+
+/** One configured Codex instance: how to spawn it and the deployment defaults for its sessions. */
+export interface CodexHarnessEntry {
+  /** Stable id, unique per plugin instance; also the `ctx.agents` harness id and `ctx.llm` catalog route (default `codex`). */
+  id?: string
+  /** Human-readable name for a harness picker (default `Codex`). */
+  name?: string
+  /** One sentence on what runs the session, for a harness picker. */
+  description?: string
   /** Codex executable name or absolute path (default `codex`). */
   executable?: string
   /** Arguments after the executable (default `['app-server']`). */
@@ -123,7 +153,7 @@ export interface Config {
   /** Explicit environment entries layered over the scrubbed parent environment. */
   env?: Record<string, string>
   /** Filesystem sandbox for sessions that log no `sandbox/mode` override (default `workspace-write`). */
-  sandbox?: 'read-only' | 'workspace-write' | 'danger-full-access'
+  sandbox?: SandboxMode
   /** `networkAccess` inside the structured `sandboxPolicy` overrides (default `false`). */
   networkAccess?: boolean
   /** Approval routing for sessions that log no `approval/policy` override (default `ask`). */
@@ -134,14 +164,12 @@ export interface Config {
   reasoningEffort?: string
   /** Credential reference (env-var name) resolved for unattended `account/login/start {type:'apiKey'}`. */
   credentialRef?: string
-  /** Grace in milliseconds between managed-range termination tiers (default 5000). */
-  disposeGraceMs?: number
-  /** Tier-1 window in milliseconds after stdin EOF before escalation (default 2000). */
-  eofGraceMs?: number
 }
 ```
 
-来源： [`packages/core/agent-codex/src/index.ts:82`](../packages/core/agent-codex/src/index.ts)
+依赖：[`SandboxMode`](subsystems/sandbox.zh.md)
+
+来源： [`packages/core/agent-codex/src/config.ts:44`](../packages/core/agent-codex/src/config.ts)
 
 <a id="deepseek-aidsh-agent-default-model"></a>
 
@@ -221,7 +249,7 @@ export interface Config {
 
 Depends on: [`AgentOptions`](subsystems/core.zh.md) · [`SessionId`](subsystems/core.zh.md)
 
-来源：[`packages/core/agent-loop/src/index.ts:318`](../packages/core/agent-loop/src/index.ts)
+来源： [`packages/core/agent-loop/src/index.ts:139`](../packages/core/agent-loop/src/index.ts)
 
 <a id="deepseek-aidsh-agent-presets"></a>
 
@@ -3933,7 +3961,7 @@ export interface Config {
 }
 ```
 
-来源： [`packages/deliverables/workspace-changes/src/index.ts:36`](../packages/deliverables/workspace-changes/src/index.ts)
+来源： [`packages/deliverables/workspace-changes/src/index.ts:33`](../packages/deliverables/workspace-changes/src/index.ts)
 
 ## 无配置的可加载插件
 

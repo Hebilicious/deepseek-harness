@@ -159,8 +159,9 @@ flowchart LR
   svc_agentDefaultModel["ctx.agentDefaultModel<br/>Default Agent model selection"]
   pkg_headless["headless"]
   pkg_agent_acp["agent-acp"]
-  svc_acpHarness["ctx.acpHarness<br/>Devin ACP session driver"]
+  svc_acpHarness["ctx.acpHarness<br/>Multi-harness ACP session driver"]
   pkg_web_acp["web-acp"]
+  pkg_web_harnesses["web-harnesses"]
   pkg_agent_codex["agent-codex"]
   svc_codexAppServer["ctx.codexAppServer<br/>Codex app-server session driver"]
   pkg_web_codex["web-codex"]
@@ -402,6 +403,7 @@ flowchart LR
   pkg_workspace --> svc_workspaceRegistry
   pkg_workspace_changes --> svc_workspaceChanges
   svc_acpHarness --> pkg_web_acp
+  svc_acpHarness --> pkg_web_harnesses
   svc_agentDefaultModel --> pkg_api_session_controller
   svc_agentDefaultModel --> pkg_headless
   svc_agentLoop --> pkg_base
@@ -424,6 +426,7 @@ flowchart LR
   svc_browserUse --> pkg_experimental_browser_use_stagehand_native
   svc_clientModules --> pkg_client_hmr
   svc_codexAppServer --> pkg_web_codex
+  svc_codexAppServer --> pkg_web_harnesses
   svc_compaction --> pkg_compaction_basic
   svc_computerUse --> pkg_experimental_computer_use_cua_driver_mcp
   svc_computerUse --> pkg_experimental_computer_use_cua_driver_native
@@ -603,8 +606,8 @@ flowchart LR
 | `ctx.skills` | `seam` | [`skill`](../packages/skill/skill) | [`skill-badge`](../packages/skill/skill-badge), [`skill-filesystem`](../packages/skill/skill-filesystem), [`skill-office`](../packages/skill/skill-office) | [`tool-skill`](../packages/skill/tool-skill) | - | Merges provider skill catalogs; tool-skill renders the session-prefix catalog and loads complete skill bodies. |
 | `ctx.agents` | `core` | [`agent`](../packages/core/agent) | - | [`agent-loop`](../packages/core/agent-loop), [`acp`](../packages/acp/acp), [`subagent-in-process-driver`](../packages/subagent/subagent-in-process-driver) | - | Owns live Agent handles, the create/resume factory seam, and process-local initiator propagation. |
 | `ctx.agentDefaultModel` | `core` | [`agent-default-model`](../packages/core/agent-default-model) | - | [`api-session-controller`](../packages/api/session-controller), [`headless`](../packages/bundle/headless) | - | Layers the default ModelSelection through settings so direct and Host-backed Agent entry points share one state owner. |
-| `ctx.acpHarness` | `bundle` | [`agent-acp`](../packages/core/agent-acp) | - | [`web-acp`](../packages/bundle/web-acp) | - | One shared devin acp process per profile; every session binds its own ACP session, and the driver registers the sole ctx.agents factory, so mounting it replaces the in-process loop. |
-| `ctx.codexAppServer` | `bundle` | [`agent-codex`](../packages/core/agent-codex) | - | [`web-codex`](../packages/bundle/web-codex) | - | One shared codex app-server process per profile; every session binds its own Codex thread, and the driver registers the sole ctx.agents factory, so mounting it replaces the in-process loop. |
+| `ctx.acpHarness` | `bundle` | [`agent-acp`](../packages/core/agent-acp) | - | [`web-acp`](../packages/bundle/web-acp), [`web-harnesses`](../packages/bundle/web-harnesses) | - | One shared process per configured ACP harness; every session binds its own ACP session, and each harness registers its own ctx.agents factory, so a profile mounts as many as it configures beside the in-process loop. |
+| `ctx.codexAppServer` | `bundle` | [`agent-codex`](../packages/core/agent-codex) | - | [`web-codex`](../packages/bundle/web-codex), [`web-harnesses`](../packages/bundle/web-harnesses) | - | One shared app-server process per configured Codex instance; every session binds its own thread, and each instance registers its own ctx.agents factory and model route, so one profile can run several accounts beside the in-process loop. |
 | `ctx.agentLoop` | `bundle` | [`agent-loop`](../packages/core/agent-loop) | - | [`base`](../packages/bundle/base), [`sdk-minimal`](../packages/bundle/sdk-minimal) | - | The one concrete loop plugin; extension packages depend on dsh-agent events and services, not on this package. |
 | `ctx.goals` | `core` | [`goal`](../packages/goal/goal) | - | - | - | Folds revisioned objective state from the session log and keeps live continuation activation process-local. |
 | `ctx.ssh` | `core` | [`ssh`](../packages/ssh/ssh) | - | [`fs-ssh`](../packages/ssh/fs-ssh), [`subprocess-ssh`](../packages/ssh/subprocess-ssh), [`sandbox-ssh`](../packages/ssh/sandbox-ssh) | - | Owns one authenticated OpenSSH connection, installed helper identity, independent program streams and disconnect cleanup for the paired remote providers. |

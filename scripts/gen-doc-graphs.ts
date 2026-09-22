@@ -529,18 +529,18 @@ const SERVICE_ROLES: ServiceRole[] = [
   {
     key: 'acpHarness',
     pkg: 'agent-acp',
-    title: 'Devin ACP session driver',
+    title: 'Multi-harness ACP session driver',
     mode: 'bundle',
-    consumers: ['web-acp'],
-    note: 'One shared devin acp process per profile; every session binds its own ACP session, and the driver registers the sole ctx.agents factory, so mounting it replaces the in-process loop.',
+    consumers: ['web-acp', 'web-harnesses'],
+    note: 'One shared process per configured ACP harness; every session binds its own ACP session, and each harness registers its own ctx.agents factory, so a profile mounts as many as it configures beside the in-process loop.',
   },
   {
     key: 'codexAppServer',
     pkg: 'agent-codex',
     title: 'Codex app-server session driver',
     mode: 'bundle',
-    consumers: ['web-codex'],
-    note: 'One shared codex app-server process per profile; every session binds its own Codex thread, and the driver registers the sole ctx.agents factory, so mounting it replaces the in-process loop.',
+    consumers: ['web-codex', 'web-harnesses'],
+    note: 'One shared app-server process per configured Codex instance; every session binds its own thread, and each instance registers its own ctx.agents factory and model route, so one profile can run several accounts beside the in-process loop.',
   },
   {
     key: 'agentLoop',

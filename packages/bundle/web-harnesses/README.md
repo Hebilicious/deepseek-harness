@@ -9,7 +9,7 @@ English | [中文](README.zh.md)
 
 ## Summary
 
-Run `dsh web` and choose, for each session, which agent harness runs it. The layer stacks over [`dsh-base`](../base/README.md) and [`dsh-web-app`](../web-app/README.md), leaves the in-process agent loop mounted as the `dsh` harness, and adds the Codex driver plus one ACP driver entry per configured harness. Each harness keeps its own loop, prompt, tools, MCP servers, and config, while dsh keeps the session, transcript, approvals, notifications, and model picker. Every harness must be installed and signed in on the machine, and each one spawns its own process.
+Run `dsh web` and choose, for each session, which agent harness runs it. The layer stacks over [`dsh-base`](../base/README.md) and [`dsh-web-app`](../web-app/README.md), leaves the in-process agent loop mounted as the `dsh` harness, and adds the Codex driver plus one ACP driver entry per configured harness: Devin, Grok Build, opencode, mimocode, and Claude Code. Each harness keeps its own loop, prompt, tools, MCP servers, and config, while dsh keeps the session, transcript, approvals, notifications, and model picker. Every harness must be installed and signed in on the machine, and each one spawns its own process.
 
 ## Table of Contents
 
@@ -49,9 +49,13 @@ In-box bundles resolve from the dsh installation; the launcher activates this la
 | `agent-default-model` | `provider: ''`, `model: ''`: a deployment default belongs to one harness's catalog route, so no session carries one until the picker or a `model/selection` chooses it |
 | `session-title-llm` | Pinned to `deepseek-official` / `deepseek-flash`, because a session's logged route is a catalog-only adapter for external harnesses and serves no streams |
 | `agent-codex` | Inserted: one shared app-server per profile, one Codex thread per session |
-| `agent-acp` | Inserted with four harness entries, one process each: `devin`, `grok`, `opencode`, `mimo` |
+| `agent-acp` | Inserted with five harness entries, one process each: `devin`, `grok`, `opencode`, `mimo`, `claude` |
 
 The harness rows themselves are ordinary profile configuration. Repoint, add, or remove an ACP entry in the profile's own `cordis.patch.yml`, and the picker follows the mounted set.
+
+### Claude Code runs through an adapter
+
+Claude Code speaks no Agent Client Protocol of its own, so the `claude` entry runs [Zed's adapter](https://github.com/zed-industries/claude-code-acp) and that adapter drives the `claude` CLI underneath. The entry pins the adapter version and resolves it with `npx`; a machine that installs it globally replaces both fields with `executable: claude-code-acp` and no args. The adapter reports authorization through its ACP methods rather than a CLI verb, which is why both verb lists are empty, and the `claude` binary must be on the serving process's `PATH`.
 
 The driver contracts, configuration, and limitations live in [`dsh-agent-codex`](../../core/agent-codex/README.md) and [`dsh-agent-acp`](../../core/agent-acp/README.md).
 
@@ -138,7 +142,8 @@ Independent of the session's harness turns; the title request has its own short 
 These limits define when this profile is the wrong choice or needs operational care. They are current package constraints, not a task backlog.
 
 - **The profile ships no deployment model default** — a default belongs to one harness's catalog route, so this layer clears it. A session on the in-process `dsh` harness needs a model chosen in the picker before its first turn, while an external harness applies its own default until the session records a `model/selection`.
-- **Every external harness is a separate program** — Codex and each ACP entry spawn their own process: the app-server when its first session binds, an ACP harness when its first session binds or when the model picker first asks for its catalog. Each executable must be installed, signed in, and reachable by name or absolute path from the serving process, which for mimocode usually means adding its install directory to `PATH`.
+- **Every external harness is a separate program** — Codex and each ACP entry spawn their own process: the app-server when its first session binds, an ACP harness when its first session binds or when the model picker first asks for its catalog. Each executable must be installed, signed in, and reachable by name or absolute path from the serving process, which for mimocode usually means adding its install directory to `PATH` and for Claude Code means having both `claude` and a resolvable adapter.
+- **Claude Code depends on a third-party adapter** — the `claude` entry runs Zed's `claude-code-acp`, pinned in this bundle and fetched with `npx` on first use, so that harness needs network access until the adapter is cached and needs the adapter kept in step with the `claude` CLI it drives. Anthropic ships no ACP mode, and the adapter is the only supported path in this bundle.
 - **One session belongs to one harness** — the recorded `agent/harness` event fixes it at creation. Resuming a session under a different harness is refused, because another harness cannot continue that conversation.
 - **Approvals and sandbox policy stay per harness** — each ACP entry carries its own `sandbox` and `approval` defaults, and a harness that offers no read-only mode cannot honor a read-only expectation; the driver logs the mode actually in effect.
 - **Model catalogs come from the harness** — entries are read from the bound session's own advertisement or the configured catalog command, so an unreachable or broken harness executable leaves its group empty in the picker.

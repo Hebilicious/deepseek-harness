@@ -118,11 +118,13 @@ async function setup(
   if (options.questions === true) await ctx.plugin(FakeQuestions)
   if (options.credentials === true) await ctx.plugin(FakeCredentials)
   await ctx.plugin(CodexAppServer, {
-    executable: process.execPath,
-    args: [mockServer],
-    codexHome: root,
-    env: { MOCK_CODEX_RECORD_FILE: recordFile, ...env },
-    ...options.config,
+    harnesses: [{
+      executable: process.execPath,
+      args: [mockServer],
+      codexHome: root,
+      env: { MOCK_CODEX_RECORD_FILE: recordFile, ...env },
+      ...options.config,
+    }],
   })
   return { ctx, root, recordFile }
 }
@@ -657,20 +659,21 @@ describe('agent-codex driver', () => {
 
   it('reports account and rate-limit state through the shared connection', async () => {
     bench = await setup()
-    const status = await bench.ctx.codexAppServer.status(new AbortController().signal)
+    const signal = new AbortController().signal
+    const status = await bench.ctx.codexAppServer.status({ harness: 'codex' }, signal)
     expect(status.authenticated).toBe(true)
     expect(status.accountType).toBe('chatgpt')
-    const limits = await bench.ctx.codexAppServer.rateLimits(new AbortController().signal)
+    const limits = await bench.ctx.codexAppServer.rateLimits({ harness: 'codex' }, signal)
     expect(limits.rateLimits).toMatchObject({
       primary: { usedPercent: 42, windowDurationMins: 10_080, resetsAt: null },
     })
-    await bench.ctx.codexAppServer.logout(new AbortController().signal)
+    await bench.ctx.codexAppServer.logout({ harness: 'codex' }, signal)
     const calls = await recordedCalls(bench.recordFile)
     expect(calls.some(call => call.method === 'account/logout')).toBe(true)
   }, TEST_TIMEOUT)
 
   it('rejects stream calls as a catalog-only provider', async () => {
-    const adapter = new CodexCatalogAdapter({
+    const adapter = new CodexCatalogAdapter('codex', 'Codex', {
       listCodexModels: async () => [],
     } as unknown as CodexAppServerRuntime)
     expect(() => adapter.stream({ messages: [] } as never)).toThrow('catalog')

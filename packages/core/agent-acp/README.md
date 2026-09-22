@@ -65,8 +65,10 @@ Choose this driver when a harness's own loop, prompt, tools, MCP servers, and co
 | `harnesses[].mode` | — | Deployment override for the session's `mode` config option |
 | `harnesses[].model` | — | Deployment default below the session's `model/selection` |
 | `harnesses[].reasoningEffort` | — | Deployment default below the session's selection |
-| `harnesses[].catalogArgs` | — | Model-catalog CLI arguments; omitted, the catalog is only what a session advertises |
-| `harnesses[].authStatusArgs` | `['auth', 'status']` | Auth-status command arguments |
+| `harnesses[].catalogArgs` | — | Model-catalog CLI arguments; omitted, the catalog comes from a session advert |
+| `harnesses[].probeCatalog` | `true` | Read the catalog by opening one throwaway session before any session binds |
+| `catalogCacheMs` | `300000` | How long one harness's catalog read is reused before the next read |
+| `harnesses[].authStatusArgs` | `['auth', 'status']` | Auth-status command arguments; an explicitly empty list declares no CLI verb |
 | `harnesses[].authLogoutArgs` | `['auth', 'logout']` | Auth-logout command arguments |
 | `disposeGraceMs` | `5000` | Grace between managed-range termination tiers |
 | `eofGraceMs` | `2000` | Window after stdin EOF before termination escalation |
@@ -74,7 +76,7 @@ Choose this driver when a harness's own loop, prompt, tools, MCP servers, and co
 
 ### Before the first session
 
-Each harness needs its own authenticated CLI: run `devin auth login`, `grok login`, or the harness's equivalent once, or start its browser flow through the `acp` Remote's `login` method. The service reports the agent's advertised auth methods and that harness's auth-status CLI verdict, so a settings surface can show which half is missing. The `acp` Remote takes the harness id: `status({harness})`, `login({harness, methodId})`, and `logout({harness})`; an id no entry mounted fails with `gateway/bad-request` and lists the mounted ids.
+Each harness needs its own authenticated CLI: run `devin auth login`, `grok login`, or the harness's equivalent once, or start its browser flow through the `acp` Remote's `login` method. The service reports the agent's advertised auth methods and that harness's auth-status CLI verdict, so a settings surface can show which half is missing. A harness that reports authorization through its ACP methods instead of a CLI command configures empty `authStatusArgs` and `authLogoutArgs`: status then reports the ACP-only situation without spawning anything, and logout fails loud unless the agent advertises its own `logout` method. This is how an adapter-driven harness such as Claude Code is mounted. The `acp` Remote takes the harness id: `status({harness})`, `login({harness, methodId})`, and `logout({harness})`; an id no entry mounted fails with `gateway/bad-request` and lists the mounted ids.
 
 -----
 
@@ -102,7 +104,7 @@ One `session/prompt` is one durable dsh step. `agent_message_chunk` and `agent_t
 
 ### Model catalog
 
-Each harness id is also a `ctx.llm` provider route, served by an `AcpCatalogAdapter` registered for that id. The catalog is the harness's own session advert: `models.availableModels` when the agent sends it, otherwise the `model` config option's selectable values. The most recent non-empty advert of a bound session wins, so the picker reflects the running harness. An entry with `catalogArgs` additionally runs that CLI listing command whenever no session has advertised yet; without it, a harness with no bound session lists nothing. The route serves no stream, and a stream request fails loudly.
+Each harness id is also a `ctx.llm` provider route, served by an `AcpCatalogAdapter` registered for that id. The catalog is the harness's own session advert: `models.availableModels` when the agent sends it, otherwise the `model` config option's selectable values. The most recent non-empty advert of a bound session wins, so the picker reflects the running harness. Before any session binds, an entry reads its catalog in this order: the configured `catalogArgs` CLI listing, then, when `probeCatalog` is left at its default, one throwaway session whose advert is published and whose session is closed again when the agent advertises `close` or `delete`. An agent that advertises neither keeps that probe session until the process exits, because dropping the connection without closing would leave the harness believing the session is live; set `probeCatalog: false` where spawning the harness for a catalog read is unwanted, and the route then lists nothing until a real session binds. One read serves every caller and its result is reused for `catalogCacheMs`, including an empty result, so a picker that polls never starts a harness CLI or probe session per request; a session that binds replaces the cached read with its own advert. The route serves no stream, and a stream request fails loudly.
 
 ### Permissions, mode, and reasoning effort
 
