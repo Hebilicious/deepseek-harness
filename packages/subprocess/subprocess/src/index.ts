@@ -36,6 +36,7 @@ export type {
   SubprocessTerminalSignal,
   SubprocessTerminalSpawnSpec,
 } from './types.ts'
+export { disposeSubprocessChild } from './dispose.ts'
 
 /**
  * Credential-shaped environment names are NOT forwarded to children (the
