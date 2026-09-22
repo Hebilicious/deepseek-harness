@@ -332,6 +332,146 @@
       }
     },
     {
+      "key": "event:agent-acp/session",
+      "kind": "event",
+      "event": "agent-acp/session",
+      "surface": false,
+      "digest": "f00b255540ce6368d8eabf9ef1f7b683a3e16d11af63b89c60542ca8251c708e",
+      "schema": {
+        "root": 0,
+        "nodes": [
+          {
+            "kind": "object",
+            "properties": [
+              {
+                "name": "data",
+                "type": 1,
+                "optional": false
+              },
+              {
+                "name": "ignorable",
+                "type": 3,
+                "optional": true
+              },
+              {
+                "name": "seq",
+                "type": 4,
+                "optional": false
+              },
+              {
+                "name": "time",
+                "type": 4,
+                "optional": false
+              },
+              {
+                "name": "type",
+                "type": 5,
+                "optional": false
+              }
+            ],
+            "indices": []
+          },
+          {
+            "kind": "object",
+            "properties": [
+              {
+                "name": "sessionId",
+                "type": 2,
+                "optional": false
+              }
+            ],
+            "indices": []
+          },
+          {
+            "kind": "primitive",
+            "type": "string"
+          },
+          {
+            "kind": "literal",
+            "value": true
+          },
+          {
+            "kind": "primitive",
+            "type": "number"
+          },
+          {
+            "kind": "literal",
+            "value": "agent-acp/session"
+          }
+        ]
+      }
+    },
+    {
+      "key": "event:agent-codex/thread",
+      "kind": "event",
+      "event": "agent-codex/thread",
+      "surface": false,
+      "digest": "2fc23180e2c3b84732b2f63a11ad05f457b45371ffe49e1e4b01bb2f6639713c",
+      "schema": {
+        "root": 0,
+        "nodes": [
+          {
+            "kind": "object",
+            "properties": [
+              {
+                "name": "data",
+                "type": 1,
+                "optional": false
+              },
+              {
+                "name": "ignorable",
+                "type": 3,
+                "optional": true
+              },
+              {
+                "name": "seq",
+                "type": 4,
+                "optional": false
+              },
+              {
+                "name": "time",
+                "type": 4,
+                "optional": false
+              },
+              {
+                "name": "type",
+                "type": 5,
+                "optional": false
+              }
+            ],
+            "indices": []
+          },
+          {
+            "kind": "object",
+            "properties": [
+              {
+                "name": "threadId",
+                "type": 2,
+                "optional": false
+              }
+            ],
+            "indices": []
+          },
+          {
+            "kind": "primitive",
+            "type": "string"
+          },
+          {
+            "kind": "literal",
+            "value": true
+          },
+          {
+            "kind": "primitive",
+            "type": "number"
+          },
+          {
+            "kind": "literal",
+            "value": "agent-codex/thread"
+          }
+        ]
+      }
+    },
+    {
       "key": "event:agent-preset/selected",
       "kind": "event",
       "event": "agent-preset/selected",
@@ -14653,6 +14793,20 @@
       "sources": []
     },
     {
+      "digest": "0817310111e7959776bb6f13e02fcf9ac758bd89ec3f67cb0b93da77f9817112",
+      "schema": {
+        "root": 0,
+        "nodes": [
+          {
+            "kind": "literal",
+            "value": "agent-codex/thread"
+          }
+        ]
+      },
+      "names": [],
+      "sources": []
+    },
+    {
       "digest": "0a30c3be336cdd4f8f34e66543a3d46d611c43986edd9b3ce6cbb9b721d3b5d3",
       "schema": {
         "root": 0,
@@ -24037,6 +24191,76 @@
       "names": [
         "event:agent/inbox/spliced.data.inserted[0].source[3]",
         "event:system/message.data.message.source[2]"
+      ],
+      "sources": []
+    },
+    {
+      "digest": "2fc23180e2c3b84732b2f63a11ad05f457b45371ffe49e1e4b01bb2f6639713c",
+      "schema": {
+        "root": 0,
+        "nodes": [
+          {
+            "kind": "object",
+            "properties": [
+              {
+                "name": "data",
+                "type": 1,
+                "optional": false
+              },
+              {
+                "name": "ignorable",
+                "type": 3,
+                "optional": true
+              },
+              {
+                "name": "seq",
+                "type": 4,
+                "optional": false
+              },
+              {
+                "name": "time",
+                "type": 4,
+                "optional": false
+              },
+              {
+                "name": "type",
+                "type": 5,
+                "optional": false
+              }
+            ],
+            "indices": []
+          },
+          {
+            "kind": "object",
+            "properties": [
+              {
+                "name": "threadId",
+                "type": 2,
+                "optional": false
+              }
+            ],
+            "indices": []
+          },
+          {
+            "kind": "primitive",
+            "type": "string"
+          },
+          {
+            "kind": "literal",
+            "value": true
+          },
+          {
+            "kind": "primitive",
+            "type": "number"
+          },
+          {
+            "kind": "literal",
+            "value": "agent-codex/thread"
+          }
+        ]
+      },
+      "names": [
+        "event:agent-codex/thread"
       ],
       "sources": []
     },
@@ -35076,9 +35300,9 @@
         ]
       },
       "names": [
-        "SessionEventEnvelope[39].sourceEventSeqs",
-        "SessionEventEnvelope[52].sourceEventSeqs",
-        "SessionEventEnvelope[55].sourceEventSeqs",
+        "SessionEventEnvelope[41].sourceEventSeqs",
+        "SessionEventEnvelope[54].sourceEventSeqs",
+        "SessionEventEnvelope[57].sourceEventSeqs",
         "event:assistant/attempt.data.stream[0][0].dt",
         "event:assistant/attempt.data.stream[0][1].dt",
         "event:assistant/attempt.data.stream[0][2].dt",
@@ -35528,6 +35752,20 @@
           {
             "kind": "literal",
             "value": "tool-call-chunks"
+          }
+        ]
+      },
+      "names": [],
+      "sources": []
+    },
+    {
+      "digest": "62362771f479dc5146510be8f4791f40f50ad8f9ff672bbadbc5b04b6de546c2",
+      "schema": {
+        "root": 0,
+        "nodes": [
+          {
+            "kind": "literal",
+            "value": "agent-acp/session"
           }
         ]
       },
@@ -40309,7 +40547,7 @@
         ]
       },
       "names": [
-        "SessionEventEnvelope[6]"
+        "SessionEventEnvelope[8]"
       ],
       "sources": []
     },
@@ -44559,9 +44797,9 @@
         ]
       },
       "names": [
-        "SessionEventEnvelope[39]",
-        "SessionEventEnvelope[52]",
-        "SessionEventEnvelope[55]"
+        "SessionEventEnvelope[41]",
+        "SessionEventEnvelope[54]",
+        "SessionEventEnvelope[57]"
       ],
       "sources": []
     },
@@ -49009,6 +49247,35 @@
       "sources": []
     },
     {
+      "digest": "ace5644cd9d89c97b7bf4470f2af5d5165fac85748bb1e3772854985d340b013",
+      "schema": {
+        "root": 0,
+        "nodes": [
+          {
+            "kind": "object",
+            "properties": [
+              {
+                "name": "sessionId",
+                "type": 1,
+                "optional": false
+              }
+            ],
+            "indices": []
+          },
+          {
+            "kind": "primitive",
+            "type": "string"
+          }
+        ]
+      },
+      "names": [
+        "event:agent-acp/session.data"
+      ],
+      "sources": [
+        "packages/core/agent-acp/src/session-state.ts:22"
+      ]
+    },
+    {
       "digest": "ad22a5ca5bbaab2e1440779cd3648e85ddfc6f73b5207394eda699555cf31430",
       "schema": {
         "root": 0,
@@ -52185,7 +52452,7 @@
         ]
       },
       "names": [
-        "SessionEventEnvelope[6].surfaceOp[1]"
+        "SessionEventEnvelope[8].surfaceOp[1]"
       ],
       "sources": [
         "packages/core/session/src/types.ts:441"
@@ -58510,6 +58777,35 @@
       "sources": []
     },
     {
+      "digest": "e38364aa4dde0b49773ecb42fd1761d2797ac2d993ecaccf3d8fcff7854dc3f1",
+      "schema": {
+        "root": 0,
+        "nodes": [
+          {
+            "kind": "object",
+            "properties": [
+              {
+                "name": "threadId",
+                "type": 1,
+                "optional": false
+              }
+            ],
+            "indices": []
+          },
+          {
+            "kind": "primitive",
+            "type": "string"
+          }
+        ]
+      },
+      "names": [
+        "event:agent-codex/thread.data"
+      ],
+      "sources": [
+        "packages/core/agent-codex/src/thread-state.ts:23"
+      ]
+    },
+    {
       "digest": "e3e77b26f0148755a505f5b8ea843a3be117827d4703bb5754d9dc8ddbef521f",
       "schema": {
         "root": 0,
@@ -58587,9 +58883,9 @@
         "SessionEventEnvelope[36]",
         "SessionEventEnvelope[37]",
         "SessionEventEnvelope[38]",
+        "SessionEventEnvelope[39]",
         "SessionEventEnvelope[3]",
         "SessionEventEnvelope[40]",
-        "SessionEventEnvelope[41]",
         "SessionEventEnvelope[42]",
         "SessionEventEnvelope[43]",
         "SessionEventEnvelope[44]",
@@ -58601,13 +58897,15 @@
         "SessionEventEnvelope[4]",
         "SessionEventEnvelope[50]",
         "SessionEventEnvelope[51]",
+        "SessionEventEnvelope[52]",
         "SessionEventEnvelope[53]",
-        "SessionEventEnvelope[54]",
+        "SessionEventEnvelope[55]",
         "SessionEventEnvelope[56]",
-        "SessionEventEnvelope[57]",
+        "SessionEventEnvelope[58]",
+        "SessionEventEnvelope[59]",
         "SessionEventEnvelope[5]",
+        "SessionEventEnvelope[6]",
         "SessionEventEnvelope[7]",
-        "SessionEventEnvelope[8]",
         "SessionEventEnvelope[9]"
       ],
       "sources": []
@@ -59691,6 +59989,76 @@
         ]
       },
       "names": [],
+      "sources": []
+    },
+    {
+      "digest": "f00b255540ce6368d8eabf9ef1f7b683a3e16d11af63b89c60542ca8251c708e",
+      "schema": {
+        "root": 0,
+        "nodes": [
+          {
+            "kind": "object",
+            "properties": [
+              {
+                "name": "data",
+                "type": 1,
+                "optional": false
+              },
+              {
+                "name": "ignorable",
+                "type": 3,
+                "optional": true
+              },
+              {
+                "name": "seq",
+                "type": 4,
+                "optional": false
+              },
+              {
+                "name": "time",
+                "type": 4,
+                "optional": false
+              },
+              {
+                "name": "type",
+                "type": 5,
+                "optional": false
+              }
+            ],
+            "indices": []
+          },
+          {
+            "kind": "object",
+            "properties": [
+              {
+                "name": "sessionId",
+                "type": 2,
+                "optional": false
+              }
+            ],
+            "indices": []
+          },
+          {
+            "kind": "primitive",
+            "type": "string"
+          },
+          {
+            "kind": "literal",
+            "value": true
+          },
+          {
+            "kind": "primitive",
+            "type": "number"
+          },
+          {
+            "kind": "literal",
+            "value": "agent-acp/session"
+          }
+        ]
+      },
+      "names": [
+        "event:agent-acp/session"
+      ],
       "sources": []
     },
     {

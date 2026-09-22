@@ -134,7 +134,7 @@ interface SubprocessSpawnSpec {
 
 ## Handles: streams, readers, and managed-range termination
 
-A spawn returns a live handle synchronously while target and managed-range identities remain provider-private. Collect-mode readers take whole-stream byte offsets and never consume, so independent readers cannot steal one another's deltas; piped streams belong to the caller. `terminate()` starts the provider's documented procedure, and `waitForExit()` observes the same provider-managed range; staged providers may use `graceMs`, while immediate providers do not delay. Consumers can build their own teardown ladders over those two operations (the ACP backend's stdin-EOF-first `disposeAcpChild` is the template).
+A spawn returns a live handle synchronously while target and managed-range identities remain provider-private. Collect-mode readers take whole-stream byte offsets and never consume, so independent readers cannot steal one another's deltas; piped streams belong to the caller. `terminate()` starts the provider's documented procedure, and `waitForExit()` observes the same provider-managed range; staged providers may use `graceMs`, while immediate providers do not delay. The package ships one cooperative teardown ladder over those two operations: `disposeSubprocessChild(child, eofGraceMs)` ends stdin, waits for the managed range within the EOF grace, and escalates through `terminate()` to a whole-range exit proof.
 
 ```ts type-equiv
 /**

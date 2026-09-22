@@ -149,6 +149,10 @@ const coveragePartitionMode = coveragePartitionRaw === '1'
 // Keep the narrow exception in forks while the rest of the inventory avoids per-file processes.
 const processBoundTests = [
   'packages/session/session-persistence-jsonl/tests/jsonl.spec.ts',
+  'packages/core/agent-acp/tests/agent-acp.spec.ts',
+  'packages/core/agent-acp/tests/loader-composition.spec.ts',
+  'packages/core/agent-codex/tests/agent-codex.spec.ts',
+  'packages/core/agent-codex/tests/loader-composition.spec.ts',
   'packages/subagent/subagent-acp/tests/subagent-acp.spec.ts',
   'packages/subprocess/subprocess-local/tests/process-exit.spec.ts',
   'packages/subprocess/subprocess-local/tests/spawn.spec.ts',
