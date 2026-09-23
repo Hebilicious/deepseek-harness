@@ -457,8 +457,10 @@ describe('agent loop', () => {
     expect(order).toEqual(['turn/start', 'step/start', 'step/end', 'turn/end'])
 
     const types = agent.session.snapshotEvents().map(e => e.type)
-    // Durable inbox receipt precedes the turn-owned transcript.
-    expect(types[0]).toBe('agent/inbox/spliced')
+    // The pre-publication harness record leads; durable inbox receipt precedes
+    // the turn-owned transcript.
+    expect(types[0]).toBe('agent/harness')
+    expect(types[1]).toBe('agent/inbox/spliced')
     expect(types).toContain('turn/start')
     expect(types).toContain('user/message')
     expect(types).toContain('assistant/message')
@@ -1774,6 +1776,9 @@ describe('agent loop', () => {
     })
     ctx.llm.registerAdapter(['mock'], adapter)
 
+    // Configured agents publish through the shared lifecycle transaction,
+    // which yields before publication; the assertion waits for the fact.
+    await vi.waitFor(() => { expect(ctx.agents.list()).toHaveLength(1) })
     const agent = ctx.agents.list()[0]!
     expect(agent).toBeDefined()
     expect(agent.id).toBe(agent.session.id)
@@ -1801,6 +1806,7 @@ describe('agent loop', () => {
       agents: [{ id: SessionId('config-agent'), provider: 'mock', model: 'mock', cwd: '/work/project' }],
     })
 
+    await vi.waitFor(() => { expect(ctx.agents.list()).toHaveLength(1) })
     const agent = ctx.agents.list()[0]!
     expect(agent.session.header.cwd).toBe('/work/project')
   })

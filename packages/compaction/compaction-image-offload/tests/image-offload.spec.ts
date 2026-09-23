@@ -293,7 +293,7 @@ describe('compaction-image-offload', () => {
     expect(offloadedNames(adapter.requests[1]!)).toEqual(['replacement', 'second'])
     expect(replacements(agent.session)).toHaveLength(1)
     expect(decisions(agent.session).map(event => event.data.targets)).toEqual([[
-      { seq: 3, imageIndexes: [0] }, { seq: 2, imageIndexes: [0] },
+      { seq: 4, imageIndexes: [0] }, { seq: 3, imageIndexes: [0] },
     ]])
   })
 

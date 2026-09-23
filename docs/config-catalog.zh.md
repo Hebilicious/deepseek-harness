@@ -7,7 +7,7 @@
 
 每个 `config:` 块均可由 `cordis.yml` 条目设置：针对每个可加载的 harness 包，原样列出其 `apply` 函数或服务构造函数接收的配置声明（包括 JSDoc），并附上所有引用类型——包内类型直接粘贴，其他类型则提供链接。粘贴的内容是插件声明的完整配置类型——运行时 schema 有意排除的字段是仅供运行时使用的 seam（其自身的 JSDoc 会如此说明），不能通过 `cordis.yml` 设置。这是以**部署**为轴的参考文档——插件作者所依据的连接方式请参阅各[子系统页面](subsystems/core.zh.md)中的生成 `cordis-surface` 区域，面向模型的工具 schema 请参阅[工具目录](tool-catalog.zh.md)，而 [subsystems/](subsystems/core.zh.md) 则记录了这些声明所引用的类型。
 
-英文源文件由源代码（`scripts/gen-config-catalog.ts`）生成，并通过 `pnpm run verify-config-catalog`（`doc-sync` 的一部分）验证新鲜度；本中文文件作为经评审对侧通过双语配对维护。声明块使用 `ts config-catalog` 围栏（doc-typecheck 会跳过它，因为单独引用导入项的声明无法独立编译）。英文生成器还会将运行时 schemastery schema 与粘贴的声明进行交叉核对——每个经 schema 验证的键（包括嵌套键）都必须能在声明的配置类型中找到——因此，粘贴内容无法隐藏加载器接受的字段。
+英文源文件由源代码（`scripts/gen-config-catalog.ts`）生成，并通过 `pnpm run verify-config-catalog`（`doc-sync` 的一部分）验证新鲜度；本中文文件作为经评审对侧通过双语配对维护。声明块使用 `ts config-catalog` 围栏（doc-typecheck 会跳过它，因为单独引用导入项的声明无法独立编译）。英文生成器还会将运行时 schemastery schema 与粘贴的声明进行交叉核对——每个经 schema 验证的键（包括嵌套键）都必须在声明的配置类型中找到——因此，粘贴内容无法隐藏加载器接受的字段。
 
 `Requires:` 行列出插件通过 `inject` 注入的服务键：其 `cordis.yml` 树还必须加载这些服务的提供者。范围限定为 harness 层级（`packages/`）；配置树还可能加载的 vendored cordis 插件（控制台日志记录器等）固定为上游源代码（参见 [vendoring policy](../vendor/README.md)），未收录于此目录。
 
@@ -34,6 +34,149 @@ export interface AcpConfig {
 Depends on: `Stream` (`@agentclientprotocol/sdk`)
 
 来源：[`packages/acp/acp/src/index.ts:75`](../packages/acp/acp/src/index.ts)
+
+<a id="deepseek-aidsh-agent-acp"></a>
+
+## `@deepseek-ai/dsh-agent-acp`
+
+需要： `agents` · `sessions` · `sessionProjections` · `subprocess` · `llm` · `typert`
+
+```ts config-catalog
+/** Plugin config; {@link Config.harnesses} is the only required field. */
+export interface Config {
+  /** One entry per ACP harness this plugin instance drives; ids must be unique. */
+  harnesses: AcpHarnessEntry[]
+  /** Grace in milliseconds between managed-range termination tiers (default 5000). */
+  disposeGraceMs?: number
+  /** Tier-1 window in milliseconds after stdin EOF before escalation (default 2000). */
+  eofGraceMs?: number
+  /** Deadline in milliseconds for one CLI verb (default 180000); Devin's catalog refresh runs over the network. */
+  cliTimeoutMs?: number
+  /**
+   * How long one harness's catalog read is reused before the next read
+   * (default 300000). One read serves every caller, so a picker that polls
+   * never spawns a harness CLI per request.
+   */
+  catalogCacheMs?: number
+  /**
+   * How long one harness's failed catalog read is remembered before the next
+   * attempt (default 30000). Every caller inside the window receives that
+   * read's failure without spawning anything, so a harness that keeps failing
+   * (for example an executable missing from PATH) is not respawned per poll.
+   */
+  catalogFailureCacheMs?: number
+}
+
+/** One configured ACP harness: how to spawn it and the deployment defaults for its sessions. */
+export interface AcpHarnessEntry {
+  /** Stable id, unique per plugin instance; also the `ctx.agents` harness id and `ctx.llm` catalog route. */
+  id: string
+  /** Human-readable name for a harness picker. */
+  name: string
+  /** One sentence on what runs the session, for a harness picker. */
+  description?: string
+  /** Harness executable name or absolute path. */
+  executable: string
+  /** Arguments after the executable (default `['acp']`). */
+  args?: string[]
+  /** Working directory for the harness process itself (default `process.cwd()`); sessions carry their own cwd. */
+  cwd?: string
+  /** Explicit environment entries layered over the scrubbed parent environment. */
+  env?: Record<string, string>
+  /** Filesystem sandbox for sessions that log no `sandbox/mode` override (default `workspace-write`). */
+  sandbox?: SandboxMode
+  /** Approval routing for sessions that log no `approval/policy` override (default `ask`). */
+  approval?: 'ask' | 'never'
+  /** Deployment default for the session's `mode` config option; empty defers to the harness. */
+  mode?: string
+  /** Deployment default model beneath the session's `model/selection`; empty defers to the harness. */
+  model?: string
+  /** Deployment default reasoning effort beneath the session's `model/selection`; empty defers to the harness. */
+  reasoningEffort?: string
+  /**
+   * Model-catalog CLI arguments, in the shape the harness's own listing
+   * command accepts (Devin: `['models', 'list', '--format', 'json']`).
+   * Omitted or empty, the catalog comes from what a session advertises.
+   */
+  catalogArgs?: string[]
+  /**
+   * Whether this harness's catalog is read by opening one throwaway session
+   * when no session has bound yet (default true), so the model picker offers
+   * real models before the first turn. Set false where spawning the harness
+   * for the catalog alone is unwanted; the route is then empty until a session
+   * binds.
+   */
+  probeCatalog?: boolean
+  /**
+   * Auth-status CLI arguments (default `['auth', 'status']`). An explicitly
+   * empty list declares that this harness reports authorization through its
+   * ACP methods and has no status verb, so nothing is spawned for it.
+   */
+  authStatusArgs?: string[]
+  /**
+   * Auth-logout CLI arguments (default `['auth', 'logout']`). An explicitly
+   * empty list declares no logout verb: signing out then requires the agent's
+   * ACP logout method, and a deployment without one fails loud.
+   */
+  authLogoutArgs?: string[]
+}
+```
+
+依赖：[`SandboxMode`](subsystems/sandbox.zh.md)
+
+来源： [`packages/core/agent-acp/src/config.ts:68`](../packages/core/agent-acp/src/config.ts)
+
+<a id="deepseek-aidsh-agent-codex"></a>
+
+## `@deepseek-ai/dsh-agent-codex`
+
+需要： `agents` · `sessions` · `sessionProjections` · `subprocess` · `llm` · `typert`
+
+```ts config-catalog
+/** Plugin config; {@link Config.harnesses} is the only required field. */
+export interface Config {
+  /** One entry per Codex instance this plugin instance drives; ids must be unique. */
+  harnesses: CodexHarnessEntry[]
+  /** Grace in milliseconds between managed-range termination tiers (default 5000). */
+  disposeGraceMs?: number
+  /** Tier-1 window in milliseconds after stdin EOF before escalation (default 2000). */
+  eofGraceMs?: number
+}
+
+/** One configured Codex instance: how to spawn it and the deployment defaults for its sessions. */
+export interface CodexHarnessEntry {
+  /** Stable id, unique per plugin instance; also the `ctx.agents` harness id and `ctx.llm` catalog route (default `codex`). */
+  id?: string
+  /** Human-readable name for a harness picker (default `Codex`). */
+  name?: string
+  /** One sentence on what runs the session, for a harness picker. */
+  description?: string
+  /** Codex executable name or absolute path (default `codex`). */
+  executable?: string
+  /** Arguments after the executable (default `['app-server']`). */
+  args?: string[]
+  /** `CODEX_HOME` handed to the child; owns auth, config.toml, MCP, hooks (default `~/.codex`). */
+  codexHome?: string
+  /** Explicit environment entries layered over the scrubbed parent environment. */
+  env?: Record<string, string>
+  /** Filesystem sandbox for sessions that log no `sandbox/mode` override (default `workspace-write`). */
+  sandbox?: SandboxMode
+  /** `networkAccess` inside the structured `sandboxPolicy` overrides (default `false`). */
+  networkAccess?: boolean
+  /** Approval routing for sessions that log no `approval/policy` override (default `ask`). */
+  approval?: 'ask' | 'never'
+  /** Deployment default model beneath the session's `model/selection`. */
+  model?: string
+  /** Deployment default reasoning effort beneath the session's selection. */
+  reasoningEffort?: string
+  /** Credential reference (env-var name) resolved for unattended `account/login/start {type:'apiKey'}`. */
+  credentialRef?: string
+}
+```
+
+依赖：[`SandboxMode`](subsystems/sandbox.zh.md)
+
+来源： [`packages/core/agent-codex/src/config.ts:44`](../packages/core/agent-codex/src/config.ts)
 
 <a id="deepseek-aidsh-agent-default-model"></a>
 
@@ -113,7 +256,7 @@ export interface Config {
 
 Depends on: [`AgentOptions`](subsystems/core.zh.md) · [`SessionId`](subsystems/core.zh.md)
 
-来源：[`packages/core/agent-loop/src/index.ts:318`](../packages/core/agent-loop/src/index.ts)
+来源： [`packages/core/agent-loop/src/index.ts:139`](../packages/core/agent-loop/src/index.ts)
 
 <a id="deepseek-aidsh-agent-presets"></a>
 
@@ -215,7 +358,7 @@ export interface Config {
 }
 ```
 
-来源：[`packages/api/session-controller/src/index.ts:71`](../packages/api/session-controller/src/index.ts)
+来源：[`packages/api/session-controller/src/index.ts:72`](../packages/api/session-controller/src/index.ts)
 
 <a id="deepseek-aidsh-api-settings-controller"></a>
 
@@ -3853,7 +3996,7 @@ export interface Config {
 }
 ```
 
-来源： [`packages/deliverables/workspace-changes/src/index.ts:36`](../packages/deliverables/workspace-changes/src/index.ts)
+来源： [`packages/deliverables/workspace-changes/src/index.ts:33`](../packages/deliverables/workspace-changes/src/index.ts)
 
 ## 无配置的可加载插件
 
@@ -3869,6 +4012,7 @@ export interface Config {
 - `@deepseek-ai/dsh-client-locale`（[`packages/client/locale/src/index.ts`](../packages/client/locale/src/index.ts)）
 - `@deepseek-ai/dsh-client-modules` — 需要 `loader`（[`packages/client/modules/src/index.ts`](../packages/client/modules/src/index.ts)）
 - `@deepseek-ai/dsh-client-resources`（[`packages/client/resources/src/index.ts`](../packages/client/resources/src/index.ts)）
+- `@deepseek-ai/dsh-client-ui-agent-harness`（[`packages/client/ui-agent-harness/src/index.ts`](../packages/client/ui-agent-harness/src/index.ts)）
 - `@deepseek-ai/dsh-client-ui-agent-preset`（[`packages/client/ui-agent-preset/src/index.ts`](../packages/client/ui-agent-preset/src/index.ts)）
 - `@deepseek-ai/dsh-client-ui-approval`（[`packages/client/ui-approval/src/index.ts`](../packages/client/ui-approval/src/index.ts)）
 - `@deepseek-ai/dsh-client-ui-attachment`（[`packages/client/ui-attachment/src/index.ts`](../packages/client/ui-attachment/src/index.ts)）
@@ -3976,6 +4120,7 @@ export interface Config {
 
 由其他包作为库导入；`cordis.yml` 无法加载它们。
 
+- `@deepseek-ai/dsh-agent-external`（[`packages/core/agent-external/src/index.ts`](../packages/core/agent-external/src/index.ts)）
 - `@deepseek-ai/dsh-agent-loop-testkit`（[`packages/test-support/agent-loop-testkit/src/index.ts`](../packages/test-support/agent-loop-testkit/src/index.ts)）
 - `@deepseek-ai/dsh-anonymous-user-id`（[`packages/identity/anonymous-user-id/src/index.ts`](../packages/identity/anonymous-user-id/src/index.ts)）
 - `@deepseek-ai/dsh-app-boot`（[`packages/boot/app-boot/src/index.ts`](../packages/boot/app-boot/src/index.ts)）
@@ -4029,4 +4174,7 @@ export interface Config {
 - `@deepseek-ai/dsh-util-time`（[`packages/util/time/src/index.ts`](../packages/util/time/src/index.ts)）
 - `@deepseek-ai/dsh-util-values`（[`packages/util/values/src/index.ts`](../packages/util/values/src/index.ts)）
 - `@deepseek-ai/dsh-util-workspace-path`（[`packages/util/workspace-path/src/index.ts`](../packages/util/workspace-path/src/index.ts)）
+- `@deepseek-ai/dsh-web-acp`（[`packages/bundle/web-acp/src/index.ts`](../packages/bundle/web-acp/src/index.ts)）
+- `@deepseek-ai/dsh-web-codex`（[`packages/bundle/web-codex/src/index.ts`](../packages/bundle/web-codex/src/index.ts)）
+- `@deepseek-ai/dsh-web-harnesses`（[`packages/bundle/web-harnesses/src/index.ts`](../packages/bundle/web-harnesses/src/index.ts)）
 - `@deepseek-ai/dsh-win32-process`（[`packages/subprocess/win32-process/src/index.ts`](../packages/subprocess/win32-process/src/index.ts)）

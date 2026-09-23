@@ -6,6 +6,7 @@ import type {
 import type { Branded } from '@deepseek-ai/dsh-brand'
 import type { LlmAttemptId, MessageId } from '@deepseek-ai/dsh-llm/brand'
 import type { ContentBlock } from '@deepseek-ai/dsh-llm'
+import type { HarnessId } from '@deepseek-ai/dsh-agent/types'
 import type { SessionId, SessionSeqCursor } from '@deepseek-ai/dsh-session/types'
 import type { SessionProjectionMap } from '@deepseek-ai/dsh-session-projection/types'
 import type { JobId } from '@deepseek-ai/dsh-jobs/brand'
@@ -186,6 +187,12 @@ export const SESSION_SEARCH_SNIPPET_MAX_CODE_POINTS = 240
 declare module '@deepseek-ai/dsh-typert-protocol' {
   interface RemoteErrorDetailsMap {
     'session/model-unavailable': { readonly provider: string; readonly model: string }
+    'session/harness-unavailable': { readonly harness: string; readonly available: readonly string[] }
+    'session/harness-conflict': {
+      readonly sessionId: SessionId
+      readonly requestedHarness: string
+      readonly recordedHarness: string
+    }
     'session/conflict': {
       readonly sessionId: SessionId
       readonly requestedCwd: string
@@ -268,6 +275,28 @@ export interface SessionCreateRequest {
   readonly cwd?: string
   readonly sessionId?: SessionId
   readonly agentPreset?: string
+  /**
+   * Agent harness that should own the new session's agent. Omitted, a
+   * deployment that mounts exactly one harness uses it, and a deployment that
+   * mounts several refuses rather than choosing arbitrarily.
+   */
+  readonly harness?: HarnessId
+}
+
+/** One agent harness a deployment can create sessions with. */
+export interface SessionHarnessOption {
+  /** Harness id sent back on create and recorded on the session. */
+  readonly id: HarnessId
+  /** Human-readable name for a harness picker. */
+  readonly name: string
+  /** One sentence on what runs the session. */
+  readonly description?: string
+}
+
+/** Harness catalog response: every harness this deployment can create sessions with. */
+export interface SessionHarnessCatalog {
+  /** Mounted harnesses, in registration order. */
+  readonly harnesses: readonly SessionHarnessOption[]
 }
 
 /** Session creation response value. */

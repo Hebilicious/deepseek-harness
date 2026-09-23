@@ -1,0 +1,701 @@
+/**
+ * ACP session driver: one {@link ExternalAgent} bound to one ACP session on
+ * its harness's shared ACP connection. Owns the session lifecycle
+ * (`session/new`/`session/load`), turn driving (`session/prompt` → its
+ * response), session-update → durable-event projection, and approval /
+ * elicitation routing into the DSH seams.
+ *
+ * @module @deepseek-ai/dsh-agent-acp/agent
+ */
+
+import type {
+  AgentHarness,
+  AgentOptions,
+} from '@deepseek-ai/dsh-agent'
+import type { AssistantStreamAttempt } from '@deepseek-ai/dsh-agent-external'
+import {
+  ExternalAgent,
+  HARNESS_DEFAULT_MODEL,
+  raceAbort,
+  type ExternalTurnDrive,
+} from '@deepseek-ai/dsh-agent-external'
+import type { Context } from '@deepseek-ai/cordis'
+import type { UserMessage } from '@deepseek-ai/dsh-llm'
+import { errorChain } from '@deepseek-ai/dsh-llm'
+import { brandString } from '@deepseek-ai/dsh-brand'
+import type { Session, SessionId, TurnEndReason } from '@deepseek-ai/dsh-session'
+import type { SandboxMode } from '@deepseek-ai/dsh-sandbox'
+import type { ToolCallId } from '@deepseek-ai/dsh-llm'
+import type {
+  ContentBlock as AcpContentBlock,
+  CreateElicitationRequest,
+  CreateElicitationResponse,
+  ElicitationSchema,
+  RequestPermissionRequest,
+  RequestPermissionResponse,
+  SessionConfigOption,
+  SessionNotification,
+  StopReason,
+  ToolCallUpdate,
+} from '@agentclientprotocol/sdk'
+import type { AcpClientConnection, AcpSessionPeer } from './connection.ts'
+import {
+  acpAdvertisedModels,
+  acpBlockToContent,
+  acpModeOption,
+  acpModelOption,
+  acpPermissionOutcome,
+  acpPrefix,
+  acpReasoningOption,
+  acpSelectEntries,
+  acpToolContent,
+  acpTurnEnding,
+  AcpProtocolError,
+  toAcpPromptBlocks,
+  type AcpSelectOption,
+  type AcpSessionAdvert,
+} from './protocol.ts'
+import { acpSessionOf } from './session-state.ts'
+import type { AcpRuntime } from './runtime.ts'
+
+/** Deployment-level defaults the plugin resolves once per agent. */
+export interface AcpAgentConfig {
+  /** Harness that owns this agent: its id routes model selections, its name labels diagnostics. */
+  readonly harness: AgentHarness
+  /** Workspace fallback when the session header carries no `cwd`. */
+  readonly cwd?: string
+  /** Filesystem sandbox when the session logs no `sandbox/mode` override. */
+  readonly sandbox: SandboxMode
+  /** Approval routing when the session logs no `approval/policy` override. */
+  readonly approval: 'ask' | 'never'
+  /** Deployment default mode value for the session's `mode` config option. */
+  readonly mode?: string
+  /** Deployment default model value for the session's `model` config option. */
+  readonly model?: string
+  /** Deployment default reasoning effort for the session's reasoning-effort config option. */
+  readonly reasoningEffort?: string
+}
+
+/** One assistant stream's block bookkeeping for a single ACP messageId. */
+interface StreamLane {
+  readonly attempt: AssistantStreamAttempt
+  /** Index of the open text block, or -1 before the first text delta. */
+  textIndex: number
+  /** Index of the open reasoning block, or -1 before the first thought delta. */
+  reasoningIndex: number
+  /** Next free block index this attempt allocates. */
+  nextIndex: number
+}
+
+/** One live turn's mutable projection state. */
+interface ActiveTurn {
+  readonly drive: ExternalTurnDrive
+  /** Assistant stream attempts keyed by ACP messageId; one anonymous lane when absent. */
+  readonly attempts: Map<string, StreamLane>
+  /** Open ACP tool calls awaiting their terminal update. */
+  readonly openToolCalls: Set<string>
+  /** The model sent on this turn, recorded on the committed assistant message. */
+  readonly model: string
+}
+
+function optionalString(value: unknown): string | undefined {
+  return typeof value === 'string' && value.length > 0 ? value : undefined
+}
+
+/**
+ * Agent whose turns run on an ACP session. The shared {@link AcpRuntime} owns
+ * the process and connection; this class owns exactly one ACP session on it.
+ */
+export class AcpAgent extends ExternalAgent implements AcpSessionPeer {
+  private acpSessionId: string | undefined
+  private detachSession: (() => void) | undefined
+  private connection: AcpClientConnection | undefined
+  private active: ActiveTurn | undefined
+  /** The session's reported config options (model/mode mirrors). */
+  private configOptions: readonly SessionConfigOption[] = []
+  /** Whether `session/close` is advertised for this agent. */
+  private closeSupported = false
+  /** Constraint warnings already logged for this session, so a per-turn re-resolution logs each once. */
+  private readonly warned = new Set<string>()
+
+  constructor(
+    hostCtx: Context,
+    id: SessionId,
+    options: AgentOptions,
+    session: Session,
+    private readonly runtime: AcpRuntime,
+    private readonly driverConfig: AcpAgentConfig,
+  ) {
+    super(hostCtx, id, options, session)
+  }
+
+  /** Diagnostic tag naming this agent's harness in every message it raises. */
+  private get prefix(): string {
+    return acpPrefix(this.driverConfig.harness.id)
+  }
+
+  // ---- ExternalAgent harness surface ----
+
+  /**
+   * Join this harness's shared connection, then create a fresh ACP session or
+   * load the recorded one. Runs unpublished: any rejection rolls the whole
+   * create/resume back.
+   * @param signal - fused caller/lifecycle cancellation.
+   */
+  async bind(signal: AbortSignal): Promise<void> {
+    const connection = await this.runtime.connect(signal)
+    this.connection = connection
+    const capabilities = this.runtime.initializeInfo?.agentCapabilities
+    this.closeSupported = capabilities?.sessionCapabilities?.close !== undefined
+    const cwd = this.session.header.cwd ?? this.driverConfig.cwd ?? process.cwd()
+    const existing = acpSessionOf(this.ctx.sessionProjections, this.session)
+    if (existing === undefined) {
+      const response = await connection.request<AcpSessionAdvert & { sessionId?: string }>(
+        'session/new',
+        { cwd, mcpServers: [] },
+        signal,
+      )
+      const sessionId = response.sessionId
+      if (typeof sessionId !== 'string' || sessionId.length === 0) {
+        throw new AcpProtocolError(`${this.prefix}: session/new returned no session id`)
+      }
+      this.acpSessionId = sessionId
+      this.session.append('agent-acp/session', { sessionId })
+      this.adoptAdvert(response)
+    } else {
+      if (capabilities?.loadSession !== true) {
+        throw new AcpProtocolError(
+          `${this.prefix}: session "${existing}" cannot resume: the agent does not advertise loadSession`,
+        )
+      }
+      // session/load replays history as session/update notifications; the peer
+      // registers only after the response so replayed frames never double-commit.
+      const response = await connection.request<AcpSessionAdvert>(
+        'session/load',
+        { sessionId: existing, cwd, mcpServers: [] },
+        signal,
+      )
+      this.acpSessionId = existing
+      this.adoptAdvert(response)
+    }
+    this.detachSession = this.runtime.registerSession(this.acpSessionId, this)
+  }
+
+  /**
+   * Adopt the config options and model catalog one session response carried,
+   * and publish the catalog to the shared runtime so this harness's picker
+   * route answers from what the harness itself advertises.
+   */
+  private adoptAdvert(advert: AcpSessionAdvert): void {
+    this.configOptions = advert.configOptions ?? []
+    this.runtime.recordAdvert(acpAdvertisedModels(advert))
+  }
+
+  /**
+   * Release the ACP session: `session/close` when the agent advertises it,
+   * then detach from the router. Best-effort — a dead connection already
+   * released every session it carried.
+   */
+  async unbind(): Promise<void> {
+    const detach = this.detachSession
+    const connection = this.connection
+    const sessionId = this.acpSessionId
+    if (detach !== undefined && connection !== undefined && sessionId !== undefined && this.closeSupported) {
+      try {
+        await connection.request('session/close', { sessionId })
+      } catch (error: unknown) {
+        this.ctx.logger.warn(`${this.prefix}: session/close for "${sessionId}" failed: ${errorChain(error)}`)
+      }
+    }
+    detach?.()
+    this.detachSession = undefined
+    this.connection = undefined
+  }
+
+  /**
+   * Drive one ACP turn: apply the session's model/mode selection, send
+   * `session/prompt`, and resolve the response's stop reason to a durable
+   * ending. Updates stream through the peer's {@link update}.
+   * @param messages - the claimed user input, already committed durably.
+   * @param drive - turn boundary, abort signal, and bound projector.
+   * @returns the durable turn ending.
+   */
+  protected async driveTurn(
+    messages: readonly UserMessage[],
+    drive: ExternalTurnDrive,
+  ): Promise<TurnEndReason> {
+    const connection = this.connection
+    const sessionId = this.acpSessionId
+    /* v8 ignore next -- the host binds before any turn can be driven */
+    if (connection === undefined || sessionId === undefined) {
+      throw new Error(`${this.prefix}: turn without a bound session`)
+    }
+    const selection = this.currentSelection()
+    // Only selections routed to this harness drive this agent; a
+    // foreign-provider selection is not a value this harness's `model` option
+    // can carry.
+    const picked = selection.provider === this.driverConfig.harness.id ? selection.model : ''
+    const chosen = picked !== '' ? picked : this.driverConfig.model
+    const chosenEffort = picked !== '' && selection.reasoningEffort !== undefined
+      ? selection.reasoningEffort
+      : this.driverConfig.reasoningEffort
+    await this.applyConfigSelection(connection, sessionId, chosen, chosenEffort, drive.signal)
+    // Post-apply `currentValue` is the agent's own report of what will run;
+    // when no model option exists the harness's model is opaque to DSH.
+    const reported = acpModelOption(this.configOptions)?.currentValue
+    const model = typeof reported === 'string' && reported !== ''
+      ? reported
+      : chosen ?? HARNESS_DEFAULT_MODEL
+    drive.projector.noteRoute({
+      provider: this.driverConfig.harness.id,
+      model,
+      ...picked !== '' && selection.reasoningEffort !== undefined
+        ? { reasoningEffort: selection.reasoningEffort }
+        : {},
+    })
+    const prompt: AcpContentBlock[] = messages.flatMap(
+      message => toAcpPromptBlocks(message, attachment => this.attachmentHostPath(attachment)),
+    )
+    const active: ActiveTurn = {
+      drive,
+      attempts: new Map(),
+      openToolCalls: new Set(),
+      model,
+    }
+    this.active = active
+    let ending: TurnEndReason = { kind: 'error', error: { message: 'turn ended without a response', code: 'NO_RESPONSE' } }
+    try {
+      const response = await raceAbort(
+        connection.request<{ stopReason?: StopReason }>(
+          'session/prompt',
+          { sessionId, prompt },
+          drive.signal,
+        ),
+        drive.signal,
+        this.id,
+      )
+      ending = acpTurnEnding(response.stopReason ?? 'end_turn')
+      return ending
+    } finally {
+      this.active = undefined
+      this.settleActive(active, ending)
+    }
+  }
+
+  /** ACP has no mid-turn steering channel; the message stays queued for the next turn. */
+  protected steerLive(_message: UserMessage, _drive: ExternalTurnDrive): Promise<boolean> {
+    return Promise.resolve(false)
+  }
+
+  /**
+   * Interrupt the live ACP turn after its abort fired: `session/cancel`, and
+   * the in-flight `session/prompt` resolves `cancelled` cooperatively.
+   */
+  protected interruptTurn(_drive: ExternalTurnDrive): Promise<void> {
+    const connection = this.connection
+    const sessionId = this.acpSessionId
+    /* v8 ignore next -- unbind clears this pair only after driver quiescence,
+       so no live turn's abort can observe it unset. */
+    if (connection === undefined || sessionId === undefined) return Promise.resolve()
+    connection.notify('session/cancel', { sessionId })
+    return Promise.resolve()
+  }
+
+  // ---- AcpSessionPeer dispatch ----
+
+  /**
+   * Consume one `session/update` for the bound session. Replaying history
+   * during `session/load` never reaches here: the peer registers only after
+   * the load response.
+   * @param update - one ACP session update notification to project.
+   */
+  update(update: SessionNotification['update']): void {
+    const active = this.active
+    switch (update.sessionUpdate) {
+      case 'agent_message_chunk': {
+        if (active === undefined) return
+        const lane = this.ensureAttempt(active, optionalString(update.messageId) ?? 'default')
+        const text = this.chunkText(update.content)
+        if (text.length === 0) return
+        if (lane.textIndex === -1) {
+          lane.textIndex = lane.nextIndex++
+          lane.attempt.push({ type: 'block-start', index: lane.textIndex, blockType: 'text' })
+        }
+        lane.attempt.push({ type: 'text-delta', index: lane.textIndex, text })
+        return
+      }
+      case 'agent_thought_chunk': {
+        if (active === undefined) return
+        const lane = this.ensureAttempt(active, optionalString(update.messageId) ?? 'default')
+        const text = this.chunkText(update.content)
+        if (text.length === 0) return
+        if (lane.reasoningIndex === -1) {
+          lane.reasoningIndex = lane.nextIndex++
+          lane.attempt.push({ type: 'block-start', index: lane.reasoningIndex, blockType: 'reasoning' })
+        }
+        lane.attempt.push({ type: 'reasoning-delta', index: lane.reasoningIndex, text })
+        return
+      }
+      case 'tool_call': {
+        if (active === undefined) return
+        const callId = update.toolCallId
+        if (callId.length === 0) return
+        active.openToolCalls.add(callId)
+        const args = update.rawInput === undefined ? '{}' : JSON.stringify(update.rawInput)
+        const name = optionalString(update.name) ?? optionalString(update.title) ?? 'tool'
+        active.drive.projector.toolCall(callId, name, args)
+        return
+      }
+      case 'tool_call_update': {
+        if (active === undefined) return
+        this.toolUpdate(active, update)
+        return
+      }
+      case 'config_option_update': {
+        this.configOptions = update.configOptions
+        return
+      }
+      case 'plan': {
+        if (active === undefined) return
+        const lines = update.entries.flatMap((entry) => {
+          const content = optionalString(entry.content)
+          return content === undefined ? [] : [`- [${entry.status}] ${content}`]
+        })
+        if (lines.length === 0) return
+        const lane = this.ensureAttempt(active, 'plan')
+        if (lane.textIndex === -1) {
+          lane.textIndex = lane.nextIndex++
+          lane.attempt.push({ type: 'block-start', index: lane.textIndex, blockType: 'text' })
+        }
+        lane.attempt.push({ type: 'text-delta', index: lane.textIndex, text: `${lines.join('\n')}\n` })
+        return
+      }
+      default:
+        return
+    }
+  }
+
+  /**
+   * Answer one `session/request_permission` through the DSH approval seam.
+   * The request only arrives while `session/prompt` is in flight, so the
+   * durable turn is open and the audit pair can commit.
+   */
+  async requestPermission(params: RequestPermissionRequest): Promise<RequestPermissionResponse> {
+    const active = this.active
+    const approval = this.ctx.get('approval')
+    if (active === undefined || approval === undefined) return { outcome: { outcome: 'cancelled' } }
+    const toolCall = params.toolCall
+    const toolName = optionalString(toolCall.name) ?? optionalString(toolCall.title) ?? 'tool'
+    const reason = optionalString(toolCall.title) ?? toolName
+    try {
+      const outcome = await approval.request({
+        agent: this,
+        toolName,
+        callId: brandString<ToolCallId>(toolCall.toolCallId),
+        reason,
+        signal: active.drive.signal,
+      })
+      return { outcome: acpPermissionOutcome(params.options, outcome) }
+    } catch (error: unknown) {
+      this.ctx.logger.warn(`${this.prefix}: permission request failed closed: ${errorChain(error)}`)
+      return { outcome: { outcome: 'cancelled' } }
+    }
+  }
+
+  /**
+   * Answer one `elicitation/create` through the user-questions seam for flat
+   * form schemas of string/enum/boolean fields; richer modes and schemas
+   * decline rather than fabricate content.
+   */
+  async elicitation(params: CreateElicitationRequest): Promise<CreateElicitationResponse> {
+    const decline: CreateElicitationResponse = { action: 'decline' }
+    const active = this.active
+    const questions = this.ctx.get('userQuestions')
+    if (questions === undefined || active === undefined) return decline
+    if (params.mode !== 'form') return decline
+    const properties = (params.requestedSchema as ElicitationSchema).properties
+    if (properties === undefined || Object.keys(properties).length === 0) return decline
+    const mapped = Object.entries(properties).flatMap(([key, property]) => {
+      const description = optionalString(property.description)
+      const enumValues = property.type === 'string' && Array.isArray(property.enum)
+        ? property.enum
+        : undefined
+      const options = enumValues?.flatMap((raw) => {
+        const label = optionalString(raw)
+        return label === undefined ? [] : [{ label }]
+      })
+      const question = description ?? key
+      return [{
+        id: key,
+        question,
+        detail: params.message,
+        ...options === undefined || options.length === 0 ? {} : { options },
+      }]
+    })
+    try {
+      const answer = await questions.ask({
+        questions: mapped,
+        agent: this,
+        signal: active.drive.signal,
+      })
+      const content: Record<string, string | string[]> = {}
+      for (const item of answer.answers) {
+        const selected = [...item.selected, ...item.custom === undefined ? [] : [item.custom]]
+        if (selected.length === 1) content[item.id] = selected[0] as string
+        else if (selected.length > 1) content[item.id] = selected
+      }
+      return { action: 'accept', content }
+    } catch (error: unknown) {
+      this.ctx.logger.warn(`${this.prefix}: elicitation declined: ${errorChain(error)}`)
+      return decline
+    }
+  }
+
+  // ---- internals ----
+
+  /**
+   * Apply the session's config-option selections before the prompt: the
+   * `model` option carries the durable `model/selection` or deployment
+   * default, the reasoning-effort option carries the selection's effort, and
+   * the `mode` option carries the DSH permission knobs — each only when the
+   * session advertised the option and the value differs. A requested value the
+   * harness cannot carry is logged with the value that will run instead, never
+   * dropped silently.
+   * @param chosenModel - the resolved model value, or undefined to leave the
+   *   agent's `model` option untouched.
+   * @param chosenEffort - the resolved reasoning-effort value, or undefined to
+   *   leave the agent's reasoning-effort option untouched.
+   */
+  private async applyConfigSelection(
+    connection: AcpClientConnection,
+    sessionId: string,
+    chosenModel: string | undefined,
+    chosenEffort: string | undefined,
+    signal: AbortSignal,
+  ): Promise<void> {
+    const updates: { configId: string; value: string }[] = []
+    const modelOption = acpModelOption(this.configOptions)
+    if (chosenModel !== undefined && modelOption === undefined) {
+      this.warnOnce(
+        `model:${chosenModel}:unadvertised`,
+        `${this.prefix}: model "${chosenModel}" was not applied: the session advertises no model option`,
+      )
+    } else if (modelOption !== undefined && chosenModel !== undefined && chosenModel !== modelOption.currentValue) {
+      if (this.optionValues(modelOption).has(chosenModel)) {
+        updates.push({ configId: 'model', value: chosenModel })
+      } else {
+        this.warnOnce(
+          `model:${chosenModel}:${modelOption.currentValue}`,
+          `${this.prefix}: model "${chosenModel}" was not applied: the session does not advertise it; the session runs model "${modelOption.currentValue}"`,
+        )
+      }
+    }
+    const effortOption = acpReasoningOption(this.configOptions)
+    if (chosenEffort !== undefined && effortOption === undefined) {
+      this.warnOnce(
+        `effort:${chosenEffort}:unadvertised`,
+        `${this.prefix}: reasoning effort "${chosenEffort}" was not applied: the session advertises no reasoning-effort option`,
+      )
+    } else if (effortOption !== undefined && chosenEffort !== undefined && chosenEffort !== effortOption.currentValue) {
+      if (this.optionValues(effortOption).has(chosenEffort)) {
+        updates.push({ configId: effortOption.id, value: chosenEffort })
+      } else {
+        this.warnOnce(
+          `effort:${chosenEffort}:${effortOption.currentValue}`,
+          `${this.prefix}: reasoning effort "${chosenEffort}" was not applied: the session does not advertise it; the session runs reasoning effort "${effortOption.currentValue}"`,
+        )
+      }
+    }
+    const modeOption = acpModeOption(this.configOptions)
+    const mode = this.chooseMode(modeOption)
+    if (mode === undefined) {
+      // A read-only session reports its own limitation below, which names the
+      // same request and effective mode; warning twice would say one thing.
+      if (!this.readOnlySandbox()) this.warnModeNotApplied(modeOption)
+    } else if (mode !== modeOption?.currentValue) {
+      updates.push({ configId: 'mode', value: mode })
+    }
+    for (const update of updates) {
+      const response = await connection.request<{ configOptions?: SessionConfigOption[] }>(
+        'session/set_config_option',
+        { sessionId, configId: update.configId, value: update.value },
+        signal,
+      )
+      this.configOptions = response.configOptions ?? this.configOptions
+    }
+    // An ACP mode expresses approval behavior, not filesystem scope: no mode
+    // proves the harness confines its own tools to reading, so a read-only
+    // session always reports the mode it actually runs.
+    if (this.readOnlySandbox()) {
+      const inEffect = acpModeOption(this.configOptions)?.currentValue
+      this.warnOnce(
+        `read-only:${inEffect ?? 'unadvertised'}`,
+        inEffect === undefined
+          ? `${this.prefix}: the session's read-only sandbox is not enforceable by the harness: the session advertises no mode option`
+          : `${this.prefix}: the session's read-only sandbox is not enforceable by the harness; the session runs mode "${inEffect}"`,
+      )
+    }
+  }
+
+  /**
+   * The advertised session mode value for the current DSH permission knobs: a
+   * `never` approval policy maps to the auto-approve mode (`bypass`), a
+   * read-only sandbox to the closest non-editing mode (`ask`), and `ask` over
+   * a writable sandbox to a tool-executing mode. Real Devin advertises
+   * `accept-edits`, `smart`, `ask`, `plan`, and `bypass`; opencode and
+   * mimocode advertise `build` and `plan`. The deployment config `mode`
+   * overrides, and a request no advertised value satisfies returns undefined
+   * so {@link warnModeNotApplied} names it.
+   */
+  private chooseMode(modeOption: AcpSelectOption | undefined): string | undefined {
+    const values = new Set(modeOption === undefined ? [] : acpSelectEntries(modeOption).map(entry => entry.value))
+    if (this.driverConfig.mode !== undefined) {
+      return values.has(this.driverConfig.mode) ? this.driverConfig.mode : undefined
+    }
+    const pick = (candidates: readonly string[]): string | undefined =>
+      candidates.find(candidate => values.has(candidate))
+    const approval = this.ctx.get('approval')?.overrideOf(this.session) ?? this.driverConfig.approval
+    if (approval === 'never') return pick(['bypass', 'smart'])
+    if (this.readOnlySandbox()) return pick(['ask', 'plan'])
+    return pick(['accept-edits', 'build', 'smart'])
+  }
+
+  /**
+   * Report a requested mode that no advertised value satisfies, naming both
+   * the request and the mode in effect, once per distinct pair.
+   */
+  private warnModeNotApplied(modeOption: AcpSelectOption | undefined): void {
+    const requested = this.driverConfig.mode === undefined
+      ? `approval policy "${this.ctx.get('approval')?.overrideOf(this.session) ?? this.driverConfig.approval}"`
+      : `mode "${this.driverConfig.mode}"`
+    const inEffect = modeOption?.currentValue
+    this.warnOnce(
+      `mode:${requested}:${inEffect ?? 'unadvertised'}`,
+      inEffect === undefined
+        ? `${this.prefix}: the session's ${requested} was not applied: the session advertises no mode option`
+        : `${this.prefix}: the session's ${requested} was not applied: the session does not advertise a mode for it; the session runs mode "${inEffect}"`,
+    )
+  }
+
+  /** Whether the session's effective DSH sandbox is `read-only`. */
+  private readOnlySandbox(): boolean {
+    return (this.ctx.get('sandboxPolicy')?.overrideOf(this.session) ?? this.driverConfig.sandbox) === 'read-only'
+  }
+
+  /** Emit one constraint warning per distinct message; a driver re-resolves its config every turn. */
+  private warnOnce(key: string, message: string): void {
+    if (this.warned.has(key)) return
+    this.warned.add(key)
+    this.ctx.logger.warn(message)
+  }
+
+  /** Every selectable value an advertised option offers, flat or grouped. */
+  private optionValues(option: AcpSelectOption): Set<string> {
+    return new Set(acpSelectEntries(option).map(entry => entry.value))
+  }
+
+  /**
+   * Settle a turn's leftover state: open tool calls close as error results,
+   * and open assistant lanes commit — interrupted on an aborted or failed
+   * ending, complete on a clean stop.
+   */
+  private settleActive(active: ActiveTurn, ending: TurnEndReason): void {
+    for (const callId of active.openToolCalls) {
+      try {
+        active.drive.projector.toolResult(
+          callId,
+          [{ type: 'text', text: 'tool call ended without a terminal update' }],
+          { isError: true, error: { name: 'AcpToolIncomplete', code: 'INCOMPLETE' } },
+        )
+      } catch (error: unknown) {
+        /* v8 ignore next -- containment arm: the projector rejects only when the
+           durable append itself fails, which already fails the session. */
+        this.ctx.logger.warn(`${this.prefix}: tool result settlement failed: ${errorChain(error)}`)
+      }
+    }
+    active.openToolCalls.clear()
+    const interrupted = ending.kind !== 'completed'
+    for (const lane of active.attempts.values()) {
+      try {
+        if (lane.nextIndex > 0) {
+          lane.attempt.push({
+            type: 'finish',
+            reason: interrupted
+              ? { kind: 'aborted', failure: { message: 'turn ended mid-stream', code: 'ABORTED' } }
+              : { kind: 'stop' },
+          })
+          active.drive.projector.commitAssistant(lane.attempt, {
+            provider: this.driverConfig.harness.id,
+            model: active.model,
+          }, interrupted ? { interrupted: true } : {})
+        } else {
+          active.drive.projector.commitAttempt(lane.attempt)
+        }
+      } catch (error: unknown) {
+        /* v8 ignore next -- containment arm: the projector rejects only when the
+           durable append itself fails, which already fails the session. */
+        this.ctx.logger.warn(`${this.prefix}: assistant stream settlement failed: ${errorChain(error)}`)
+      }
+    }
+    active.attempts.clear()
+  }
+
+  /**
+   * Fold one terminal `tool_call_update` into a durable `tool/result`.
+   * Non-terminal updates only update the open record's bookkeeping.
+   */
+  private toolUpdate(active: ActiveTurn, update: ToolCallUpdate): void {
+    const callId = update.toolCallId
+    if (callId.length === 0) return
+    const status = update.status
+    if (status !== 'completed' && status !== 'failed') return
+    active.openToolCalls.delete(callId)
+    const { blocks } = acpToolContent(update.content ?? undefined, update.rawOutput)
+    active.drive.projector.toolResult(
+      callId,
+      blocks.length === 0 ? [{ type: 'text', text: '' }] : blocks,
+      status === 'failed'
+        ? { isError: true, error: { name: 'AcpToolFailed', code: 'FAILED' } }
+        : {},
+    )
+  }
+
+  /** Open or fetch the assistant stream lane for one ACP message id. */
+  private ensureAttempt(active: ActiveTurn, messageId: string): StreamLane {
+    let lane = active.attempts.get(messageId)
+    if (lane === undefined) {
+      lane = {
+        attempt: active.drive.projector.beginAssistant(),
+        textIndex: -1,
+        reasoningIndex: -1,
+        nextIndex: 0,
+      }
+      active.attempts.set(messageId, lane)
+    }
+    return lane
+  }
+
+  private chunkText(content: AcpContentBlock): string {
+    const mapped = acpBlockToContent(content)
+    return mapped?.type === 'text' ? mapped.text : ''
+  }
+
+  /**
+   * Resolve one file/image attachment to its host path through the optional
+   * attachment service; resolution failures degrade to a text handle instead
+   * of rejecting the turn.
+   */
+  private attachmentHostPath(attachment: unknown): string | undefined {
+    const attachments = this.ctx.get('attachments')
+    if (attachments === undefined) return undefined
+    try {
+      if (typeof attachment === 'object' && attachment !== null && 'mediaType' in attachment) {
+        return attachments.imageHostPath(attachment as never)
+      }
+      return attachments.fileHostPath(attachment as never)
+    } catch (error: unknown) {
+      this.ctx.logger.warn(`${this.prefix}: attachment path resolution failed: ${errorChain(error)}`)
+      return undefined
+    }
+  }
+}

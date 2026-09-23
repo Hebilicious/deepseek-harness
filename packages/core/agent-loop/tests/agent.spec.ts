@@ -35,7 +35,9 @@ describe('Agent', () => {
 
     agent.inject(createUserMessage({ content: [{ type: 'text', text: 'context' }], source: { kind: 'plugin', plugin: 'p' } }))
 
-    expect(agent.session.snapshotEvents().map(event => event.type)).toEqual(['agent/inbox/spliced'])
+    // The pre-publication harness record leads; the inject stages nothing else.
+    expect(agent.session.snapshotEvents().map(event => event.type))
+      .toEqual(['agent/harness', 'agent/inbox/spliced'])
     expect(agent.status).toBe('idle')
     expect(adapter.requests).toHaveLength(0)
     await agent.whenIdle()
@@ -97,7 +99,9 @@ describe('Agent', () => {
     expect(() => {
       agent.inject(createUserMessage({ content: [{ type: 'text', text: 'x', bad: 1n } as never], source: { kind: 'plugin', plugin: 'p' } }))
     }).toThrow(/non-JSON-serializable/)
-    expect(agent.session.snapshotEvents()).toHaveLength(0)
+    // The rejected inject stages nothing beyond the harness record written at
+    // publication.
+    expect(agent.session.snapshotEvents().map(event => event.type)).toEqual(['agent/harness'])
   })
 
   it('steer() while idle becomes a woken prompt turn', async () => {

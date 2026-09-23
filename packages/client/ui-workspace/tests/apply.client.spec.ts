@@ -9,6 +9,28 @@ import { WorkspaceBrowser } from '../src/client/rows/WorkspaceBrowser.tsx'
 import { WorkspacePicker } from '../src/client/WorkspacePicker.tsx'
 import { apply as hostApply } from '../src/index.ts'
 import type { SessionReference } from '@deepseek-ai/dsh-api-session-controller/client'
+import type { SessionHarnessCatalog } from '@deepseek-ai/dsh-api-session-controller/types'
+import type { HarnessId } from '@deepseek-ai/dsh-agent/types'
+import type { RemoteResult } from '@deepseek-ai/dsh-typert-protocol'
+
+/** One scripted harness-catalog read the spec settles by hand. */
+function pendingCatalog(): {
+  promise: Promise<RemoteResult<SessionHarnessCatalog>>
+  resolve: (value: SessionHarnessCatalog) => void
+} {
+  let settle!: (value: RemoteResult<SessionHarnessCatalog>) => void
+  const promise = new Promise<RemoteResult<SessionHarnessCatalog>>((accept) => { settle = accept })
+  return { promise, resolve: (value) => { settle({ ok: true, value }) } }
+}
+
+const catalog = (id: string, name: string): SessionHarnessCatalog => ({
+  harnesses: [{ id: id as HarnessId, name }],
+})
+
+/** Let every already-settled read publish before the next assertion. */
+async function flush(): Promise<void> {
+  await new Promise((resolve) => { setTimeout(resolve, 0) })
+}
 
 async function bench() {
   const ctx = new Context()
@@ -79,7 +101,9 @@ async function bench() {
   } as never)
   const pickDirectory = vi.fn(() => Promise.resolve({ ok: true as const, value: '/projects/picked' }))
   const directoryPicker = { pick: pickDirectory }
-  Object.assign(new TestRemote(ctx), { directoryPicker })
+  const harnessCatalog = vi.fn((): Promise<RemoteResult<SessionHarnessCatalog>> =>
+    Promise.resolve({ ok: true, value: catalog('codex', 'Codex CLI') }))
+  Object.assign(new TestRemote(ctx, { session: { harnessCatalog } }), { directoryPicker })
   ctx.provide('remote.directoryPicker', directoryPicker as never)
   const locale = new LocaleRuntime(ctx)
   // These specs assert the shipped Chinese copy. There is no jsdom `window`
@@ -90,6 +114,7 @@ async function bench() {
   return {
     ctx, slots: ctx.get('slots') as SlotRegistry, locale, create, rename,
     retain, using, selectPanel, search, renameSession, binding, fork, pickDirectory,
+    harnessCatalog,
   }
 }
 
@@ -108,7 +133,8 @@ describe('ui-workspace apply', () => {
 
   it('declares the services it drives', () => {
     expect(inject).toEqual([
-      'slots', 'sessions', 'workspaces', 'locale', 'remote', 'remote.directoryPicker', 'layout',
+      'slots', 'sessions', 'workspaces', 'locale', 'remote', 'remote.directoryPicker', 'remote.session',
+      'layout',
     ])
   })
 
@@ -195,6 +221,72 @@ describe('ui-workspace apply', () => {
     dispose()
     expect(browser.hooks.directoryFlow.getSnapshot()).toBe(false)
     unsubscribe()
+  })
+
+  it('publishes the mounted-harness catalog the session rows badge', async () => {
+    const b = await bench()
+    const first = pendingCatalog()
+    const second = pendingCatalog()
+    b.harnessCatalog.mockReturnValueOnce(first.promise).mockReturnValueOnce(second.promise)
+    declare(b.slots, 'sidebar.workspaces')
+    await b.ctx.plugin({ inject: [...inject], apply }).await()
+    const browser = (b.slots.entries('sidebar.workspaces')[0]!.inject as () => WorkspaceBrowserInjected)()
+
+    // The read is in flight: rows label their badges with the recorded id.
+    expect(browser.hooks.harnessCatalog.getSnapshot()).toEqual([])
+    const notified = vi.fn()
+    const unsubscribe = browser.hooks.harnessCatalog.subscribe(notified)
+    first.resolve(catalog('codex', 'Codex CLI'))
+    await vi.waitFor(() => {
+      expect(browser.hooks.harnessCatalog.getSnapshot()).toEqual([{ id: 'codex', name: 'Codex CLI' }])
+    })
+    expect(notified).toHaveBeenCalledOnce()
+
+    // A reconnect re-reads the catalog and keeps the previous one until it lands.
+    b.ctx.emit('connection/reset')
+    expect(b.harnessCatalog).toHaveBeenCalledTimes(2)
+    expect(browser.hooks.harnessCatalog.getSnapshot()).toEqual([{ id: 'codex', name: 'Codex CLI' }])
+    second.resolve(catalog('dsh', 'DeepSeek Harness'))
+    await vi.waitFor(() => {
+      expect(browser.hooks.harnessCatalog.getSnapshot()).toEqual([{ id: 'dsh', name: 'DeepSeek Harness' }])
+    })
+    expect(notified).toHaveBeenCalledTimes(2)
+    unsubscribe()
+  })
+
+  it('keeps the published harness catalog when a read fails or a newer read supersedes it', async () => {
+    const b = await bench()
+    const first = pendingCatalog()
+    b.harnessCatalog.mockReturnValueOnce(first.promise)
+    declare(b.slots, 'sidebar.workspaces')
+    await b.ctx.plugin({ inject: [...inject], apply }).await()
+    const browser = (b.slots.entries('sidebar.workspaces')[0]!.inject as () => WorkspaceBrowserInjected)()
+    const snapshot = () => browser.hooks.harnessCatalog.getSnapshot()
+
+    // Two reads in flight: only the newest generation may publish.
+    const superseded = pendingCatalog()
+    const newest = pendingCatalog()
+    b.harnessCatalog.mockReturnValueOnce(superseded.promise).mockReturnValueOnce(newest.promise)
+    b.ctx.emit('connection/reset')
+    b.ctx.emit('connection/reset')
+    newest.resolve(catalog('dsh', 'DeepSeek Harness'))
+    await vi.waitFor(() => { expect(snapshot()).toEqual([{ id: 'dsh', name: 'DeepSeek Harness' }]) })
+    superseded.resolve(catalog('codex', 'Codex CLI'))
+    await flush()
+    expect(snapshot()).toEqual([{ id: 'dsh', name: 'DeepSeek Harness' }])
+
+    // A business failure and a rejected wire call both keep it.
+    b.harnessCatalog.mockResolvedValueOnce({
+      ok: false,
+      error: new RemoteError('gateway/internal', 'catalog unavailable', {}),
+    })
+    b.ctx.emit('connection/reset')
+    await flush()
+    expect(snapshot()).toEqual([{ id: 'dsh', name: 'DeepSeek Harness' }])
+    b.harnessCatalog.mockRejectedValueOnce(new Error('wire unavailable'))
+    b.ctx.emit('connection/reset')
+    await flush()
+    expect(snapshot()).toEqual([{ id: 'dsh', name: 'DeepSeek Harness' }])
   })
 
   it('rejects the browser search callback on a Session Controller business error', async () => {

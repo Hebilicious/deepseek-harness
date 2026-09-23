@@ -7,6 +7,7 @@
 import type { UserMessage } from '@deepseek-ai/dsh-llm/types'
 import type { OptionalSessionSeq, SessionId, SessionSeq } from '@deepseek-ai/dsh-session/types'
 import type { TypertContext, TypertLookup } from '@deepseek-ai/dsh-typert-protocol'
+import { brandString, type Branded } from '@deepseek-ai/dsh-brand'
 import type { JsonValue } from '@deepseek-ai/dsh-util-values'
 
 /** Public live-agent handle; the runtime face augments its live capabilities. */
@@ -50,10 +51,17 @@ declare module '@deepseek-ai/dsh-session-projection/types' {
   interface SessionProjectionStateMap {
     /** Pending agent input reconstructed from durable inbox splices. */
     inbox: InboxState
+    /** The harness that owns this session's agent, or null before the record. */
+    agentHarness: string | null
   }
   interface SessionProjectionMap {
     /** Pending agent input reconstructed from durable inbox splices. */
     inbox: InboxWireState
+    /**
+     * The harness that owns this session's agent, or null before the record.
+     * Client surfaces report it read-only: a session never changes harness.
+     */
+    agentHarness: string | null
   }
 }
 
@@ -92,4 +100,26 @@ declare module '@deepseek-ai/dsh-session/types' {
       outcome?: 'canceled'
     }
   }
+}
+
+/** Stable id of one agent harness a deployment can create sessions with. */
+export type HarnessId = Branded<'HarnessId'>
+
+/**
+ * Brand a string as a {@link HarnessId}.
+ * @param id - the harness id, unique within one process.
+ * @returns the same string with the harness-id brand.
+ */
+export function HarnessId(id: string): HarnessId {
+  return brandString<HarnessId>(id)
+}
+
+/** One agent harness a deployment can create sessions with, as consumers see it. */
+export interface AgentHarness {
+  /** Stable id carried on create, resume, and the session's durable record. */
+  readonly id: HarnessId
+  /** Human-readable name for a harness picker. */
+  readonly name: string
+  /** One sentence on what runs the session, for a harness picker. */
+  readonly description?: string
 }

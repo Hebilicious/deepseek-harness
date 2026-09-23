@@ -204,6 +204,8 @@ type SessionTreeProps = Pick<
   revealSessionId?: SessionId | undefined
   /** Acknowledge that the chosen Session row has been revealed. */
   onSessionRevealed: (sessionId: SessionId) => void
+  /** Display name of a harness the catalog mounts, by recorded id. */
+  harnessLabel: (harnessId: string) => string
 }
 
 /** The scrolling session tree; unmounting drops the sessions subscription and expand-all state. */
@@ -214,7 +216,7 @@ function SessionTree({
   onRenameRequest, onDeleteRequest, onSessionRename, onSessionArchive,
   insertWorkspaceBefore,
   nestWorkspaces, groupExpansion, setGroupExpanded,
-  setSessionOrder, home, t,
+  setSessionOrder, home, harnessLabel, t,
   revealSessionId, onSessionRevealed,
 }: SessionTreeProps) {
   const panelActive = usePanelInfo(info => info.activePanelId !== null)
@@ -526,6 +528,7 @@ function SessionTree({
                 ? () => { onSessionRevealed(node.id) }
                 : undefined}
               drag={dragProps}
+              harnessLabel={harnessLabel}
               t={t}
             />
           )
@@ -568,7 +571,7 @@ function SessionTree({
 function FlatList({
   list, sessionIds, useSessionStatus, open, forkSession, onSessionRename, onSessionArchive,
   usePanelInfo, setSessionOrder,
-  revealSessionId, onSessionRevealed, t,
+  revealSessionId, onSessionRevealed, harnessLabel, t,
 }: Pick<
   SessionTreeProps,
   | 'useSessionStatus'
@@ -580,6 +583,7 @@ function FlatList({
   | 'setSessionOrder'
   | 'revealSessionId'
   | 'onSessionRevealed'
+  | 'harnessLabel'
   | 't'
 > & {
   list: SessionListState
@@ -660,6 +664,7 @@ function FlatList({
                   dropCommitted.current = false
                 },
               }}
+              harnessLabel={harnessLabel}
               t={t}
             />
           )
@@ -783,10 +788,19 @@ export function WorkspaceBrowser({
   searchResultLimit,
   useDirectoryFlow,
   useHostInfo,
+  useHarnessCatalog,
   renderSlot,
   t,
 }: WorkspaceBrowserProps) {
   const home = useHostInfo(info => info.home)
+  // Session rows badge the harness their own log records; the catalog supplies
+  // the deployment's display name for that id, and an id it does not carry (an
+  // unmounted harness, or a catalog that has not arrived) stays the label.
+  const harnesses = useHarnessCatalog(catalog => catalog)
+  const harnessLabel = useMemo(() => {
+    const names = new Map<string, string>(harnesses.map(harness => [harness.id, harness.name]))
+    return (harnessId: string): string => names.get(harnessId) ?? harnessId
+  }, [harnesses])
   // Ordering remains live while the rail or search replaces the list body.
   const list = useSessions(state => state)
   const workspaces = useWorkspaces(state => state.items)
@@ -1270,6 +1284,7 @@ export function WorkspaceBrowser({
                 setSessionOrder={saveSessionOrder}
                 revealSessionId={revealSessionId}
                 onSessionRevealed={acknowledgeSessionReveal}
+                harnessLabel={harnessLabel}
                 t={t}
               />
             )
@@ -1295,6 +1310,7 @@ export function WorkspaceBrowser({
                 revealSessionId={revealSessionId}
                 onSessionRevealed={acknowledgeSessionReveal}
                 home={home}
+                harnessLabel={harnessLabel}
                 t={t}
                 onRenameRequest={(workspaceId, currentTitle) => {
                   setRenameTarget({ workspaceId, currentTitle })

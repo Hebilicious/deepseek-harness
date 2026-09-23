@@ -85,6 +85,7 @@ function fakeSessions(ctx: Context): { sessions: ISessions; binding: SessionBind
     list,
     searchResultLimit: 50,
     create: () => Promise.reject(new Error('unused fake Sessions operation')),
+    stageHarness: () => {},
     retain: () => reference,
     using: async (_target, _options, operation) => await operation(reference),
     retainInfo: () => createSnapshotStore({ referenceCount: 1, retainedBy: {} }),

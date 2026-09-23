@@ -1,0 +1,29 @@
+/* A harness mark: the official symbol in the surrounding label color, or the
+ * monogram tile where no symbol exists. Marks are drawn at 16px beside a
+ * session title, so they carry no background of their own and inherit the
+ * row's text color. */
+.logo {
+  display: inline-flex;
+  flex: none;
+  color: var(--dsw-alias-label-secondary);
+}
+
+.badge {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  border-radius: 4px;
+  corner-shape: round;
+  background: var(--dsh-harness-mark-tone, var(--dsw-static-neutral-600));
+  color: var(--dsw-static-neutral-00);
+  font-weight: 600;
+  line-height: 1;
+  letter-spacing: 0.01em;
+  user-select: none;
+}
+
+/* The one tile that stands in for a published symbol. */
+.badge[data-harness='devin'] {
+  --dsh-harness-mark-tone: var(--dsw-static-blue-600);
+}

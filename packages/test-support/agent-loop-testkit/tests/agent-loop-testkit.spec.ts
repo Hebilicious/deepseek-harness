@@ -97,6 +97,7 @@ describe('dsh-agent-loop-testkit', () => {
       { id: turn.id, turn: 3 },
     ])
     expect(agent.session.snapshotEvents().map(event => event.type)).toEqual([
+      'agent/harness',
       'agent/inbox/spliced',
       'agent/inbox/spliced',
       'agent/inbox/spliced',

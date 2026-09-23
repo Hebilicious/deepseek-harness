@@ -75,6 +75,12 @@ export function ConversationSessionHeader({
         </div>
         {!hideChrome && (
           <>
+            {/* The harness mark sits directly left of the title and owns its
+                trailing gap; an empty seat collapses so an unrecorded session
+                keeps today's header. */}
+            <div className={css.headerHarness} data-conversation-header-harness="">
+              {renderSlot('conversation.session.header.harness', {})}
+            </div>
             <div className={css.titleCluster}>
               <nav className={css.crumbs} aria-label={t('session.hierarchy')}>
                 {ancestry.map((summary, index) => {

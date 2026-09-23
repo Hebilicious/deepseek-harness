@@ -313,18 +313,23 @@ describe('session.history projections block', () => {
 
     const snapshot = await opening(remote(ctx), session.id)
 
-    expect(snapshot.records.map(record => record.event.seq)).toEqual([0, 1])
-    expect(snapshot.projections.asOfSeq).toBe(1)
+    expect(snapshot.records.map(record => record.event.seq)).toEqual([0, 1, 2])
+    expect(snapshot.projections.asOfSeq).toBe(2)
     expect(snapshot.projections.values).toEqual(
       expect.objectContaining({ 'test/last-user': { text: 'm1' } }),
     )
   })
 
   it('projects an empty log at cursor -1', async () => {
-    const { ctx, session } = await harness(true)
+    const { ctx } = await harness(true)
     ctx.sessionProjections.register(lastUserUnit())
+    // A published agent session always holds at least its harness record, so
+    // the empty log is a session created directly on the store.
+    const empty = ctx.sessions.create(SessionId('session-projections-empty-log'), {
+      meta: { cwd: '/workspace' },
+    })
 
-    const snapshot = await opening(remote(ctx), session.id)
+    const snapshot = await opening(remote(ctx), empty.id)
 
     expect(snapshot.records).toEqual([])
     expect(snapshot.projections.asOfSeq).toBe(-1)
@@ -693,16 +698,16 @@ describe('Session control projection frames', () => {
         f.type === 'projection' && f.key === 'test/last-user',
     )
     expect(pushes).toEqual([
-      { type: 'projection', sessionId: session.id, key: 'test/last-user', value: { text: 'm0' }, seq: 0 },
-      { type: 'projection', sessionId: session.id, key: 'test/last-user', value: { text: 'm0' }, seq: 2 },
+      { type: 'projection', sessionId: session.id, key: 'test/last-user', value: { text: 'm0' }, seq: 1 },
+      { type: 'projection', sessionId: session.id, key: 'test/last-user', value: { text: 'm0' }, seq: 3 },
     ])
     expect(frames.filter(
       (f): f is Extract<SessionControlFrame, { type: 'projection' }> =>
         f.type === 'projection' && f.key === 'sessionListMetadata',
     )).toEqual([
-      { type: 'projection', sessionId: session.id, key: 'sessionListMetadata', value: { blank: true, lastPromptAt: 100 }, seq: 0 },
-      { type: 'projection', sessionId: session.id, key: 'sessionListMetadata', value: { blank: false, lastPromptAt: 100 }, seq: 1 },
-      { type: 'projection', sessionId: session.id, key: 'sessionListMetadata', value: { blank: false, lastPromptAt: 300 }, seq: 2 },
+      { type: 'projection', sessionId: session.id, key: 'sessionListMetadata', value: { blank: true, lastPromptAt: 100 }, seq: 1 },
+      { type: 'projection', sessionId: session.id, key: 'sessionListMetadata', value: { blank: false, lastPromptAt: 100 }, seq: 2 },
+      { type: 'projection', sessionId: session.id, key: 'sessionListMetadata', value: { blank: false, lastPromptAt: 300 }, seq: 3 },
     ])
     // Frame seq aligns with the tail block's asOfSeq vocabulary (higher-seq-wins compatible).
     const tail = await opening(proxy, session.id)

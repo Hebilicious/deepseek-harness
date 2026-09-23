@@ -25,11 +25,11 @@ Use `dsh-agent` to create or resume live agents, send follow-up or steering inpu
 <a id="use-this-package"></a>
 ## Use this package
 
-Mount `dsh-agent` wherever live agents exist: it provides `ctx.agents` and the `Agent` handle that plugins, UI, hooks, and orchestrators work against. The service is inert until a driver registers a factory — the shipped driver is `dsh-agent-loop`, so the smallest useful composition loads both.
+Mount `dsh-agent` wherever live agents exist: it provides `ctx.agents` and the `Agent` handle that plugins, UI, hooks, and orchestrators work against. The service is inert until a driver registers a harness factory — the shipped in-process driver is `dsh-agent-loop`, which registers the `dsh` harness, so the smallest useful composition loads both.
 
 ### Create or resume an agent
 
-`ctx.agents.create()` builds a fresh agent and session under one identity; `ctx.agents.resume()` loads a persisted session and rebuilds the agent on it. Both delegate to the registered factory and return an `AgentHandle` — the only object that can tear that agent down. Set `parentAgent` in either operation's options to make the result a runtime child; omit it for a runtime root. `get(id)`, `list()`, and `roots()` find live agents, and `isOwnedBy(id, parent)` tests that exact live relation.
+`ctx.agents.create()` builds a fresh agent and session under one identity; `ctx.agents.resume()` loads a persisted session and rebuilds the agent on it. Both delegate to the factory registered for the requested harness and return an `AgentHandle` — the only object that can tear that agent down. Set `parentAgent` in either operation's options to make the result a runtime child; omit it for a runtime root. `get(id)`, `list()`, and `roots()` find live agents, and `isOwnedBy(id, parent)` tests that exact live relation.
 
 ```text
 const handle = await ctx.agents.create({
@@ -78,7 +78,7 @@ This section explains how the package realizes the behavior above; the observabl
 
 ### Design concept
 
-The package is built on one separation: the public `Agent` surface and registry live here, while construction and driving live in the loop package behind a registered factory. Consumers therefore depend on `dsh-agent` and never on `dsh-agent-loop`, keeping the driver swappable. The second idea is the initiator scope: an `AsyncLocalStorage` chain that carries the exact live `Agent` through the asynchronous driver work it starts, so helpers below a driver can attribute their work without forwarding the agent through every call.
+The package is built on one separation: the public `Agent` surface and registry live here, while construction and driving live in the driver packages behind registered harness factories. Consumers therefore depend on `dsh-agent` and never on `dsh-agent-loop`, keeping the driver swappable. The second idea is the initiator scope: an `AsyncLocalStorage` chain that carries the exact live `Agent` through the asynchronous driver work it starts, so helpers below a driver can attribute their work without forwarding the agent through every call.
 
 ### Step admission
 
@@ -94,7 +94,7 @@ The package is built on one separation: the public `Agent` surface and registry 
 
 | File | Role |
 |---|---|
-| [`src/index.ts`](src/index.ts) | Plugin entry: `AgentRegistry`, factory slot, initiator scope, `CreateAgentOptions`/`ResumeAgentOptions` |
+| [`src/index.ts`](src/index.ts) | Plugin entry: `AgentRegistry`, harness factory registry, initiator scope, `CreateAgentOptions`/`ResumeAgentOptions` |
 | [`src/runtime-types.ts`](src/runtime-types.ts) | `Agent`, structural `Inbox`, `AgentStatus`, and the `agent/*` event declarations |
 | [`src/types.ts`](src/types.ts) | `AgentOptions`, cancellation causes, and inbox projection vocabulary |
 | [`src/dispatch.ts`](src/dispatch.ts) | `agentEvents` fused dispatcher and `assembleContextFor(agent)` |
@@ -169,6 +169,8 @@ The switch notice appends after the previous history, preserving that prefix, wh
 
 These limits define when this package needs special care. They are current package constraints, not a task backlog.
 
+- **One session belongs to one harness.** A deployment may mount several harnesses (`registerHarness()`), each owning its own factory, and every session records the harness that created it as an `agent/harness` event. Resume routes through that record, a request naming a different harness is refused, and no session is ever handed from one harness to another. Because the record is appended before publication, a session created under persistence has a stored artifact before its first turn.
+- **A deployment that mounts several harnesses must name one per create/resume.** With exactly one mounted harness the id is optional; with several, `create()` and `resume()` refuse an unnamed call instead of choosing arbitrarily.
 - **Initiator scope is process-local** — workers, child processes, HTTP, durable queues, and restarts must materialize any required identity explicitly.
 - **Ambient identity may outlive liveness** — consumers still check `agent.status`, cancellation, and the owning capability contract before lifecycle-sensitive work.
 - **Creation listeners share the initialization lifetime.** An `agent/created` listener must not await `agent.whenIdle()` or its own owner's disposal: those operations wait for creation to finish. Return only after required asynchronous tool and prompt installation completes.

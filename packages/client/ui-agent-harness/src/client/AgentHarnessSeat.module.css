@@ -1,0 +1,78 @@
+/* Agent-harness chip on the new-session screen, beside the workspace picker.
+   Geometry mirrors the agent-preset chip's, so the row reads as one set of
+   controls; the chip owns no icon, because no glyph distinguishes a harness. */
+
+/* The Menu anchor wrapper between the row and this chip: its flex
+   auto-minimum would hold the full label width and the row could never
+   compress the chip. The explicit floor is the label-less end state — two 8px
+   paddings + one 4px gap + the 14px chevron — so the glyphs never crush once
+   the label has ellipsized away to nothing. */
+.menuAnchor {
+  min-width: 38px;
+  max-width: 100%;
+}
+
+.seat {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  max-width: min(100%, 200px);
+  min-height: 28px;
+  padding: 0 8px;
+  border: none;
+  border-radius: 16px;
+  background: transparent;
+  color: var(--dsw-alias-label-primary);
+  font-size: 13px;
+  line-height: 20px;
+  font-weight: 500;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.seat:not(:disabled):hover,
+.seat[aria-expanded='true'] {
+  background: var(--dsw-alias-interactive-bg-hover);
+}
+
+/* The label a started session shows: the choice is closed, not merely
+   disabled, so it carries no hover affordance. */
+.seat:disabled {
+  cursor: default;
+  color: var(--dsw-alias-label-quaternary);
+}
+
+.seatLabel {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chevron {
+  flex: none;
+  color: var(--dsw-alias-label-caption);
+}
+
+/* Menu rows carry the harness name over its description: the id alone never
+   said what runs the session, which is why the catalog carries the copy. */
+.item {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-width: 280px;
+}
+
+.itemName {
+  font-size: 13px;
+  line-height: 20px;
+  color: var(--dsw-alias-label-primary);
+}
+
+.itemDesc {
+  font-size: 12px;
+  line-height: 16px;
+  color: var(--dsw-alias-label-caption);
+  white-space: normal;
+}

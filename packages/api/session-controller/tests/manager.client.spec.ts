@@ -5,6 +5,7 @@
 
 import { describe, expect, vi } from 'vitest'
 import type { SessionId } from '@deepseek-ai/dsh-api-remotes/client'
+import type { HarnessId } from '@deepseek-ai/dsh-agent/types'
 import { SessionSeq } from '@deepseek-ai/dsh-session/types'
 import { RemoteError } from '@deepseek-ai/dsh-typert-protocol'
 import type { SessionControlFrame } from '@deepseek-ai/dsh-api-session-controller/types'
@@ -20,6 +21,8 @@ import { FOLLOW, err, followScript, sessionWorld } from './remote/session.client
 
 const S1 = 'fk-m1' as SessionId
 const S2 = 'fk-m2' as SessionId
+const CODEX = 'codex' as HarnessId
+const DSH = 'dsh' as HarnessId
 /** Gateway Client cone used by the subagent-catalog and connected-generation cases. */
 const API_ROSTER = webApp.closure(['@deepseek-ai/dsh-api-gateway'])
 const it = createClientTest({ roster: API_ROSTER })
@@ -732,6 +735,90 @@ describe('remaining branches', () => {
     // Business error passes through untouched.
     remote.session.create.mockResolvedValue(err(new RemoteError('gateway/internal', 'no', {})))
     expect(await manager.create()).toMatchObject({ ok: false })
+  })
+
+  it('sends the harness staged for the next new Session, and keeps it staged', async ({ mock, remote }) => {
+    remote.session.create.mockResolvedValue(ok({ sessionId: S1 }))
+    const manager = makeManager(mock, remote)
+    manager.stageHarness(CODEX)
+    await manager.create({ workspaceId: 'w1' as never })
+    expect(remote.session.create).toHaveBeenLastCalledWith({ workspaceId: 'w1', harness: 'codex' })
+    // A deployment that mounts several harnesses refuses a create that names
+    // none, so the stage outlives the create it served.
+    await manager.create({ cwd: '/tmp/w' })
+    expect(remote.session.create).toHaveBeenLastCalledWith({ cwd: '/tmp/w', harness: 'codex' })
+  })
+
+  it('carries the staged harness onto a preallocated identity the list reports unbound', async ({ mock, remote }) => {
+    remote.session.list.mockResolvedValue(ok({
+      items: [{
+        ...summary(S1),
+        // A Session created before this feature: the fold reports no harness.
+        projections: { asOfSeq: 0, values: { agentHarness: null } },
+      }] as never[],
+    }))
+    remote.session.create.mockResolvedValue(ok({ sessionId: S1 }))
+    const manager = makeManager(mock, remote)
+    await manager.refreshList()
+    manager.stageHarness(CODEX)
+
+    // The host refuses an unnamed create once several harnesses are mounted,
+    // and the log is what it would otherwise route by, so the stage binds it.
+    await manager.create({ cwd: '/tmp/w', sessionId: S1 })
+
+    expect(remote.session.create).toHaveBeenLastCalledWith({ cwd: '/tmp/w', sessionId: S1, harness: 'codex' })
+  })
+
+  it('sends no harness for a preallocated identity it knows is bound to another one', async ({ mock, remote }) => {
+    remote.session.list.mockResolvedValue(ok({
+      items: [{
+        ...summary(S1),
+        projections: { asOfSeq: 4, values: { agentHarness: 'dsh' } },
+      }] as never[],
+    }))
+    remote.session.create.mockResolvedValue(ok({ sessionId: S1 }))
+    const manager = makeManager(mock, remote)
+    await manager.refreshList()
+    manager.stageHarness(CODEX)
+
+    await manager.create({ cwd: '/tmp/w', sessionId: S1 })
+
+    // The record wins: naming the staged harness would make the host refuse a
+    // resume that works today.
+    expect(remote.session.create).toHaveBeenLastCalledWith({ cwd: '/tmp/w', sessionId: S1 })
+  })
+
+  it('prefers an explicit harness and never stages one onto an adopted identity', async ({ mock, remote }) => {
+    remote.session.create.mockResolvedValue(ok({ sessionId: S1 }))
+    const manager = makeManager(mock, remote)
+    manager.stageHarness(CODEX)
+    await manager.create({ cwd: '/tmp/w', harness: DSH })
+    expect(remote.session.create).toHaveBeenLastCalledWith({ cwd: '/tmp/w', harness: 'dsh' })
+    // The stored Session keeps the harness its own log records.
+    await manager.create({ cwd: '/tmp/w', sessionId: S1 })
+    expect(remote.session.create).toHaveBeenLastCalledWith({ cwd: '/tmp/w', sessionId: S1 })
+  })
+
+  it('sends no harness once the stage is cleared', async ({ mock, remote }) => {
+    remote.session.create.mockResolvedValue(ok({ sessionId: S1 }))
+    const manager = makeManager(mock, remote)
+    manager.stageHarness(CODEX)
+    manager.stageHarness(undefined)
+
+    await manager.create({ cwd: '/tmp/w' })
+
+    // A cleared stage must not leave the old id on the request: the host
+    // refuses a harness it no longer mounts.
+    expect(remote.session.create).toHaveBeenLastCalledWith({ cwd: '/tmp/w' })
+  })
+
+  it('omits the harness when no surface staged one', async ({ mock, remote }) => {
+    remote.session.create.mockResolvedValue(ok({ sessionId: S1 }))
+    const manager = makeManager(mock, remote)
+
+    await manager.create({ cwd: '/tmp/w' })
+
+    expect(remote.session.create).toHaveBeenLastCalledWith({ cwd: '/tmp/w' })
   })
 
   it('publishes a real Ungrouped summary from workspace-attach-failed', async ({ mock, remote }) => {

@@ -2,7 +2,8 @@
   - treeitem "{{workspace}}" [expanded]:
     - img
     - text: {{workspace}}
-  - treeitem "Review deepseek-ai/deepseek-harness#314 Session actions for Review deepseek-ai/deepseek-harness#314" [selected]:
+  - treeitem "DSH Loop Review deepseek-ai/deepseek-harness#314 Session actions for Review deepseek-ai/deepseek-harness#314" [selected]:
+    - img "DSH Loop"
     - text: Review deepseek-ai/deepseek-harness#314
     - button "Session actions for Review deepseek-ai/deepseek-harness#314":
       - img
@@ -10,6 +11,7 @@
 ---
 
 - banner:
+  - img "DSH Loop"
   - navigation "Session hierarchy":
     - button "Review deepseek-ai/deepseek-harness#314" [disabled]
   - img

@@ -472,7 +472,9 @@ describe('agent/pre-step', () => {
     expect(() => {
       send(agent, 'blocked prompt')
     }).toThrow('append unavailable')
-    expect(events(agent)).toEqual([])
+    // The failed append is the claimed prompt; the harness record written at
+    // publication is the only event in the log.
+    expect(events(agent).map(event => event.type)).toEqual(['agent/harness'])
     expect(agent.inbox.nextTurn).toEqual([])
     expect(agent.inbox.nextStep).toEqual([])
     expect(agent.status).toBe('idle')

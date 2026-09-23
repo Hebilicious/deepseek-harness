@@ -359,6 +359,11 @@
     - id: ui-agent-preset
       name: '@deepseek-ai/dsh-client-ui-agent-preset'
 
+    # New-session agent-harness picker over the harnesses this deployment
+    # mounts. A deployment that mounts fewer than two renders no control.
+    - id: ui-agent-harness
+      name: '@deepseek-ai/dsh-client-ui-agent-harness'
+
     # Plugin configuration: the host-plane sections a user owns, as expandable
     # cards. A namespace this deployment does not expose renders nothing.
     - id: ui-settings-plugins

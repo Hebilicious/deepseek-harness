@@ -12,13 +12,15 @@ import { isPromise } from 'node:util/types'
 import { scopeTarget } from '@deepseek-ai/dsh-scope'
 import type { Scoped } from '@deepseek-ai/dsh-scope'
 import type { SessionEvent, SessionId, SessionLogOffset } from '@deepseek-ai/dsh-session'
-import type { Agent } from './types.ts'
+import { HarnessId, type Agent, type AgentHarness } from './types.ts'
 import type { AgentOptions, SessionStartSource } from './runtime-types.ts'
 
 export * from './runtime-types.ts'
 export * from './types.ts'
 export type * from './projection.ts'
 export * from './consumed-work.ts'
+export * from './harness.ts'
+import { agentHarnessProjectionDefinition } from './harness.ts'
 export * from './model-selection.ts'
 export { agentCarrier, agentEvents, assembleContextFor, emitAgentEvent } from './dispatch.ts'
 export type { AgentEventDispatch, AgentSubjectEvent } from './dispatch.ts'
@@ -62,6 +64,11 @@ export type AgentSetup = (
 export interface CreateAgentOptions {
   /** The live agent/session identity. */
   readonly sessionId: SessionId
+  /**
+   * Harness that owns this session's agent. Required when the deployment
+   * mounts more than one; a single mounted harness is used when omitted.
+   */
+  readonly harness?: HarnessId
   /** Live parent Agent for runtime ownership; omit for a root Agent. */
   readonly parentAgent?: Agent
   /**
@@ -125,6 +132,11 @@ export interface CreateAgentOptions {
 export interface ResumeAgentOptions {
   /** The persisted session id to load and use as the live agent/session identity. */
   readonly resumeSessionId: SessionId
+  /**
+   * Harness that owns the persisted session, normally read from its durable
+   * header. Required when the deployment mounts more than one harness.
+   */
+  readonly harness?: HarnessId
   /** Live parent Agent for runtime ownership; omit for a root Agent. */
   readonly parentAgent?: Agent
   /** Per-agent options (model, …). */
@@ -162,9 +174,15 @@ export interface AgentHandle {
   dispose(): Promise<void>
 }
 
+/** One harness identity paired with the factory that creates its agents. */
+export interface AgentHarnessRegistration extends AgentHarness {
+  /** The factory that owns create and resume for this harness. */
+  readonly factory: AgentFactory
+}
+
 /**
- * The agent-creation factory the loop implementation provides to the registry
- * via {@link AgentRegistry.setFactory}. Kept on the `dsh-agent` interface so
+ * The agent-creation factory a harness provides to the registry via
+ * {@link AgentRegistry.registerHarness}. Kept on the `dsh-agent` interface so
  * consumers (e.g. the ACP bridge) program against `ctx.agents` without
  * depending on the concrete `dsh-agent-loop` package.
  */
@@ -204,6 +222,10 @@ export interface AgentFactory {
 
 /** Thrown when create/resume is called before an agent factory is registered. */
 const NO_FACTORY_MESSAGE = 'no agent factory registered (load an agent-loop plugin)'
+/** Harness id {@link AgentRegistry.setFactory} registers its single factory under. */
+const DEFAULT_HARNESS_ID = 'dsh'
+/** Display name of the {@link DEFAULT_HARNESS_ID} harness. */
+const DEFAULT_HARNESS_NAME = 'DeepSeek Harness'
 const NO_INITIATOR_MESSAGE = 'no initiating agent is active'
 const DISPOSED_INITIATOR_MESSAGE = 'agent initiator scope is disposed'
 
@@ -228,13 +250,18 @@ interface InitiatorRun {
 /** Plain holder prevents Cordis from tracing the factory field before the caller context is known. */
 interface FactorySlot {
   readonly target: AgentFactory
+  /** Identity this factory registered under. */
+  readonly harness: AgentHarness
 }
 
 /**
  * Agent service (`ctx.agents`): tracks live agents and carries the initiating
  * Agent through one process-local asynchronous driver chain. Agent *creation*
- * is provided by whichever plugin implements the {@link AgentFactory}
- * (`@deepseek-ai/dsh-agent-loop`), registered via {@link setFactory}.
+ * is provided by the plugins that implement the {@link AgentFactory}
+ * (`@deepseek-ai/dsh-agent-loop`, `@deepseek-ai/dsh-agent-codex`, and
+ * `@deepseek-ai/dsh-agent-acp`), each registered under its harness id via
+ * {@link registerHarness}; {@link setFactory} remains for a deployment that
+ * mounts one factory and needs no harness choice.
  *
  * Initiator methods provide same-process causal attribution only. Ambient
  * presence is neither liveness proof nor authorization; subjects and owners
@@ -244,7 +271,7 @@ interface FactorySlot {
  */
 export class AgentRegistry extends Service {
   private store = new Map<SessionId, AgentEntry>()
-  private factory: FactorySlot | undefined
+  private readonly factories = new Map<HarnessId, FactorySlot>()
   private readonly initiators = new AsyncLocalStorage<Agent | undefined>()
   private readonly initiatorRuns = new AsyncLocalStorage<InitiatorRun>()
   private initiatorState: 'active' | 'closing' | 'disposed' = 'active'
@@ -272,6 +299,12 @@ export class AgentRegistry extends Service {
       if (fiber.state === FiberState.UNLOADING && this.hasLifecycleAncestor(fiber)) {
         this.closeInitiators()
       }
+    })
+    // The harness record is read on create, resume, and by session queries
+    // that must route a session back to its owner; register the fold wherever
+    // the projection seam is mounted.
+    ctx.inject(['sessionProjections'], (projectionCtx) => {
+      projectionCtx.sessionProjections.register(agentHarnessProjectionDefinition)
     })
     ctx.effect(function* (this: AgentRegistry) {
       yield () => this.disposeInitiators()
@@ -341,39 +374,91 @@ export class AgentRegistry extends Service {
   }
 
   /**
-   * Register the agent-creation factory (the loop calls this on construction,
-   * effect-scoped). A traced Cordis service is canonicalized to its concrete
-   * target; each create/resume call is then traced through that caller's
-   * context so ownership follows the caller without stacking proxy layers.
-   * Throws if a factory is already registered. Returns the disposer; on
-   * dispose the factory slot is cleared.
-   * @param factory - the loop-owned factory {@link create}/{@link resume} delegate to.
-   * @returns the disposer that clears the factory slot. The exact
+   * Register one harness's agent-creation factory (a driver calls this on
+   * construction, effect-scoped). A traced Cordis service is canonicalized to
+   * its concrete target; each create/resume call is then traced through that
+   * caller's context so ownership follows the caller without stacking proxy
+   * layers. Throws when the id is already registered. Returns the disposer; on
+   * dispose the harness leaves the registry.
+   * @param registration - the harness identity and the factory that owns it.
+   * @returns the disposer that removes the harness. The exact
    *   Cordis effect disposer (single-shot): composite (generator) effects may
    *   yield it directly — exact identity nests the teardown in order.
    */
-  setFactory(factory: AgentFactory): () => void {
+  registerHarness(registration: AgentHarnessRegistration): () => void {
+    const { id, name, description, factory } = registration
+    if (id === '') throw new Error('agent harness id must be a non-empty string')
     const dispose = this.ctx.effect(() => {
-      if (this.factory !== undefined) throw new Error('an agent factory is already registered')
+      if (this.factories.has(id)) throw new Error(`agent harness "${id}" is already registered`)
       // Avoid stacking two Cordis shadow layers when a caller passes a Service
       // already read through a context. Calls are re-traced through their
       // actual owner context below.
       const target = (factory as AgentFactory & { [symbols.original]?: AgentFactory })[symbols.original] ?? factory
-      this.factory = { target }
-      return () => { this.factory = undefined }
-    }, 'agents.setFactory()')
+      this.factories.set(id, {
+        target,
+        harness: { id, name, ...description === undefined ? {} : { description } },
+      })
+      // Deleting by key cannot remove a later registration: a second
+      // registration under this id throws while the slot is present, and this
+      // effect's disposer is single-shot, so no stale disposer can run after a
+      // replacement.
+      return () => { this.factories.delete(id) }
+    }, `agents.registerHarness(${id})`)
     // The exact cordis effect disposer (the agents.register() convention): a
     // caller's composite effect can yield it for in-order teardown; the
-    // loop's constructor effect returns it directly, identity-nesting the
+    // driver's constructor effect returns it directly, identity-nesting the
     // registration under that effect.
     // oxlint-disable-next-line typescript/no-misused-promises -- synchronous cleanup; direct return preserves disposer identity
     return dispose
   }
 
-  /** Return the active creation factory. */
-  private requireFactory(): FactorySlot {
-    if (this.factory === undefined) throw new Error(NO_FACTORY_MESSAGE)
-    return this.factory
+  /**
+   * Register the sole agent-creation factory under the default harness id.
+   * Remains for a deployment whose single factory needs no harness choice;
+   * every in-tree driver registers itself with {@link registerHarness} so that
+   * a session's id and display name are its own.
+   * @param factory - the factory {@link create}/{@link resume} delegate to.
+   * @returns the disposer that removes the harness.
+   */
+  setFactory(factory: AgentFactory): () => void {
+    return this.registerHarness({ id: HarnessId(DEFAULT_HARNESS_ID), name: DEFAULT_HARNESS_NAME, factory })
+  }
+
+  /**
+   * Every harness this process can create sessions with, in registration order.
+   * @returns the harness identities and their display names.
+   */
+  harnesses(): readonly AgentHarness[] {
+    return [...this.factories.values()].map(slot => slot.harness)
+  }
+
+  /**
+   * Resolve the factory for one create/resume call. An explicit id must be
+   * mounted; without one, a single mounted harness is the answer and several
+   * are a loud failure rather than an arbitrary choice.
+   * @param harness - the requested harness id, or `undefined` for the sole mounted harness.
+   * @returns the factory slot that owns the call.
+   */
+  private requireFactory(harness?: HarnessId): FactorySlot {
+    if (harness !== undefined) {
+      const slot = this.factories.get(harness)
+      if (slot === undefined) {
+        throw new Error(`agent harness "${harness}" is not registered (mounted: ${this.mountedHarnessIds()})`)
+      }
+      return slot
+    }
+    if (this.factories.size === 0) throw new Error(NO_FACTORY_MESSAGE)
+    if (this.factories.size === 1) {
+      // oxlint-disable-next-line typescript/no-non-null-assertion -- size checked above
+      return [...this.factories.values()][0]!
+    }
+    throw new Error(`agent creation needs a harness id (mounted: ${this.mountedHarnessIds()})`)
+  }
+
+  /** Comma-joined mounted harness ids for failure messages, or `none`. */
+  private mountedHarnessIds(): string {
+    const ids = [...this.factories.keys()]
+    return ids.length === 0 ? 'none' : ids.join(', ')
   }
 
   /**
@@ -391,7 +476,7 @@ export class AgentRegistry extends Service {
     // explicitly. This preserves AgentLoop's dependency origin while binding
     // its effects to ownerCtx; plain factories receive ownerCtx as an explicit
     // capability and need no Cordis tracker magic.
-    const { target } = this.requireFactory()
+    const { target } = this.requireFactory(options.harness)
     const receiver = getTraceable(ownerCtx, target)
     // oxlint-disable-next-line typescript/unbound-method -- Reflect.apply intentionally supplies the caller-traced receiver
     return Reflect.apply(target.createAgent, receiver, [ownerCtx, options])
@@ -406,7 +491,7 @@ export class AgentRegistry extends Service {
    */
   async resume(options: ResumeAgentOptions): Promise<AgentHandle> {
     const ownerCtx = this.ctx
-    const { target } = this.requireFactory()
+    const { target } = this.requireFactory(options.harness)
     const receiver = getTraceable(ownerCtx, target)
     // oxlint-disable-next-line typescript/unbound-method -- Reflect.apply intentionally supplies the caller-traced receiver
     return Reflect.apply(target.resume, receiver, [ownerCtx, options])

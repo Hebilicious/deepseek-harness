@@ -10,6 +10,9 @@ export const Config = z.object({
   workspacePath: z.string().required(),
   agentPreset: z.string().required(),
   permissionPreset: z.string().required(),
+  // The shipped web profile mounts several harnesses, so a delivery names the
+  // one its review sessions run.
+  harness: z.string().default('dsh'),
 })
 
 export function apply(ctx, config) {
@@ -48,6 +51,7 @@ export function apply(ctx, config) {
         workspacePath: config.workspacePath,
         agentPreset: config.agentPreset,
         permissionPreset: config.permissionPreset,
+        harness: config.harness,
         title: `Review ${payload.repository.full_name}#${payload.number}`,
         prompt: [
           `Review GitHub PR #${payload.number} at exact head SHA ${pr.head?.sha}.`,

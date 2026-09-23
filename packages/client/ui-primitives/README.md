@@ -44,6 +44,8 @@ Check this table before writing a control in a feature package. A plugin cannot 
 | `Pill` | Selectable capsule button for view switchers and filters; takes `active` and `onClick`. |
 | `Tag` | Read-only capsule badge; `tone` selects one of eight palettes. |
 | `StateDot` | Status mark: `done`, `warning`, `ongoing`, `error`, or `idle`. `aria-hidden`, so the render site owns the name. |
+| `HarnessBadge` | Mark of the agent harness that owns a session: the official symbol of every harness this repository ships an entry for, drawn from the published geometry in the current label color. A harness with no published symbol (Devin today) falls back to a two-character monogram tile, and `harnessMark(id)` exposes that fallback. `role="img"` labelled by the harness name. |
+| `HARNESS_LOGOS` | The harness symbols by id: source viewBox and shapes, verbatim from the files recorded in [`harness-logo-artwork.manifest.json`](src/harness-logo-artwork.manifest.json). Trademarks belong to their owners and identify the harness a session runs. |
 | `ConnectionIndicator` | Inline connection-recovery control across outage, retry, and recovered states. |
 | `DisclosureRow` | 24px compact disclosure that lays title and content side by side. |
 | `Modal` | Centered dialog over a page mask. |

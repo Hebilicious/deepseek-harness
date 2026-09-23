@@ -48,7 +48,7 @@ interface AgentHandle {
 
 `CreateAgentOptions` carries the shared identity and everything a fresh agent needs before publication: an optional live `parentAgent`, session metadata (`meta` — validated `cwd`, fork lineage, the `isSeeded` marker, origin classification, delegation depth, and `agentPreset`), the exact fork cut in sibling field `inheritedEventCount`, an optional `seed` replay prefix, per-agent `AgentOptions`, a creation-only cancellation `signal`, and `setup`. `ResumeAgentOptions` is the persisted-identity counterpart: `resumeSessionId`, `parentAgent`, `agentOptions`, `signal`, and `setup`. The `setup` callback (`AgentSetup`) receives `(agentCtx, agent)` while both ids are still unpublished: the context owns scoped registrations, while the explicit Agent supplies the exact child Session without a reverse property on the Context. Everything registered through `agentCtx` exists before `agent/created` and the first prompt assembly. Setup may return a synchronous commit invoked immediately before publication; a setup rejection, commit throw, or owner disposal rolls the transaction back without publishing either id.
 
-`AgentFactory` is the creation interface behind the registry: the loop registers its factory via `ctx.agents.setFactory()`, so consumers use `ctx.agents` without depending on the concrete loop package. A runtime child creator sets `options.parentAgent`; the registry passes the options and caller Context to the factory without deriving one from the other. The exact `create`/`resume` signatures and rollback contracts are in the [generated section](#ctxagents--agentregistry) below.
+`AgentFactory` is the creation interface behind the registry: a driver registers one harness with `ctx.agents.registerHarness({ id, name, factory })`, and the in-process loop registers the built-in `dsh` harness the same way, so consumers use `ctx.agents` without depending on a concrete driver package. A deployment may mount several harnesses at once and name one per `create`/`resume`; each session records the harness that owns it as an `agent/harness` event, and resume routes through that record so a conversation is never continued by a second harness. A runtime child creator sets `options.parentAgent`; the registry passes the options and caller Context to the factory without deriving one from the other. The exact `create`/`resume` signatures and rollback contracts are in the [generated section](#ctxagents--agentregistry) below.
 
 ## The agent handle
 
@@ -417,6 +417,42 @@ The two core IDs are `ToolCallId` (correlates a tool call with its result; dsh-l
 
 Generated from source by `scripts/gen-cordis-catalog.ts` (verified fresh by `pnpm run verify-cordis-catalog` in doc-sync; regenerate with `pnpm run gen-cordis-catalog`) — the language sides differ only in locale-specific paired document paths. Signature blocks use a `ts cordis-catalog` fence and keep the original source JSDoc; dispatch modes are defined in the [primer](../cordis-primer.md#dispatch-modes), and the framework-inherited `ctx` API lives in [cordis-api/inherited.md](../cordis-api/inherited.md).
 
+<a id="ctxacpharness--acpharness"></a>
+
+### `ctx.acpHarness` — `AcpHarness`
+
+The `acpHarness` service (`acp` Remote namespace). Owns one ACP runtime, one agent-factory host, and one catalog adapter per configured harness, plus every auth operation — none of which belong to a session.
+
+```ts cordis-catalog
+/**
+ * Read one harness's account state: the agent's advertised auth methods
+ * plus the harness's own auth-status CLI verdict.
+ * @param request - `{harness}` naming a mounted harness.
+ * @param signal - caller lifetime.
+ * @returns normalized account facts.
+ */
+@Remote async status(request: { harness: string }, signal: AbortSignal): Promise<AcpAccountSnapshot>
+
+/**
+ * Start one harness's browser authentication flow (`devin-browser` on
+ * Devin). A harness that has not connected yet is connected first, because
+ * only its agent's initialize response names the method to start.
+ * @param request - `{harness, methodId}`; the method defaults to the first one the harness advertised.
+ * @param signal - caller lifetime.
+ */
+@Remote('login') async login(request: { harness: string; methodId?: string }, signal: AbortSignal): Promise<void>
+
+/**
+ * Sign one harness's account out — the ACP `logout` request when the agent
+ * advertises it, the harness's auth-logout CLI otherwise.
+ * @param request - `{harness}` naming a mounted harness.
+ * @param signal - caller lifetime.
+ */
+@Remote async logout(request: { harness: string }, signal: AbortSignal): Promise<void>
+```
+
+Source: [`packages/core/agent-acp/src/index.ts`](../../packages/core/agent-acp/src/index.ts)
+
 <a id="ctxagentdefaultmodel--agentdefaultmodelconfig"></a>
 
 ### `ctx.agentDefaultModel` — `AgentDefaultModelConfig`
@@ -449,10 +485,7 @@ Concrete agent factory and driver service.
 
 ```ts cordis-catalog
 /**
- * Create an agent and session under one caller-supplied identity, owned by
- * the accessing fiber. Constructor-driven config calls mint a fresh combined
- * id before entering this boundary. When a persistence backend is mounted,
- * the session's durable identity and any seed are stored before publication.
+ * Create and publish a fresh agent around a caller-supplied session id.
  * @param id - shared agent/session identity.
  * @param options - concrete loop options.
  * @param meta - optional fresh-session workspace metadata.
@@ -461,7 +494,9 @@ Concrete agent factory and driver service.
 async create(id: SessionId, options: AgentOptions = {}, meta: Pick<SessionHeader, 'cwd'> = {}): Promise<Agent>
 
 /**
- * Create an owned agent on a caller-supplied session id.
+ * Create an owned agent on a caller-supplied session id. The registered
+ * factory is the shared host; this delegate keeps the service's published
+ * {@link AgentFactory} surface identical to it.
  * @param ownerCtx - caller context that structurally owns the lifecycle.
  * @param options - identities, optional live parent, session seed/metadata, loop options, setup, and cancellation.
  * @returns the published handle.
@@ -469,7 +504,9 @@ async create(id: SessionId, options: AgentOptions = {}, meta: Pick<SessionHeader
 async createAgent(ownerCtx: Context, options: CreateAgentOptions): Promise<AgentHandle>
 
 /**
- * Resume an owned agent from the configured persistence service.
+ * Resume an owned agent from the configured persistence service. The
+ * registered factory is the shared host; this delegate keeps the service's
+ * published {@link AgentFactory} surface identical to it.
  * @param ownerCtx - caller context that owns load, setup, and the live lifecycle.
  * @param options - persisted identity, optional live parent, loop options, setup, and cancellation.
  * @returns the published handle.
@@ -728,7 +765,7 @@ Source: [`packages/preset/agent-presets/src/index.ts`](../../packages/preset/age
 
 ### `ctx.agents` — `AgentRegistry`
 
-Agent service (`ctx.agents`): tracks live agents and carries the initiating Agent through one process-local asynchronous driver chain. Agent *creation* is provided by whichever plugin implements the AgentFactory (`@deepseek-ai/dsh-agent-loop`), registered via setFactory.
+Agent service (`ctx.agents`): tracks live agents and carries the initiating Agent through one process-local asynchronous driver chain. Agent *creation* is provided by the plugins that implement the AgentFactory (`@deepseek-ai/dsh-agent-loop`, `@deepseek-ai/dsh-agent-codex`, and `@deepseek-ai/dsh-agent-acp`), each registered under its harness id via registerHarness; setFactory remains for a deployment that mounts one factory and needs no harness choice.
 
 Initiator methods provide same-process causal attribution only. Ambient presence is neither liveness proof nor authorization; subjects and owners remain explicit, as does identity at worker, process, persistence, and wire boundaries. Returned Promise boundaries drain during teardown, except a nested lineage that starts an owning-fiber unload is excluded from its own drain.
 
@@ -784,18 +821,34 @@ withInitiator<T>(agent: Agent, operation: () => T): T
 withoutInitiator<T>(operation: () => T): T
 
 /**
- * Register the agent-creation factory (the loop calls this on construction,
- * effect-scoped). A traced Cordis service is canonicalized to its concrete
- * target; each create/resume call is then traced through that caller's
- * context so ownership follows the caller without stacking proxy layers.
- * Throws if a factory is already registered. Returns the disposer; on
- * dispose the factory slot is cleared.
- * @param factory - the loop-owned factory {@link create}/{@link resume} delegate to.
- * @returns the disposer that clears the factory slot. The exact
+ * Register one harness's agent-creation factory (a driver calls this on
+ * construction, effect-scoped). A traced Cordis service is canonicalized to
+ * its concrete target; each create/resume call is then traced through that
+ * caller's context so ownership follows the caller without stacking proxy
+ * layers. Throws when the id is already registered. Returns the disposer; on
+ * dispose the harness leaves the registry.
+ * @param registration - the harness identity and the factory that owns it.
+ * @returns the disposer that removes the harness. The exact
  *   Cordis effect disposer (single-shot): composite (generator) effects may
  *   yield it directly — exact identity nests the teardown in order.
  */
+registerHarness(registration: AgentHarnessRegistration): () => void
+
+/**
+ * Register the sole agent-creation factory under the default harness id.
+ * Remains for a deployment whose single factory needs no harness choice;
+ * every in-tree driver registers itself with {@link registerHarness} so that
+ * a session's id and display name are its own.
+ * @param factory - the factory {@link create}/{@link resume} delegate to.
+ * @returns the disposer that removes the harness.
+ */
 setFactory(factory: AgentFactory): () => void
+
+/**
+ * Every harness this process can create sessions with, in registration order.
+ * @returns the harness identities and their display names.
+ */
+harnesses(): readonly AgentHarness[]
 
 /**
  * Create and publish a new agent through the registered factory.
@@ -900,6 +953,72 @@ roots(): Agent[]
 ```
 
 Source: [`packages/core/agent/src/index.ts`](../../packages/core/agent/src/index.ts)
+
+<a id="ctxcodexappserver--codexappserver"></a>
+
+### `ctx.codexAppServer` — `CodexAppServer`
+
+The `codexAppServer` service (`codex` Remote namespace). Owns one app-server runtime, one agent-factory host, and one catalog adapter per configured instance, plus every account/login/rate-limit operation — none of which belong to a session.
+
+```ts cordis-catalog
+/**
+ * Read one instance's Codex account state.
+ * @param request - `{harness}` naming a mounted instance.
+ * @param signal - caller lifetime.
+ * @returns normalized account facts.
+ */
+@Remote async status(request: { harness: string }, signal: AbortSignal): Promise<CodexAccountSnapshot>
+
+/**
+ * Start a device-code login; the panel shows the URL and code.
+ * @param request - `{harness}` naming a mounted instance.
+ * @param signal - caller lifetime.
+ * @returns the attempt id, verification URL, and one-time code.
+ */
+@Remote('loginDeviceCode') async beginDeviceCode(request: { harness: string }, signal: AbortSignal): Promise<CodexDeviceCodeLogin>
+
+/**
+ * Start a browser OAuth login; usable only where a browser can reach the
+ * app-server's localhost callback.
+ * @param request - `{harness}` naming a mounted instance.
+ * @param signal - caller lifetime.
+ * @returns the attempt id and authorization URL.
+ */
+@Remote('loginBrowser') async beginBrowser(request: { harness: string }, signal: AbortSignal): Promise<CodexBrowserLogin>
+
+/**
+ * Cancel one in-flight login attempt.
+ * @param request - `{harness, loginId}`; the id comes from a login start.
+ * @param signal - caller lifetime.
+ */
+@Remote('cancelLogin') async cancelLogin(request: { harness: string; loginId?: string }, signal: AbortSignal): Promise<void>
+
+/**
+ * Sign one instance's Codex account out.
+ * @param request - `{harness}` naming a mounted instance.
+ * @param signal - caller lifetime.
+ */
+@Remote async logout(request: { harness: string }, signal: AbortSignal): Promise<void>
+
+/**
+ * Read one instance's account quota.
+ * @param request - `{harness}` naming a mounted instance.
+ * @param signal - caller lifetime.
+ * @returns the normalized rate-limit payload.
+ */
+@Remote async rateLimits(request: { harness: string }, signal: AbortSignal): Promise<CodexRateLimits>
+
+/**
+ * Stream one instance's account notifications
+ * (`account/login/completed`, `account/updated`, `account/rateLimits/updated`).
+ * @param request - `{harness}` naming a mounted instance.
+ * @param signal - caller lifetime; aborting ends the stream.
+ * @returns account notifications as they arrive.
+ */
+@Remote({ mode: 'stream' }) async *events(request: { harness: string }, signal: AbortSignal): AsyncIterable<CodexAccountNotification>
+```
+
+Source: [`packages/core/agent-codex/src/index.ts`](../../packages/core/agent-codex/src/index.ts)
 
 <a id="agent-events"></a>
 

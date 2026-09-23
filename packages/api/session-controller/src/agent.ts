@@ -2,7 +2,7 @@
 
 import { mkdir } from 'node:fs/promises'
 import type { Context } from '@deepseek-ai/cordis'
-import { installModelSelection } from '@deepseek-ai/dsh-agent'
+import { HarnessId, agentHarnessOf, installModelSelection, recordedHarness } from '@deepseek-ai/dsh-agent'
 import type {
   Agent, AgentOptions, AgentSetup, ModelSelection as AgentModelSelection, ModelSelectionRef,
 } from '@deepseek-ai/dsh-agent'
@@ -12,7 +12,7 @@ import { ReasoningEffortId } from '@deepseek-ai/dsh-llm'
 import type { Session, SessionId } from '@deepseek-ai/dsh-session'
 import type { SessionInspection } from '@deepseek-ai/dsh-session-persistence'
 import { SessionQueryError, type SessionObservation } from '@deepseek-ai/dsh-session-query'
-import { RemoteError } from '@deepseek-ai/dsh-typert-protocol'
+import { RemoteError, remoteErrorOf } from '@deepseek-ai/dsh-typert-protocol'
 import type {} from '@deepseek-ai/dsh-typert-registry'
 import type { ModelSelection } from './types.ts'
 
@@ -57,8 +57,31 @@ export class ApiSessionPresetConflict extends Error {
   }
 }
 
+/** Raised when a request names a harness other than the one a stored session records. */
+export class ApiSessionHarnessConflict extends Error {
+  /**
+   * @param sessionId - the session whose recorded harness wins.
+   * @param requestedHarness - harness the caller asked for.
+   * @param recordedHarness - harness the session's log records.
+   */
+  constructor(
+    readonly sessionId: SessionId,
+    readonly requestedHarness: HarnessId,
+    readonly recordedHarness: HarnessId,
+  ) {
+    super(`session "${sessionId}" runs agent harness "${recordedHarness}", not "${requestedHarness}"`)
+  }
+}
+
 /** Failures produced while resolving one ordinary Session identity to its live Agent. */
-export type ApiSessionAgentError = RemoteError<'session/not-found' | 'session/agent-busy' | 'session/writer-held' | 'gateway/internal'>
+export type ApiSessionAgentError = RemoteError<
+  | 'session/not-found'
+  | 'session/agent-busy'
+  | 'session/writer-held'
+  | 'session/harness-unavailable'
+  | 'gateway/bad-request'
+  | 'gateway/internal'
+>
 
 /** Result of resolving one ordinary Session identity to its live Agent. */
 export type ApiSessionAgentResult =
@@ -218,6 +241,22 @@ export class ApiSessionAgentController {
       if (error instanceof Error && error.name === 'SessionAlreadyOwnedError') {
         return { error: new RemoteError('session/writer-held', error.message, { sessionId }) }
       }
+      // A typed failure raised by this controller or the registry keeps its
+      // code and details: the client renders an unmounted or conflicting
+      // harness differently from an internal fault.
+      const typed = remoteErrorOf(error)
+      if (typed !== undefined) {
+        // The codes this path can actually raise: an unmounted recorded
+        // harness, and the refusal to resume a session that records none while
+        // the deployment mounts several. Anything else stays internal.
+        switch (typed.code) {
+          case 'session/harness-unavailable':
+          case 'gateway/bad-request':
+            return { error: new RemoteError(typed.code, typed.message, typed.details) }
+          default:
+            break
+        }
+      }
       return {
         error: new RemoteError(
           'gateway/internal',
@@ -234,6 +273,7 @@ export class ApiSessionAgentController {
    * @param cwd - directory the Session must own.
    * @param checkPersistedIdentity - whether to inspect a cold identity before creation.
    * @param presetId - optional Agent preset the Session must own.
+   * @param harness - optional Agent harness requested for a new Session.
    * @returns the matching live ordinary Agent.
    */
   async ensureSession(
@@ -241,10 +281,11 @@ export class ApiSessionAgentController {
     cwd: string,
     checkPersistedIdentity: boolean,
     presetId?: string,
+    harness?: HarnessId,
   ): Promise<Agent> {
     let creation = this.creations.get(sessionId)
     if (creation === undefined) {
-      creation = this.createOrAdopt(sessionId, cwd, checkPersistedIdentity, presetId)
+      creation = this.createOrAdopt(sessionId, cwd, checkPersistedIdentity, presetId, harness)
         .catch((error: unknown) => {
           const live = this.ctx.agents.get(sessionId)
           if (live !== undefined) {
@@ -268,6 +309,12 @@ export class ApiSessionAgentController {
     }
     if (presetId !== undefined) {
       this.assertPresetUnchanged(sessionId, presetId, this.presetForSession(agent.session))
+    }
+    if (harness !== undefined) {
+      // A live or concurrently created agent resolves without the persisted
+      // checks above, so the harness is verified on the resolution result too.
+      const recorded = agentHarnessOf(this.ctx.sessionProjections, agent.session)
+      this.assertHarnessUnchanged(sessionId, harness, recorded === undefined ? undefined : HarnessId(recorded))
     }
     if (agent.session.header.cwd !== cwd) {
       throw new ApiSessionCwdConflict(sessionId, cwd, agent.session.header.cwd)
@@ -434,11 +481,48 @@ export class ApiSessionAgentController {
     if (published !== undefined && hasApiSessionSubagentOwner(this.ctx, published, live)) {
       throw new ApiSessionSubagentOwnership(sessionId)
     }
+    const recorded = recordedHarness(observation.events)
+    this.assertHarnessMounted(recorded)
+    if (recorded === undefined && this.ctx.agents.harnesses().length > 1) {
+      throw new RemoteError(
+        'gateway/bad-request',
+        `session "${sessionId}" records no agent harness and this deployment mounts ${this.ctx.agents.harnesses().map(entry => entry.id).join(', ')}; adopt it through session.create with a harness id`,
+        {},
+      )
+    }
     return (await this.ctx.agents.resume({
       resumeSessionId: sessionId,
+      ...recorded === undefined ? {} : { harness: recorded },
       agentOptions: this.agentOptions(),
       setup: composition.setup,
     })).agent
+  }
+
+  /**
+   * Refuse a request that names a harness other than the one a stored session
+   * already records: one conversation is never handed to a second harness.
+   */
+  private assertHarnessUnchanged(
+    sessionId: SessionId,
+    requested: HarnessId | undefined,
+    stored: HarnessId | undefined,
+  ): void {
+    if (requested === undefined || stored === undefined || requested === stored) return
+    throw new ApiSessionHarnessConflict(sessionId, requested, stored)
+  }
+
+  /**
+   * Refuse a session whose recorded harness is not mounted here, naming what
+   * this deployment can run instead of failing later inside a factory.
+   */
+  private assertHarnessMounted(harness: HarnessId | undefined): void {
+    if (harness === undefined) return
+    const mounted = this.ctx.agents.harnesses().map(entry => entry.id)
+    if (mounted.includes(harness)) return
+    throw new RemoteError('session/harness-unavailable', `agent harness "${harness}" is not mounted (available: ${mounted.join(', ') || 'none'})`, {
+      harness,
+      available: mounted,
+    })
   }
 
   private async createOrAdopt(
@@ -446,6 +530,7 @@ export class ApiSessionAgentController {
     cwd: string,
     checkPersistedIdentity: boolean,
     presetId: string | undefined,
+    harness: HarnessId | undefined,
   ): Promise<Agent> {
     const attached = this.ctx.sessions.get(sessionId)
     const live = this.ctx.agents.get(sessionId)
@@ -465,9 +550,17 @@ export class ApiSessionAgentController {
         }
         const storedPreset = this.presetForObservation(observation)
         this.assertPresetUnchanged(sessionId, presetId, storedPreset)
+        const recorded = recordedHarness(observation.events)
+        this.assertHarnessUnchanged(sessionId, harness, recorded)
         const composition = await this.composeAgent(storedPreset)
+        // A session whose log records no harness predates the record: the
+        // request may bind it to one, and the owning factory records that
+        // binding before publication.
+        const storedHarness = recorded ?? harness
+        this.assertHarnessMounted(storedHarness)
         return (await this.ctx.agents.resume({
           resumeSessionId: sessionId,
+          ...storedHarness === undefined ? {} : { harness: storedHarness },
           agentOptions: this.agentOptions(),
           setup: composition.setup,
         })).agent
@@ -482,9 +575,18 @@ export class ApiSessionAgentController {
     } catch (error: unknown) {
       throw new Error(`failed to ensure project directory "${cwd}": ${String(error)}`, { cause: error })
     }
+    this.assertHarnessMounted(harness)
+    if (harness === undefined && this.ctx.agents.harnesses().length > 1) {
+      throw new RemoteError(
+        'gateway/bad-request',
+        `session.create needs a harness id (mounted: ${this.ctx.agents.harnesses().map(entry => entry.id).join(', ')})`,
+        {},
+      )
+    }
     const composition = await this.composeAgent(presetId)
     return (await this.ctx.agents.create({
       sessionId,
+      ...harness === undefined ? {} : { harness },
       agentOptions: this.agentOptions(),
       meta: {
         cwd,

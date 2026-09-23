@@ -822,6 +822,12 @@ inspect( sessionId: SessionId, signal?: AbortSignal, ): Promise<SessionInspectio
 @Remote('modelCatalog') modelCatalog(): Promise<ModelCatalog>
 
 /**
+ * Describe every agent harness this deployment can create sessions with.
+ * @returns the mounted harnesses, in registration order.
+ */
+@Remote('harnessCatalog') harnessCatalog(): SessionHarnessCatalog
+
+/**
  * Fetch every adapter's model catalog again, then describe the result. This is
  * the explicit refresh a selector offers for models published since this
  * process started; an adapter whose catalog has no external source answers

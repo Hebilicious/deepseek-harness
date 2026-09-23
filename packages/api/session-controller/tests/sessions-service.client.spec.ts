@@ -2,6 +2,7 @@
 import { Context } from '@deepseek-ai/cordis'
 import { describe, expect, vi } from 'vitest'
 import type { SessionId } from '@deepseek-ai/dsh-api-remotes/client'
+import type { HarnessId } from '@deepseek-ai/dsh-agent/types'
 import type { SessionReference } from '../src/client/contract/sessions.ts'
 import { RemoteError } from '@deepseek-ai/dsh-typert-protocol'
 import { LlmAttemptId } from '@deepseek-ai/dsh-llm'
@@ -17,6 +18,7 @@ import type {
 import { FOLLOW, err, followScript, sessionWorld } from './remote/session.client.ts'
 
 const sid = (s: string): SessionId => s as SessionId
+const HID = 'codex' as HarnessId
 /** ClientSessions uses the Gateway client for stream supervision and the native Remote mocks for responses. */
 const API_ROSTER = webApp.closure(['@deepseek-ai/dsh-api-gateway'])
 /** The first client boot pays the cold module transform of the api cone. */
@@ -833,6 +835,18 @@ describe('create', () => {
     expect(failure).toMatchObject({
       requestedSessionId: 'candidate',
       rpcError: { code: 'gateway/internal', message: '爆了' },
+    })
+  })
+
+  it('stages a harness the next created Session carries', async ({ bench }) => {
+    const b = bench()
+    b.mock.remote.session.create.mockResolvedValue(ok({ sessionId: sid('staged') }))
+
+    b.svc.stageHarness(HID)
+    await b.svc.create({ workspaceId: 'ws' as never })
+
+    expect(b.mock.remote.session.create).toHaveBeenCalledExactlyOnceWith({
+      workspaceId: 'ws', harness: HID,
     })
   })
 

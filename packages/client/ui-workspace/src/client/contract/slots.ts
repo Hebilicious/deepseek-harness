@@ -28,6 +28,7 @@ import type { HostObservable, PropsHooks, PropsLocale, PropsRenderSlots, PropsRu
 import type {} from '@deepseek-ai/dsh-client-ui-sidebar/client'
 import type {} from '@deepseek-ai/dsh-client-ui-conversation/client'
 import type { SessionSearchResultItem } from '@deepseek-ai/dsh-api-session-controller/client'
+import type { SessionHarnessOption } from '@deepseek-ai/dsh-api-session-controller/types'
 import type { RemoteHostFacts } from '@deepseek-ai/dsh-api-remotes/client'
 import type { WorkspaceId, WorkspaceView } from '@deepseek-ai/dsh-api-workspace-controller/client'
 import type { SessionId } from '@deepseek-ai/dsh-session/types'
@@ -96,6 +97,12 @@ export type WorkspaceBrowserInjected = {
      * saw. Select the field the surface needs (`info => info.home`).
      */
     hostInfo: HostObservable<RemoteHostFacts>
+    /**
+     * Mounted harnesses as the Host reports them, read once per connection
+     * generation. Session rows badge the harness their own record names and
+     * label it with this entry's name; empty, they label it with the id.
+     */
+    harnessCatalog: HostObservable<readonly SessionHarnessOption[]>
   }
   /**
    * Start a New Session in a Workspace: reuse-or-create its blank session and

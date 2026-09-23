@@ -10,6 +10,7 @@
  */
 
 import type { Context } from '@deepseek-ai/cordis'
+import { harnessOwning } from '@deepseek-ai/dsh-agent'
 import type {
   Agent,
   AgentHandle,
@@ -630,9 +631,16 @@ export class ContinuableActivationRegistry {
       applyChildComposition(childCtx, parent, inputs.composition)
     }
     const observer = this.observeActivation(provider, childId, parent)
+    // A continuable child belongs to the harness that owns its parent's
+    // session, fresh or resumed, so one read serves both materializations. A
+    // parent recording none leaves the option absent: the host then resolves
+    // its sole mounted harness or refuses with its own message.
+    const harness = harnessOwning(this.ownerCtx, parent.session)
+    const inheritedHarness = harness === undefined ? {} : { harness }
     const handle: AgentHandle = create === undefined
       ? await this.ownerCtx.agents.resume({
         resumeSessionId: childId,
+        ...inheritedHarness,
         parentAgent: parent,
         agentOptions: inputs.agentOptions,
         signal: inputs.signal,
@@ -640,6 +648,7 @@ export class ContinuableActivationRegistry {
       })
       : await this.ownerCtx.agents.create({
         sessionId: childId,
+        ...inheritedHarness,
         parentAgent: parent,
         meta: create.meta,
         ...(create.seed === undefined ? {} : { seed: create.seed }),

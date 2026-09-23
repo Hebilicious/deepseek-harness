@@ -1,0 +1,87 @@
+# The dsh-web-harnesses bundle patch: one browser surface where the session
+# picker chooses which agent harness runs each new session. Applied after
+# dsh-base and dsh-web-app; the profile's own cordis.patch.yml and any
+# --patch overlays still come after.
+#
+# Unlike the single-harness bundles, the in-process loop stays mounted: it is
+# the `dsh` harness the picker offers beside the external ones. Each harness
+# registers its own factory with `ctx.agents.registerHarness`, so several
+# coexist in one process; the chosen id is recorded on the session and resume
+# routes back to it.
+
+# A deployment default model would belong to one harness's catalog route, so
+# this bundle ships none: each harness applies its own default until a session
+# records a `model/selection`, and the picker drives that choice per session.
+- id: agent-default-model
+  config:
+    provider: ''
+    model: ''
+
+# The first-prompt title provider resolves the session's logged route, which
+# is a catalog-only entry for external harnesses. Pin the title request to the
+# DeepSeek route the base layer mounts.
+- id: session-title-llm
+  config:
+    provider: deepseek-official
+    model: deepseek-flash
+    targetWords: 5
+    targetCjkCharacters: 10
+    maxInputBytes: 4096
+    maxOutputTokens: 64
+    timeoutMs: 60000
+
+- insert:
+    # One app-server per configured instance; this profile mounts one Codex
+    # account, and every Codex session binds its own thread on that process.
+    # `codexHome` owns auth, config.toml, MCP, and hooks.
+    - id: agent-codex
+      name: '@deepseek-ai/dsh-agent-codex'
+      config:
+        harnesses:
+          - id: codex
+            name: Codex
+            description: OpenAI Codex runs the session through codex app-server
+
+    # One process per configured ACP harness, spawned lazily on that
+    # harness's first session. Each harness owns its own auth and config.
+    - id: agent-acp
+      name: '@deepseek-ai/dsh-agent-acp'
+      config:
+        harnesses:
+          - id: devin
+            name: Devin
+            description: Cognition Devin runs the session over the Agent Client Protocol
+            executable: devin
+            args: ['acp']
+            model: ''
+          - id: grok
+            name: Grok Build
+            description: xAI Grok Build runs the session over the Agent Client Protocol
+            executable: grok
+            args: ['agent', '--no-leader', 'stdio']
+          - id: opencode
+            name: opencode
+            description: opencode runs the session over the Agent Client Protocol
+            executable: opencode
+            args: ['acp']
+          # Claude Code has no ACP mode of its own, so this entry runs Zed's
+          # adapter, which drives the `claude` CLI underneath. `npx` resolves
+          # the adapter on first use; a machine that installs it globally can
+          # replace both fields with `executable: claude-code-acp` and no args.
+          # The adapter reports authorization through its ACP methods, so both
+          # CLI verb lists are empty, and the `claude` binary must be on PATH.
+          - id: claude
+            name: Claude Code
+            description: Anthropic Claude Code runs the session over the Agent Client Protocol
+            executable: npx
+            args: ['-y', '@zed-industries/claude-code-acp@0.16.2']
+            authStatusArgs: []
+            authLogoutArgs: []
+          # mimocode installs its launcher outside the usual bin directories
+          # (for example `~/.mimocode/bin/mimo`), so this entry needs that
+          # directory on the serving process PATH or an absolute path here.
+          - id: mimo
+            name: mimocode
+            description: mimocode runs the session over the Agent Client Protocol
+            executable: mimo
+            args: ['acp']

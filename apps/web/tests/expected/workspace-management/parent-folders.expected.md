@@ -5,7 +5,9 @@
   - treeitem "project-two" [expanded]:
     - img
     - text: project-two
-  - treeitem "New Session" [selected]
+  - treeitem "DSH Loop New Session" [selected]:
+    - img "DSH Loop"
+    - text: New Session
   - treeitem "project-one" [expanded]:
     - img
     - text: project-one

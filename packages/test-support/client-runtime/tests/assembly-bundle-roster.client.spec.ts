@@ -9,7 +9,13 @@ import { WEB_PROFILE_BUNDLES, bundleRoster, webApp } from '../src/assembly/bundl
 
 describe('webApp (the real web profile)', () => {
   it('composes dsh-base then dsh-web-app: unique names, inject edges on roster rows or platform seed words', () => {
-    expect(WEB_PROFILE_BUNDLES).toEqual(['@deepseek-ai/dsh-base', '@deepseek-ai/dsh-web-app'])
+    // The shipped web profile stacks base, the web app, and the harnesses
+    // bundle; the roster must compose the profile the launcher composes.
+    expect(WEB_PROFILE_BUNDLES).toEqual([
+      '@deepseek-ai/dsh-base',
+      '@deepseek-ai/dsh-web-app',
+      '@deepseek-ai/dsh-web-harnesses',
+    ])
     const names = webApp.rows.map(row => row.name)
     expect(new Set(names).size).toBe(names.length)
     const known = new Set([...names, ...Object.keys(getStaticModules())])

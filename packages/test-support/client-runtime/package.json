@@ -23,6 +23,7 @@
   },
   "license": "MIT",
   "dependencies": {
+    "@deepseek-ai/dsh-web-harnesses": "workspace:^",
     "@testing-library/dom": "^10.4.1",
     "@testing-library/react": "^16.3.2",
     "js-yaml": "^4.2.0",
@@ -83,6 +84,7 @@
     "@deepseek-ai/dsh-subagent": "workspace:^",
     "@deepseek-ai/dsh-typert-protocol": "workspace:^",
     "@deepseek-ai/dsh-web-app": "workspace:^",
+    "@deepseek-ai/dsh-web-harnesses": "workspace:^",
     "@types/js-yaml": "^4.0.9",
     "@types/react": "~18.3.1",
     "@types/react-dom": "~18.3.0",

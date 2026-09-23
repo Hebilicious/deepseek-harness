@@ -67,7 +67,11 @@ Set `stdio.control: 'pipe'` to receive a separate raw `Duplex` in `handle.contro
 
 ### Managing process lifetime
 
-Termination and waiting use one provider-managed range. `terminate()` starts the provider's documented procedure, is idempotent, and becomes a no-op after that range is empty; the request's abort signal starts the same procedure. `waitForExit()` observes the same range and resolves only after the provider proves it quiescent, so direct command completion does not hide a surviving descendant. It rejects when the selected owner can no longer prove quiescence. Providers document their native owners and weaker fallbacks; callers own deadlines, teardown ladders, and cause classification.
+Termination and waiting use one provider-managed range. `terminate()` starts the provider's documented procedure, is idempotent, and becomes a no-op after that range is empty; the request's abort signal starts the same procedure. `waitForExit()` observes the same range and resolves only after the provider proves it quiescent, so direct command completion does not hide a surviving descendant. It rejects when the selected owner can no longer prove quiescence. Providers document their native owners and weaker fallbacks; the shared ladder below covers the common stdin-EOF cooperation, while a child that quiesces differently keeps its cooperation order and cause classification with its caller.
+
+### Disposing a child process
+
+`disposeSubprocessChild(handle, eofGraceMs)` applies the seam's cooperative teardown ladder: it closes stdin, waits one EOF grace for the managed range to drain (the child's window to flush persistence and reap its own descendants), and, when that grace expires with the range still non-empty, terminates the range and awaits its whole-range exit again. It rejects with the single tier failure, or with an `AggregateError` listing every tier failure in observation order. Use it for a child that leaves on stdin EOF; a child with a different cooperation order needs its own ladder over `terminate()` and `waitForExit()`.
 
 ### Running a terminal session
 
@@ -95,7 +99,7 @@ This section explains the design decisions behind the seam and points at the cod
 
 ### Design concept
 
-The seam is built on one separation: the service owns process coordinates and lifetime; consumers own what a process means and every default that shapes one. That is why the spawn request is fully explicit — no hidden subprocess-service default — and why `SubprocessOutcome` carries exit facts only: callers own deadlines, teardown ladders, and cause classification. The `dsh-shell` request/spec split is the owning template.
+The seam is built on one separation: the service owns process coordinates and lifetime; consumers own what a process means and every default that shapes one. That is why the spawn request is fully explicit — no hidden subprocess-service default — and why `SubprocessOutcome` carries exit facts only: callers own deadlines, cooperation order, and cause classification. The `dsh-shell` request/spec split is the owning template.
 
 ### Source map
 
@@ -103,6 +107,7 @@ The seam is built on one separation: the service owns process coordinates and li
 |---|---|
 | [`src/index.ts`](src/index.ts) | Plugin entry: abstract `SubprocessRuntime`, `ctx.subprocess` registration, the shared `scrubbedParentEnv` scrub |
 | [`src/types.ts`](src/types.ts) | Vocabulary: spawn spec, stdio modes, handles, readers, outcomes, `DSH_*` namespace |
+| [`src/dispose.ts`](src/dispose.ts) | Shared cooperative teardown ladder: stdin EOF, one bounded drain wait, then the terminate escalation with its whole-range exit proof |
 | — | No runtime invariant companion is published; this stateless Service Definition owns spawn-spec/handle types, while Service Providers own observations. |
 
 ### Data model and flow
@@ -148,7 +153,7 @@ No direct invalidation; the named consumers own any request-prefix changes.
 These limits define when the seam is a poor fit or leaves work to its consumers. They are current package constraints, not a comparison or a backlog.
 
 - **SDK-managed spawns remain outside** — a transport that owns its internal spawn (the SDK client, MCP) cannot route that call through this service; it can still import `scrubbedParentEnv` so environment policy stays single-sourced.
-- **Teardown ladders are consumer-owned** — the seam ships signalling verbs and the managed-range wait, not a canned quiesce sequence; each out-of-process consumer encodes its child's cooperation shape itself (the ACP backend's stdin-EOF-first ladder is the in-repo template).
+- **Only one teardown order is shipped** — `disposeSubprocessChild` encodes the stdin-EOF-first cooperation; a child that quiesces on a different signal or protocol frame still needs its own ladder over `terminate()` and `waitForExit()`.
 - **Observability is provider-specific** — native providers may own escaped descendants through systemd scopes or Windows Jobs, while fallback providers expose weaker process-group, tree, or session visibility. The seam adds no continuous process-table monitor.
 
 <a id="dev-note"></a>

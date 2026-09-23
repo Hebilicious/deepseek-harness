@@ -36,6 +36,8 @@ kind: "package-reference"
 
 `WebhookSessionRequest` 要求 `workspacePath`、`title`、`prompt`、`agentPreset` 与 `permissionPreset`；可选 `model` 会指定明确的提供方／模型路由与输出 token 上限。明确路由使用其适配器的默认推理（reasoning）强度。省略时会快照包含推理强度的完整当前部署选择，直到首个请求记录持久 header；之后的 Web 模型变更保留普通会话行为。
 
+可选 `harness` 指定所创建会话运行的 agent harness。投递本身不携带 harness，因此挂载多个 harness 的部署必须设置它；省略时会解析唯一已挂载的 harness，而挂载多个 harness 的部署会以注册表自身的消息拒绝该投递，运行时会记录该失败而不使提供方请求失败。
+
 运行时会在变更状态前验证 preset，解析或创建规范 Workspace，以该 Workspace 路径作为 `SessionHeader.cwd` 创建 Agent，在发布前挂载 agent preset，并在应用权限、标题与提示词前附加会话。附加失败会对尚未发布的动作执行 dispose（资源释放）。之后若在提示词前失败，则以尽力而为方式脱离 Workspace 并对 Agent 执行 dispose。
 
 成功的 `Agent.followup()` 是 webhook 操作的提交点。消息使用 `source.kind: "webhook"`，并携带提供方、来源、交付与规则来源信息。运行时不等待 idle、不执行特殊 flush、不检查回复，也不发布完成状态；之后完全由普通 Agent 与会话行为接管。

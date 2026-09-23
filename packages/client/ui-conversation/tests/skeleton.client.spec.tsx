@@ -659,6 +659,9 @@ describe('ConversationRoot resident composer', () => {
     // The agent-preset chip sits in the same row, for the same reason: both
     // choices are only open before the first message.
     expect(b.slotCalls).toContain('conversation.hero.agentPreset')
+    // The agent-harness chip joins them: a session's harness is recorded when
+    // it is created, so the picker is only meaningful before the first message.
+    expect(b.slotCalls).toContain('conversation.hero.agentHarness')
   })
 
   it('prompt failure renders the promptError strip (ordinary failure, no transaction UI)', () => {

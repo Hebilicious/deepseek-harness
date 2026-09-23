@@ -527,6 +527,22 @@ const SERVICE_ROLES: ServiceRole[] = [
     note: 'Layers the default ModelSelection through settings so direct and Host-backed Agent entry points share one state owner.',
   },
   {
+    key: 'acpHarness',
+    pkg: 'agent-acp',
+    title: 'Multi-harness ACP session driver',
+    mode: 'bundle',
+    consumers: ['web-acp', 'web-harnesses'],
+    note: 'One shared process per configured ACP harness; every session binds its own ACP session, and each harness registers its own ctx.agents factory, so a profile mounts as many as it configures beside the in-process loop.',
+  },
+  {
+    key: 'codexAppServer',
+    pkg: 'agent-codex',
+    title: 'Codex app-server session driver',
+    mode: 'bundle',
+    consumers: ['web-codex', 'web-harnesses'],
+    note: 'One shared app-server process per configured Codex instance; every session binds its own thread, and each instance registers its own ctx.agents factory and model route, so one profile can run several accounts beside the in-process loop.',
+  },
+  {
     key: 'agentLoop',
     pkg: 'agent-loop',
     title: 'Concrete loop driver',

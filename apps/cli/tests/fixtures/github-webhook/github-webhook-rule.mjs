@@ -11,6 +11,9 @@ export const Config = z.object({
   marker: z.string().required(),
   agentPreset: z.string().required(),
   permissionPreset: z.string().required(),
+  // The shipped web profile mounts several harnesses, so a delivery names the
+  // one its sessions run.
+  harness: z.string().default('dsh'),
 })
 
 export function apply(ctx, config) {
@@ -32,6 +35,7 @@ export function apply(ctx, config) {
         prompt: `Reply with exactly ${config.marker} and no other text. Do not call tools.`,
         agentPreset: config.agentPreset,
         permissionPreset: config.permissionPreset,
+        harness: config.harness,
       }
     },
   }))

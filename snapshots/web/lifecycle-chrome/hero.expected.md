@@ -18,7 +18,9 @@
   - treeitem "workspace" [expanded]:
     - img
     - text: workspace
-  - treeitem "New Session" [selected]
+  - treeitem "DSH Loop New Session" [selected]:
+    - img "DSH Loop"
+    - text: New Session
 - button "Settings":
   - img
   - text: Settings

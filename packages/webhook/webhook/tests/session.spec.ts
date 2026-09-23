@@ -23,6 +23,8 @@ interface SessionHarness {
   readonly messages: unknown[]
   readonly modelListeners: Map<string, unknown>
   readonly agent: unknown
+  /** Options the creation transaction passed to `ctx.agents.create`. */
+  createOptions(): Record<string, unknown> | undefined
   markRequestHeader(): void
   readonly controller: AbortController
   readonly request: WebhookSessionRequest
@@ -41,6 +43,7 @@ function harness(options: HarnessOptions = {}): SessionHarness {
   const modelListeners = new Map<string, unknown>()
   const controller = new AbortController()
   let requestHeader: object | undefined
+  let createInput: Record<string, unknown> | undefined
   const session = {
     id: 'webhook-session',
     header: { cwd: '/workspace' },
@@ -117,8 +120,9 @@ function harness(options: HarnessOptions = {}): SessionHarness {
       },
     },
     agents: {
-      async create(createOptions: { setup?: (ctx: unknown, agent: unknown) => Promise<void> }) {
+      async create(createOptions: Record<string, unknown> & { setup?: (ctx: unknown, agent: unknown) => Promise<void> }) {
         calls.push('agent-create')
+        createInput = createOptions
         if (options.failAt === 'agent') throw new Error('agent failed')
         await createOptions.setup?.({
           on(event: string, listener: unknown) {
@@ -144,6 +148,7 @@ function harness(options: HarnessOptions = {}): SessionHarness {
     messages,
     modelListeners,
     agent,
+    createOptions() { return createInput },
     markRequestHeader() { requestHeader = {} },
     controller,
     request: {
@@ -270,6 +275,18 @@ describe('webhook Session creation', () => {
     })
   })
 
+  it('names the requested harness and leaves the field absent without one', async () => {
+    const named = harness()
+    await create(named, { ...named.request, harness: 'codex' as never })
+    expect(named.createOptions()?.['harness']).toBe('codex')
+
+    // Omission resolves the sole mounted harness, so the field must not be sent
+    // as `undefined`: the registry reads presence, not the value.
+    const unnamed = harness()
+    await create(unnamed)
+    expect(unnamed.createOptions()).not.toHaveProperty('harness')
+  })
+
   it.each([
     [null, /must be null or a Session request object/],
     [{}, /workspacePath/],
@@ -281,6 +298,8 @@ describe('webhook Session creation', () => {
     [{ workspacePath: '/w', title: 't', prompt: 'p', agentPreset: 'a', permissionPreset: 'x', model: null }, /model must be an object/],
     [{ workspacePath: '/w', title: 't', prompt: 'p', agentPreset: 'a', permissionPreset: 'x', model: {} }, /provider/],
     [{ workspacePath: '/w', title: 't', prompt: 'p', agentPreset: 'a', permissionPreset: 'x', model: { provider: 'p', model: 'm', maxTokens: 0 } }, /maxTokens/],
+    [{ workspacePath: '/w', title: 't', prompt: 'p', agentPreset: 'a', permissionPreset: 'x', harness: '' }, /harness/],
+    [{ workspacePath: '/w', title: 't', prompt: 'p', agentPreset: 'a', permissionPreset: 'x', harness: '  ' }, /harness/],
   ] as const)('rejects malformed rule result %# before side effects', async (request, message) => {
     const test = harness()
     await expect(create(test, request as never)).rejects.toThrow(message)

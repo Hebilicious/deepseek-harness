@@ -119,6 +119,9 @@ export class AcpSession {
 
   /**
    * Compose a fresh Agent and all requested MCP clients before publication.
+   * The ACP request carries no harness and this Agent descends from no Session,
+   * so the create is unnamed: it requires a deployment that mounts exactly one
+   * harness.
    * @param ctx - ACP plugin context with Agent, LLM, and persistence services.
    * @param options - fresh session identity, workspace, route, MCP, and notifier.
    * @returns the fully composed per-session module.
@@ -140,6 +143,9 @@ export class AcpSession {
 
   /**
    * Restore a persisted Agent and compose the request's fresh MCP connections.
+   * The ACP request carries no harness either, so this resume is unnamed too:
+   * like {@link AcpSession.create} it requires a deployment that mounts exactly
+   * one harness.
    * @param ctx - ACP plugin context with Agent, LLM, and persistence services.
    * @param options - persisted identity, workspace, fallback route, MCP, and notifier.
    * @returns the restored per-session module.

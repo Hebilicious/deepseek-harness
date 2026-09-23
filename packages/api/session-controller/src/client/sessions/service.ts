@@ -1,5 +1,6 @@
 /** Client catalog and source-labelled ownership of exact Session generations. */
 import type { Context, Fiber } from '@deepseek-ai/cordis'
+import type { HarnessId } from '@deepseek-ai/dsh-agent/types'
 import type { SubagentAddress } from '@deepseek-ai/dsh-subagent/client'
 import { SessionSeq, type SessionId } from '@deepseek-ai/dsh-session/types'
 import { workspaceTitleOf } from '@deepseek-ai/dsh-util-workspace-path'
@@ -438,15 +439,29 @@ export class ClientSessions implements ISessions {
   /**
    * Create a Host Session and publish its catalog row before resolving.
    * Callers retain the returned identity before borrowing its binding.
-   * @param opts - target workspace or directory and an optional preallocated id.
+   * @param opts - target workspace or directory, an optional preallocated id,
+   *   and the harness the new Session runs.
    * @returns the new session id.
    * @throws {SessionCreateError} with the requested id.
    */
-  async create(opts: { workspaceId?: WorkspaceId; cwd?: string; sessionId?: SessionId } = {}): Promise<SessionId> {
+  async create(opts: {
+    workspaceId?: WorkspaceId
+    cwd?: string
+    sessionId?: SessionId
+    harness?: HarnessId
+  } = {}): Promise<SessionId> {
     const result = await this.manager.create(opts)
     if (!result.ok) throw new SessionCreateError(result.error, opts.sessionId)
     this.projectList()
     return result.value.sessionId
+  }
+
+  /**
+   * Stage the agent harness the next created Session runs.
+   * @param harness - mounted harness id.
+   */
+  stageHarness(harness: HarnessId): void {
+    this.manager.stageHarness(harness)
   }
 
   /**

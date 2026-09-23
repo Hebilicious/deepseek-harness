@@ -151,6 +151,7 @@ class FakeSessions implements ISessions {
   declare readonly retainInfo: ISessions['retainInfo']
   declare readonly searchResultLimit: ISessions['searchResultLimit']
   declare readonly setSubagentCatalogOpen: ISessions['setSubagentCatalogOpen']
+  declare readonly stageHarness: ISessions['stageHarness']
   declare readonly refresh: ISessions['refresh']
   declare readonly search: ISessions['search']
   declare readonly scope: ISessions['scope']

@@ -82,6 +82,29 @@ export interface TypeApiEntry {
 /** Every harness `ctx.<key>` service, sorted by key. */
 export const SERVICE_API: readonly ServiceApiEntry[] = [
   {
+    key: 'acpHarness',
+    summary: 'The `acpHarness` service (`acp` Remote namespace).',
+    description: 'The `acpHarness` service (`acp` Remote namespace). Owns one ACP runtime, one agent-factory host, and one catalog adapter per configured harness, plus every auth operation — none of which belong to a session.',
+    methods: [
+      {
+        signature: '@Remote async status(request: { harness: string }, signal: AbortSignal): Promise<AcpAccountSnapshot>',
+        description: 'Read one harness\'s account state: the agent\'s advertised auth methods plus the harness\'s own auth-status CLI verdict.',
+        parameters: [{ name: 'request', description: '`{harness}` naming a mounted harness.' }, { name: 'signal', description: 'caller lifetime.' }],
+        returns: 'normalized account facts.',
+      },
+      {
+        signature: '@Remote(\'login\') async login(request: { harness: string; methodId?: string }, signal: AbortSignal): Promise<void>',
+        description: 'Start one harness\'s browser authentication flow (`devin-browser` on Devin). A harness that has not connected yet is connected first, because only its agent\'s initialize response names the method to start.',
+        parameters: [{ name: 'request', description: '`{harness, methodId}`; the method defaults to the first one the harness advertised.' }, { name: 'signal', description: 'caller lifetime.' }],
+      },
+      {
+        signature: '@Remote async logout(request: { harness: string }, signal: AbortSignal): Promise<void>',
+        description: 'Sign one harness\'s account out — the ACP `logout` request when the agent advertises it, the harness\'s auth-logout CLI otherwise.',
+        parameters: [{ name: 'request', description: '`{harness}` naming a mounted harness.' }, { name: 'signal', description: 'caller lifetime.' }],
+      },
+    ],
+  },
+  {
     key: 'agentDefaultModel',
     summary: 'Owns the default model selection independently of any Host or transport.',
     description: 'Owns the default model selection independently of any Host or transport. The composition entry remains usable without a settings provider; when one is mounted, its user layer is read live.',
@@ -112,19 +135,19 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
       },
       {
         signature: 'async create(id: SessionId, options: AgentOptions = {}, meta: Pick<SessionHeader, \'cwd\'> = {}): Promise<Agent>',
-        description: 'Create an agent and session under one caller-supplied identity, owned by the accessing fiber. Constructor-driven config calls mint a fresh combined id before entering this boundary. When a persistence backend is mounted, the session\'s durable identity and any seed are stored before publication.',
+        description: 'Create and publish a fresh agent around a caller-supplied session id.',
         parameters: [{ name: 'id', description: 'shared agent/session identity.' }, { name: 'options', description: 'concrete loop options.' }, { name: 'meta', description: 'optional fresh-session workspace metadata.' }],
         returns: 'the published running agent.',
       },
       {
         signature: 'async createAgent(ownerCtx: Context, options: CreateAgentOptions): Promise<AgentHandle>',
-        description: 'Create an owned agent on a caller-supplied session id.',
+        description: 'Create an owned agent on a caller-supplied session id. The registered factory is the shared host; this delegate keeps the service\'s published AgentFactory surface identical to it.',
         parameters: [{ name: 'ownerCtx', description: 'caller context that structurally owns the lifecycle.' }, { name: 'options', description: 'identities, optional live parent, session seed/metadata, loop options, setup, and cancellation.' }],
         returns: 'the published handle.',
       },
       {
         signature: 'async resume(ownerCtx: Context, options: ResumeAgentOptions): Promise<AgentHandle>',
-        description: 'Resume an owned agent from the configured persistence service.',
+        description: 'Resume an owned agent from the configured persistence service. The registered factory is the shared host; this delegate keeps the service\'s published AgentFactory surface identical to it.',
         parameters: [{ name: 'ownerCtx', description: 'caller context that owns load, setup, and the live lifecycle.' }, { name: 'options', description: 'persisted identity, optional live parent, loop options, setup, and cancellation.' }],
         returns: 'the published handle.',
       },
@@ -252,7 +275,7 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
   {
     key: 'agents',
     summary: 'Agent service (`ctx.agents`): tracks live agents and carries the initiating Agent through one process-local asynchronous driver chain.',
-    description: 'Agent service (`ctx.agents`): tracks live agents and carries the initiating Agent through one process-local asynchronous driver chain. Agent *creation* is provided by whichever plugin implements the AgentFactory (`@deepseek-ai/dsh-agent-loop`), registered via setFactory.\n\nInitiator methods provide same-process causal attribution only. Ambient presence is neither liveness proof nor authorization; subjects and owners remain explicit, as does identity at worker, process, persistence, and wire boundaries. Returned Promise boundaries drain during teardown, except a nested lineage that starts an owning-fiber unload is excluded from its own drain.',
+    description: 'Agent service (`ctx.agents`): tracks live agents and carries the initiating Agent through one process-local asynchronous driver chain. Agent *creation* is provided by the plugins that implement the AgentFactory (`@deepseek-ai/dsh-agent-loop`, `@deepseek-ai/dsh-agent-codex`, and `@deepseek-ai/dsh-agent-acp`), each registered under its harness id via registerHarness; setFactory remains for a deployment that mounts one factory and needs no harness choice.\n\nInitiator methods provide same-process causal attribution only. Ambient presence is neither liveness proof nor authorization; subjects and owners remain explicit, as does identity at worker, process, persistence, and wire boundaries. Returned Promise boundaries drain during teardown, except a nested lineage that starts an owning-fiber unload is excluded from its own drain.',
     methods: [
       {
         signature: 'currentInitiator(): Agent | undefined',
@@ -283,10 +306,22 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
         throws: ['when the initiator scope is closing/disposed, or when `operation` throws.'],
       },
       {
+        signature: 'registerHarness(registration: AgentHarnessRegistration): () => void',
+        description: 'Register one harness\'s agent-creation factory (a driver calls this on construction, effect-scoped). A traced Cordis service is canonicalized to its concrete target; each create/resume call is then traced through that caller\'s context so ownership follows the caller without stacking proxy layers. Throws when the id is already registered. Returns the disposer; on dispose the harness leaves the registry.',
+        parameters: [{ name: 'registration', description: 'the harness identity and the factory that owns it.' }],
+        returns: 'the disposer that removes the harness. The exact Cordis effect disposer (single-shot): composite (generator) effects may yield it directly — exact identity nests the teardown in order.',
+      },
+      {
         signature: 'setFactory(factory: AgentFactory): () => void',
-        description: 'Register the agent-creation factory (the loop calls this on construction, effect-scoped). A traced Cordis service is canonicalized to its concrete target; each create/resume call is then traced through that caller\'s context so ownership follows the caller without stacking proxy layers. Throws if a factory is already registered. Returns the disposer; on dispose the factory slot is cleared.',
-        parameters: [{ name: 'factory', description: 'the loop-owned factory {@link create}/{@link resume} delegate to.' }],
-        returns: 'the disposer that clears the factory slot. The exact Cordis effect disposer (single-shot): composite (generator) effects may yield it directly — exact identity nests the teardown in order.',
+        description: 'Register the sole agent-creation factory under the default harness id. Remains for a deployment whose single factory needs no harness choice; every in-tree driver registers itself with registerHarness so that a session\'s id and display name are its own.',
+        parameters: [{ name: 'factory', description: 'the factory {@link create}/{@link resume} delegate to.' }],
+        returns: 'the disposer that removes the harness.',
+      },
+      {
+        signature: 'harnesses(): readonly AgentHarness[]',
+        description: 'Every harness this process can create sessions with, in registration order.',
+        parameters: [],
+        returns: 'the harness identities and their display names.',
       },
       {
         signature: 'async create(options: CreateAgentOptions): Promise<AgentHandle>',
@@ -653,6 +688,53 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
         description: 'Fires after any flush that recomposed the graph (row added/removed, or a rebuilt rev change). Pull model: listeners re-read graph.',
         parameters: [{ name: 'listener', description: 'notified with no payload.' }],
         returns: 'the unsubscriber.',
+      },
+    ],
+  },
+  {
+    key: 'codexAppServer',
+    summary: 'The `codexAppServer` service (`codex` Remote namespace).',
+    description: 'The `codexAppServer` service (`codex` Remote namespace). Owns one app-server runtime, one agent-factory host, and one catalog adapter per configured instance, plus every account/login/rate-limit operation — none of which belong to a session.',
+    methods: [
+      {
+        signature: '@Remote async status(request: { harness: string }, signal: AbortSignal): Promise<CodexAccountSnapshot>',
+        description: 'Read one instance\'s Codex account state.',
+        parameters: [{ name: 'request', description: '`{harness}` naming a mounted instance.' }, { name: 'signal', description: 'caller lifetime.' }],
+        returns: 'normalized account facts.',
+      },
+      {
+        signature: '@Remote(\'loginDeviceCode\') async beginDeviceCode(request: { harness: string }, signal: AbortSignal): Promise<CodexDeviceCodeLogin>',
+        description: 'Start a device-code login; the panel shows the URL and code.',
+        parameters: [{ name: 'request', description: '`{harness}` naming a mounted instance.' }, { name: 'signal', description: 'caller lifetime.' }],
+        returns: 'the attempt id, verification URL, and one-time code.',
+      },
+      {
+        signature: '@Remote(\'loginBrowser\') async beginBrowser(request: { harness: string }, signal: AbortSignal): Promise<CodexBrowserLogin>',
+        description: 'Start a browser OAuth login; usable only where a browser can reach the app-server\'s localhost callback.',
+        parameters: [{ name: 'request', description: '`{harness}` naming a mounted instance.' }, { name: 'signal', description: 'caller lifetime.' }],
+        returns: 'the attempt id and authorization URL.',
+      },
+      {
+        signature: '@Remote(\'cancelLogin\') async cancelLogin(request: { harness: string; loginId?: string }, signal: AbortSignal): Promise<void>',
+        description: 'Cancel one in-flight login attempt.',
+        parameters: [{ name: 'request', description: '`{harness, loginId}`; the id comes from a login start.' }, { name: 'signal', description: 'caller lifetime.' }],
+      },
+      {
+        signature: '@Remote async logout(request: { harness: string }, signal: AbortSignal): Promise<void>',
+        description: 'Sign one instance\'s Codex account out.',
+        parameters: [{ name: 'request', description: '`{harness}` naming a mounted instance.' }, { name: 'signal', description: 'caller lifetime.' }],
+      },
+      {
+        signature: '@Remote async rateLimits(request: { harness: string }, signal: AbortSignal): Promise<CodexRateLimits>',
+        description: 'Read one instance\'s account quota.',
+        parameters: [{ name: 'request', description: '`{harness}` naming a mounted instance.' }, { name: 'signal', description: 'caller lifetime.' }],
+        returns: 'the normalized rate-limit payload.',
+      },
+      {
+        signature: '@Remote({ mode: \'stream\' }) async *events(request: { harness: string }, signal: AbortSignal): AsyncIterable<CodexAccountNotification>',
+        description: 'Stream one instance\'s account notifications (`account/login/completed`, `account/updated`, `account/rateLimits/updated`).',
+        parameters: [{ name: 'request', description: '`{harness}` naming a mounted instance.' }, { name: 'signal', description: 'caller lifetime; aborting ends the stream.' }],
+        returns: 'account notifications as they arrive.',
       },
     ],
   },
@@ -1711,6 +1793,12 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
         description: 'Describe every currently routable model for Host-generation selectors.',
         parameters: [],
         returns: 'provider-grouped models, the deployment default, and isolated provider failures.',
+      },
+      {
+        signature: '@Remote(\'harnessCatalog\') harnessCatalog(): SessionHarnessCatalog',
+        description: 'Describe every agent harness this deployment can create sessions with.',
+        parameters: [],
+        returns: 'the mounted harnesses, in registration order.',
       },
       {
         signature: '@Remote(\'refreshModelCatalog\') async refreshModelCatalog(): Promise<ModelCatalog>',
@@ -4001,6 +4089,14 @@ export const EVENT_API: readonly EventApiEntry[] = [
 /** Shapes of every exported type the Service and Event signatures reference (transitively), sorted by name. */
 export const TYPE_API: readonly TypeApiEntry[] = [
   {
+    name: 'AcpAccountSnapshot',
+    declaration: 'export interface AcpAccountSnapshot {\n    readonly connected: boolean;\n    readonly authMethods: readonly AcpAuthMethod[];\n    readonly cliLoggedIn?: boolean;\n    readonly cliDetail?: string;\n    readonly agentInfo?: {\n        readonly name: string;\n        readonly title?: string;\n        readonly version: string;\n    };\n}',
+  },
+  {
+    name: 'AcpAuthMethod',
+    declaration: 'export interface AcpAuthMethod {\n    readonly id: string;\n    readonly name: string;\n    readonly description?: string;\n}',
+  },
+  {
     name: 'AdapterRegistrationHandle',
     declaration: 'export interface AdapterRegistrationHandle {\n    (): void;\n    replace(providers: string[]): void;\n}',
   },
@@ -4023,6 +4119,14 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   {
     name: 'AgentHandle',
     declaration: 'export interface AgentHandle {\n    agent: Agent;\n    dispose(): Promise<void>;\n}',
+  },
+  {
+    name: 'AgentHarness',
+    declaration: 'export interface AgentHarness {\n    readonly id: HarnessId;\n    readonly name: string;\n    readonly description?: string;\n}',
+  },
+  {
+    name: 'AgentHarnessRegistration',
+    declaration: 'export interface AgentHarnessRegistration extends AgentHarness {\n    readonly factory: AgentFactory;\n}',
   },
   {
     name: 'AgentOptions',
@@ -4078,7 +4182,7 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   },
   {
     name: 'ApiSessionAgentError',
-    declaration: 'export type ApiSessionAgentError = RemoteError<\'session/not-found\' | \'session/agent-busy\' | \'session/writer-held\' | \'gateway/internal\'>;',
+    declaration: 'export type ApiSessionAgentError = RemoteError<\'session/not-found\' | \'session/agent-busy\' | \'session/writer-held\' | \'session/harness-unavailable\' | \'gateway/bad-request\' | \'gateway/internal\'>;',
   },
   {
     name: 'ApiSessionAgentResult',
@@ -4263,6 +4367,26 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   {
     name: 'ClientArtifactBaseline',
     declaration: 'export interface ClientArtifactBaseline {\n    readonly path: string;\n    readonly mtimeMs: number;\n    readonly size: number;\n}',
+  },
+  {
+    name: 'CodexAccountNotification',
+    declaration: 'export interface CodexAccountNotification {\n    readonly method: string;\n    readonly params: JsonValue;\n}',
+  },
+  {
+    name: 'CodexAccountSnapshot',
+    declaration: 'export interface CodexAccountSnapshot {\n    readonly authenticated: boolean;\n    readonly requiresOpenaiAuth: boolean;\n    readonly accountType?: string;\n    readonly email?: string;\n    readonly planType?: string;\n}',
+  },
+  {
+    name: 'CodexBrowserLogin',
+    declaration: 'export interface CodexBrowserLogin {\n    readonly loginId: string;\n    readonly authUrl: string;\n}',
+  },
+  {
+    name: 'CodexDeviceCodeLogin',
+    declaration: 'export interface CodexDeviceCodeLogin {\n    readonly loginId: string;\n    readonly verificationUrl: string;\n    readonly userCode: string;\n}',
+  },
+  {
+    name: 'CodexRateLimits',
+    declaration: 'export interface CodexRateLimits {\n    readonly rateLimits: JsonValue;\n    readonly rateLimitsByLimitId: Record<string, JsonValue> | null;\n}',
   },
   {
     name: 'CollectedOutput',
@@ -4494,7 +4618,7 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   },
   {
     name: 'CreateAgentOptions',
-    declaration: 'export interface CreateAgentOptions {\n    readonly sessionId: SessionId;\n    readonly parentAgent?: Agent;\n    readonly meta?: {\n        readonly cwd?: string;\n        readonly parentSession?: SessionId;\n        readonly isSeeded?: boolean;\n        readonly origin?: \'subagent\';\n        readonly delegationDepth?: number;\n        readonly agentPreset?: string;\n    };\n    readonly inheritedEventCount?: SessionLogOffset;\n    readonly seed?: readonly SessionEvent[];\n    readonly agentOptions?: AgentOptions;\n    readonly signal?: AbortSignal;\n    readonly setup?: AgentSetup;\n}',
+    declaration: 'export interface CreateAgentOptions {\n    readonly sessionId: SessionId;\n    readonly harness?: HarnessId;\n    readonly parentAgent?: Agent;\n    readonly meta?: {\n        readonly cwd?: string;\n        readonly parentSession?: SessionId;\n        readonly isSeeded?: boolean;\n        readonly origin?: \'subagent\';\n        readonly delegationDepth?: number;\n        readonly agentPreset?: string;\n    };\n    readonly inheritedEventCount?: SessionLogOffset;\n    readonly seed?: readonly SessionEvent[];\n    readonly agentOptions?: AgentOptions;\n    readonly signal?: AbortSignal;\n    readonly setup?: AgentSetup;\n}',
   },
   {
     name: 'CreateGoalRequest',
@@ -4819,6 +4943,10 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   {
     name: 'GrantRecord',
     declaration: 'export interface GrantRecord {\n    readonly kind: \'grant\';\n    readonly payload: unknown;\n}',
+  },
+  {
+    name: 'HarnessId',
+    declaration: 'export type HarnessId = Branded<\'HarnessId\'>;',
   },
   {
     name: 'HostConnectionFetch',
@@ -5586,7 +5714,7 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   },
   {
     name: 'ResumeAgentOptions',
-    declaration: 'export interface ResumeAgentOptions {\n    readonly resumeSessionId: SessionId;\n    readonly parentAgent?: Agent;\n    readonly agentOptions?: AgentOptions;\n    readonly signal?: AbortSignal;\n    readonly setup?: AgentSetup;\n}',
+    declaration: 'export interface ResumeAgentOptions {\n    readonly resumeSessionId: SessionId;\n    readonly harness?: HarnessId;\n    readonly parentAgent?: Agent;\n    readonly agentOptions?: AgentOptions;\n    readonly signal?: AbortSignal;\n    readonly setup?: AgentSetup;\n}',
   },
   {
     name: 'RpcId',
@@ -5734,7 +5862,7 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   },
   {
     name: 'SessionCreateRequest',
-    declaration: 'export interface SessionCreateRequest {\n    readonly workspaceId?: WorkspaceId;\n    readonly cwd?: string;\n    readonly sessionId?: SessionId;\n    readonly agentPreset?: string;\n}',
+    declaration: 'export interface SessionCreateRequest {\n    readonly workspaceId?: WorkspaceId;\n    readonly cwd?: string;\n    readonly sessionId?: SessionId;\n    readonly agentPreset?: string;\n    readonly harness?: HarnessId;\n}',
   },
   {
     name: 'SessionCreateValue',
@@ -5863,6 +5991,14 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   {
     name: 'SessionHandleReadResult',
     declaration: 'export interface SessionHandleReadResult {\n    readonly eventState: SessionSeedEventState;\n    readonly events: readonly SessionEvent[];\n}',
+  },
+  {
+    name: 'SessionHarnessCatalog',
+    declaration: 'export interface SessionHarnessCatalog {\n    readonly harnesses: readonly SessionHarnessOption[];\n}',
+  },
+  {
+    name: 'SessionHarnessOption',
+    declaration: 'export interface SessionHarnessOption {\n    readonly id: HarnessId;\n    readonly name: string;\n    readonly description?: string;\n}',
   },
   {
     name: 'SessionHeader',
@@ -7006,7 +7142,7 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   },
   {
     name: 'WebhookSessionRequest',
-    declaration: 'export interface WebhookSessionRequest {\n    readonly workspacePath: string;\n    readonly title: string;\n    readonly prompt: string;\n    readonly agentPreset: string;\n    readonly permissionPreset: string;\n    readonly model?: WebhookModelSelection;\n}',
+    declaration: 'export interface WebhookSessionRequest {\n    readonly workspacePath: string;\n    readonly title: string;\n    readonly prompt: string;\n    readonly agentPreset: string;\n    readonly permissionPreset: string;\n    readonly harness?: HarnessId;\n    readonly model?: WebhookModelSelection;\n}',
   },
   {
     name: 'WebhookSourceId',

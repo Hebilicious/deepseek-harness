@@ -1,4 +1,5 @@
 - banner:
+  - img "DSH Loop"
   - navigation "Session hierarchy":
     - button "Use only Cordis tools. First" [disabled]
   - button "More actions":

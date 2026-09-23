@@ -1,6 +1,7 @@
 /** Provider-neutral webhook deliveries, rules, and Session requests. */
 
 import type { JsonValue } from '@deepseek-ai/dsh-util-values'
+import type { HarnessId } from '@deepseek-ai/dsh-agent'
 import type { WebhookDeliveryId, WebhookRuleId, WebhookSourceId } from './brand.ts'
 
 /** Provider adapters add their normalized event type through declaration merging. */
@@ -46,6 +47,12 @@ export interface WebhookSessionRequest {
   readonly agentPreset: string
   /** Sandbox and approval preset applied before prompt admission. */
   readonly permissionPreset: string
+  /**
+   * Harness the created Session runs. A delivery carries no harness of its own,
+   * so a deployment mounting several must name one; omitting it resolves the
+   * sole mounted harness, as every other unnamed root create does.
+   */
+  readonly harness?: HarnessId
   /** Optional explicit route; omission uses the complete current default, including reasoning effort. */
   readonly model?: WebhookModelSelection
 }

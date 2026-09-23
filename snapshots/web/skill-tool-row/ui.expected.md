@@ -1,4 +1,5 @@
 - banner:
+  - img "DSH Loop"
   - navigation "Session hierarchy":
     - button "Load the editing-cordis-compositions ski" [disabled]
   - button "More actions":
@@ -60,9 +61,9 @@
   - text: DeepSeek-V4-Flash
   - img
 - button "Send message" [disabled]
-- button "1 turns 2 steps":
+- button "1 turns 2 steps · {{throughput}} tok/s":
   - img
-  - text: 1 turns 2 steps
+  - text: 1 turns 2 steps{{throughput}} tok/s
 - button "310 tok · Cache hit 0%":
   - img
   - text: 310 tokCache hit 0%

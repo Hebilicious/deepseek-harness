@@ -1,0 +1,76 @@
+{
+  "formatVersion": 1,
+  "roots": [
+    {
+      "key": "event:agent/harness",
+      "kind": "event",
+      "event": "agent/harness",
+      "surface": false,
+      "digest": "297cac9c86389e3507f2163d2ba3b29717b893c0735df5ef3a2940fcc45f20ae",
+      "schema": {
+        "root": 0,
+        "nodes": [
+          {
+            "kind": "object",
+            "properties": [
+              {
+                "name": "data",
+                "type": 1,
+                "optional": false
+              },
+              {
+                "name": "ignorable",
+                "type": 3,
+                "optional": true
+              },
+              {
+                "name": "seq",
+                "type": 4,
+                "optional": false
+              },
+              {
+                "name": "time",
+                "type": 4,
+                "optional": false
+              },
+              {
+                "name": "type",
+                "type": 5,
+                "optional": false
+              }
+            ],
+            "indices": []
+          },
+          {
+            "kind": "object",
+            "properties": [
+              {
+                "name": "harness",
+                "type": 2,
+                "optional": false
+              }
+            ],
+            "indices": []
+          },
+          {
+            "kind": "primitive",
+            "type": "string"
+          },
+          {
+            "kind": "literal",
+            "value": true
+          },
+          {
+            "kind": "primitive",
+            "type": "number"
+          },
+          {
+            "kind": "literal",
+            "value": "agent/harness"
+          }
+        ]
+      }
+    }
+  ],
+  "types": []
+}

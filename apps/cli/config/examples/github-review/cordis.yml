@@ -13,6 +13,9 @@
         workspacePath: !!js process.env.DSH_GITHUB_REVIEW_WORKSPACE ?? process.cwd()
         agentPreset: standard
         permissionPreset: read-only
+        # The shipped web profile mounts several harnesses; a delivery must name
+        # the one its review sessions run.
+        harness: dsh
 
     - id: github-webhook-ingress
       name: cordis:group

@@ -8,6 +8,8 @@ import type {
   WorkspaceId, WorkspaceSnapshot, WorkspaceView,
 } from '@deepseek-ai/dsh-api-workspace-controller/client'
 import type { SessionStatusSnapshot } from '@deepseek-ai/dsh-client-ui-session/client'
+import type { HarnessId } from '@deepseek-ai/dsh-agent/types'
+import type { SessionHarnessOption } from '@deepseek-ai/dsh-api-session-controller/types'
 import type { SessionId } from '@deepseek-ai/dsh-session/types'
 import type { MainPanelId } from '@deepseek-ai/dsh-client-ui-layout/client'
 import { zh as commonZh } from '@deepseek-ai/dsh-client-locale/src/locales/zh.ts'
@@ -36,6 +38,11 @@ const t: WorkspaceBrowserProps['t'] = makeTranslate(zh, commonZh)
 
 const sid = (id: string) => id as SessionId
 const wid = (id: string) => id as WorkspaceId
+/** One mounted harness both the catalog and a Session's projection name. */
+const HARNESS = 'codex' as HarnessId
+/** Stable snapshots: the hook adapter requires one reference between changes. */
+const NO_HARNESSES: readonly SessionHarnessOption[] = []
+const MOUNTED_HARNESSES: readonly SessionHarnessOption[] = [{ id: HARNESS, name: 'Codex CLI' }]
 const summary = (id: string, updatedAt: number, overrides: Partial<SessionSummary> = {}): SessionSummary => ({
   id: sid(id), displayTitle: id, running: false, blank: false, updatedAt, ...overrides,
   retainedBy: overrides.retainedBy ?? {},
@@ -110,6 +117,7 @@ function mount(overrides: Partial<WorkspaceBrowserProps> = {}) {
     createWorkspace: vi.fn(async () => workspace('created', [])),
     useDirectoryFlow: bindSnapshotSelector({ getSnapshot: () => true, subscribe: () => () => {} }),
     useHostInfo: selector => selector({ home: undefined, isLoopback: true }),
+    useHarnessCatalog: bindSnapshotSelector({ getSnapshot: () => NO_HARNESSES, subscribe: () => () => {} }),
     renderSlot: ((_name: string, owner: { open: boolean }) => (owner.open ? <div data-testid="directory-flow" /> : null)) as never,
     t,
     ...overrides,
@@ -200,6 +208,33 @@ describe('WorkspaceBrowser', () => {
     expect(names()).toEqual(['b', 'a', 'c'])
     pick('手动排序')
     expect(names()).toEqual(['b', 'a', 'c'])
+  })
+
+  it.each(['workspace', 'flat'] as const)('badges the %s rows of sessions that record a harness', (groupBy) => {
+    localStorage.clear()
+    const preferences = createWorkspaceViewStore().create()
+    preferences.actions.setGroupBy(groupBy)
+    preferences.actions.setGroupExpanded('alpha', true)
+    mount({
+      useHarnessCatalog: bindSnapshotSelector({
+        getSnapshot: () => MOUNTED_HARNESSES,
+        subscribe: () => () => {},
+      }),
+      useSessions: hook(sessionState([
+        summary('badged', 20, { projectionValues: { agentHarness: HARNESS } }),
+        summary('legacy', 10),
+      ])),
+      useWorkspaces: hook(workspaceState([workspace('alpha', ['badged', 'legacy'])])),
+    })
+
+    const badge = screen.getByRole('img', { name: 'Codex CLI' })
+    const badgedRow = badge.closest('[role="treeitem"]') as HTMLElement
+    expect(within(badgedRow).getByText('badged')).toBeTruthy()
+    // The badge sits immediately before the row's title.
+    expect(badge.nextElementSibling?.textContent).toBe('badged')
+    // A session whose log records no harness keeps its plain row.
+    const legacyRow = screen.getByText('legacy').closest('[role="treeitem"]') as HTMLElement
+    expect(within(legacyRow).queryByRole('img')).toBeNull()
   })
 
   it.each(['workspace', 'flat'] as const)('keeps the provisional blank first and time ties stable in %s recency', (groupBy) => {

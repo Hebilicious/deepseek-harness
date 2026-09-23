@@ -449,7 +449,14 @@ describe('dsh web keyless CLI smoke', () => {
     )
     try {
       const baseUrl = await waitForReadyLine(child)
-      const created = await remoteRpc<{ sessionId: string }>(baseUrl, 'session/create', { request: {} })
+      const created = await remoteRpc<{ sessionId: string }>(baseUrl, 'session/create', { request: { harness: 'dsh' } })
+      // The web profile ships no deployment model default, so the session
+      // names the DeepSeek route the base layer mounts over the mock endpoint.
+      await remoteRpc(baseUrl, 'session/selectModel', { request: {
+        sessionId: created.sessionId,
+        provider: 'deepseek-official',
+        model: 'deepseek-flash',
+      } })
       await remoteRpc<{ accepted: true }>(baseUrl, 'session/prompt', { request: {
         requestId: randomUUID(),
         sessionId: created.sessionId,
@@ -553,7 +560,14 @@ describe('dsh web keyless CLI smoke', () => {
     )
     try {
       const baseUrl = await waitForReadyLine(child)
-      const created = await remoteRpc<{ sessionId: string }>(baseUrl, 'session/create', { request: {} })
+      const created = await remoteRpc<{ sessionId: string }>(baseUrl, 'session/create', { request: { harness: 'dsh' } })
+      // The web profile ships no deployment model default, so the session
+      // names the DeepSeek route the base layer mounts over the mock endpoint.
+      await remoteRpc(baseUrl, 'session/selectModel', { request: {
+        sessionId: created.sessionId,
+        provider: 'deepseek-official',
+        model: 'deepseek-flash',
+      } })
       await remoteRpc<{ accepted: true }>(baseUrl, 'session/prompt', { request: {
         requestId: randomUUID(),
         sessionId: created.sessionId,
@@ -635,7 +649,14 @@ describe('dsh web keyless CLI smoke', () => {
     )
     try {
       const baseUrl = await waitForReadyLine(child)
-      const created = await remoteRpc<{ sessionId: string }>(baseUrl, 'session/create', { request: {} })
+      const created = await remoteRpc<{ sessionId: string }>(baseUrl, 'session/create', { request: { harness: 'dsh' } })
+      // The web profile ships no deployment model default, so the session
+      // names the DeepSeek route the base layer mounts over the mock endpoint.
+      await remoteRpc(baseUrl, 'session/selectModel', { request: {
+        sessionId: created.sessionId,
+        provider: 'deepseek-official',
+        model: 'deepseek-flash',
+      } })
       await remoteRpc<{ accepted: true }>(baseUrl, 'session/prompt', { request: {
         requestId: randomUUID(),
         sessionId: created.sessionId,

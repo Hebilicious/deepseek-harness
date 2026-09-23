@@ -205,6 +205,21 @@ describe('AgentRegistry', () => {
     expect(lifecycle).toEqual(['created:split', 'disposed:split'])
   })
 
+  it('forwards the creation signal to agent/created listeners', async () => {
+    const ctx = new Context()
+    await ctx.plugin(AgentRegistry)
+    const signals: Array<AbortSignal | undefined> = []
+    ctx.on('agent/created', ({ signal }) => { signals.push(signal) })
+    const source = new AbortController()
+    const agent = stubAgent('signalled')
+
+    ctx.agents.enter(agent, undefined)
+    await ctx.agents.announce(agent, 'resume', source.signal)
+
+    expect(signals).toEqual([source.signal])
+    await ctx.fiber.dispose()
+  })
+
   it('defers detach requested by a creation listener until that dispatch unwinds', async () => {
     const ctx = new Context()
     await ctx.plugin(AgentRegistry)

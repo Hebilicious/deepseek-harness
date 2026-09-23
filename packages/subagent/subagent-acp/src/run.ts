@@ -21,6 +21,7 @@ import { brandString } from '@deepseek-ai/dsh-brand'
 import type { SessionId } from '@deepseek-ai/dsh-session'
 import { AssistantOutputFold, settleRunResult, subprocessRunHandle } from '@deepseek-ai/dsh-subagent'
 import type { SubagentResult, SubagentRun, SubagentStartRequest, SubagentStopReason } from '@deepseek-ai/dsh-subagent'
+import { disposeSubprocessChild } from '@deepseek-ai/dsh-subprocess'
 import type { SubprocessHandle, SubprocessOutcome, SubprocessSpawnSpec } from '@deepseek-ai/dsh-subprocess'
 
 /** Fixed response to child permission requests: reject by default, or select the first allow option. */
@@ -170,46 +171,18 @@ function permissionRequestKind(kind: ToolKind | null | undefined): ToolKind | 'u
     : 'unknown'
 }
 
-/** Bounded managed-range exit wait: observes the handle's range until it is empty or `ms` elapses. */
-async function rangeExitsWithin(child: SubprocessHandle, ms: number): Promise<boolean> {
-  const controller = new AbortController()
-  const timer = setTimeout(() => { controller.abort() }, ms)
-  try {
-    return await child.waitForExit(controller.signal)
-  } finally {
-    clearTimeout(timer)
-  }
-}
-
 /**
- * Cooperative teardown ladder for an out-of-process agent, over the seam's
- * public verbs; resolves only at whole-range quiescence: stdin EOF (the child's
- * window to flush persistence and reap its own descendants), then the
- * terminate() escalation (SIGTERM → spec grace → SIGKILL) and its
+ * Cooperative teardown ladder for an out-of-process ACP child: the shared
+ * {@link disposeSubprocessChild} over this child's cooperation shape — stdin
+ * EOF is the child's window to flush persistence and reap its own descendants,
+ * then the terminate() escalation (SIGTERM → spec grace → SIGKILL) with its
  * whole-range exit proof.
  * @param child - the spawned ACP child's handle.
  * @param eofGraceMs - tier-1 window after stdin EOF.
+ * @returns resolves at whole-range quiescence; rejects with the single tier failure, or an `AggregateError` when several tiers failed.
  */
-export async function disposeAcpChild(child: SubprocessHandle, eofGraceMs: number): Promise<void> {
-  const failures: Error[] = []
-  child.stdin?.end()
-  let exited = false
-  try {
-    exited = await rangeExitsWithin(child, eofGraceMs)
-  } catch (error: unknown) {
-    failures.push(toError(error))
-  }
-  if (exited) return
-  // terminate() owns the bounded SIGTERM→SIGKILL timer. Its unbounded wait is
-  // the process owner's exit proof, not a second derived grace that can overflow.
-  child.terminate()
-  try {
-    await child.waitForExit()
-  } catch (error: unknown) {
-    failures.push(toError(error))
-  }
-  if (failures.length === 1) throw failures[0] as Error
-  if (failures.length > 1) throw new AggregateError(failures, 'ACP subprocess teardown failed')
+export function disposeAcpChild(child: SubprocessHandle, eofGraceMs: number): Promise<void> {
+  return disposeSubprocessChild(child, eofGraceMs)
 }
 
 /**

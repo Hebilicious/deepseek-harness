@@ -271,6 +271,13 @@ export class HarnessSdkJsonRpcServer {
     return creation
   }
 
+  /**
+   * Create the one root agent an SDK session id names. The JSON-RPC request
+   * carries no harness and this server descends from no Session, so the create
+   * is unnamed: it requires a deployment that mounts exactly one harness.
+   * @param sessionId - client-supplied session identity.
+   * @returns the record holding the published agent.
+   */
   private async createSession(sessionId: string): Promise<SessionRecord> {
     // No preset composition: this server's compositions keep the model-facing
     // rows in the host plane, so this agent reads them from the global layer. A
