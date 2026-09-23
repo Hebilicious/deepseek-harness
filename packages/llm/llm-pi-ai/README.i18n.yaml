@@ -9,8 +9,8 @@
   en: 33763dd0a848143d
   zh: 82743942bc6df660
 /deepseek-ai-dsh-llm-pi-ai/summary:
-  en: ee82d88fee1332d6
-  zh: 3e66b494e4844f97
+  en: 1a208ce10d61342b
+  zh: adb2c47e43a71985
 /deepseek-ai-dsh-llm-pi-ai/table-of-contents:
   en: d152484eb41ac6b4
   zh: 09388d293f9be9cb
@@ -29,6 +29,9 @@
 /deepseek-ai-dsh-llm-pi-ai/use-this-package/resolve-the-model-catalog:
   en: 376f83206858b601
   zh: 38bb6993609c96a6
+/deepseek-ai-dsh-llm-pi-ai/use-this-package/extend-the-catalog-from-a-model-directory:
+  en: c57c0d74877a7ba8
+  zh: 487b3cc8cf1a2b11
 /deepseek-ai-dsh-llm-pi-ai/use-this-package/run-with-reasoning-and-wire-compatibility:
   en: b58b917e7f250aee
   zh: aff599081bac08c3
@@ -39,8 +42,8 @@
   en: 6619e8cfe7555c73
   zh: b2f80c25acb81cf8
 /deepseek-ai-dsh-llm-pi-ai/use-this-package/failures-and-recovery:
-  en: 3c1edbc63de24a1a
-  zh: 01592718c3a2c79f
+  en: 0c094523aef92fb5
+  zh: 025876f2c94ce2d0
 /deepseek-ai-dsh-llm-pi-ai/understand-the-implementation:
   en: 1598ac8a8bb9b6bf
   zh: fdd089c5ae7722cd
@@ -48,11 +51,11 @@
   en: db1ac8ccca2d858b
   zh: 1d7cd4153aad22b0
 /deepseek-ai-dsh-llm-pi-ai/understand-the-implementation/request-headers:
-  en: 615ca9834bf6544f
-  zh: 2d70b548f99000d1
+  en: 089b733dbbac8d66
+  zh: 83361a78d0edfb7a
 /deepseek-ai-dsh-llm-pi-ai/understand-the-implementation/source-map:
-  en: 64912b8a3a336419
-  zh: 33a245969b4194f6
+  en: 69be336a01328d5b
+  zh: bce04385b99ecdc6
 /deepseek-ai-dsh-llm-pi-ai/understand-the-implementation/registration-and-directory:
   en: 0c6df3e8b6a75372
   zh: 476666a6f209542c
@@ -93,8 +96,8 @@
   en: b6bd570c0159ba08
   zh: 7d2d91eea6a8d830
 /deepseek-ai-dsh-llm-pi-ai/known-limitations-and-deferred-work:
-  en: 1c54b949c81df84f
-  zh: b894d01aa3e6afc1
+  en: 685853b22e1531b7
+  zh: 375255a68e51e068
 /deepseek-ai-dsh-llm-pi-ai/known-limitations-and-deferred-work/dev-note:
   en: 3678dd0f6642c2a5
   zh: 75cbdd064cc64282

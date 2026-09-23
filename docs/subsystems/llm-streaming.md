@@ -866,7 +866,7 @@ The [wire reference](../deepseek-llm-api-wire-extensions.md) defines the exact r
 
 ## Service and provider contracts
 
-`LlmAdapter` is the provider contract: subclass, implement `stream()`, and register one adapter instance with `ctx.llm.registerAdapter(providers, adapter)`. `GenerateOptions.provider` selects the registered adapter; `GenerateOptions.model` is passed to that adapter and need not be registered at lifecycle start. Duplicate provider routes fail atomically. Optional `providerRetryPolicy()` is captured per route with normal defaults, while `providerInfo()` and asynchronous `listModels()` feed `LlmRuntime.listProviders()` / `listModels()` with detached selector metadata. That catalog is advisory rather than a request whitelist: the adapter remains authoritative and may accept unlisted model ids. One asynchronous `resolveModel()` query returns exact model identity plus optional correctness-sensitive context capacity, an adapter-configured `defaultMaxTokens`, and ordered model-owned reasoning ids with an optional deployment default; absent fields mean unavailable metadata or provider-owned behavior, not invalid catalog membership. The resolver receives optional cancellation and must settle promptly after abort. `LlmRuntime.resolveModelInfo()` validates and detaches the aggregate. At the final adapter boundary, `resolveCallConfig()` materializes the output default only when `maxTokens` is absent and validates and materializes reasoning, so direct calls cannot bypass either configured behavior; direct dispatch captures one registration before awaiting that resolution. The agent loop instead uses `prepareCall()` to keep the same registration across model resolution, durable header logging, and dispatch, retain detached context metadata from that exact lookup, and report which config fields the adapter defaulted. Adapter lookup happens at the terminal continuation of the `llm/stream` waterfall, so a listener may short-circuit the call or route a mutable one-shot request before lookup. AgentLoop observes a request attempt once the outer waterfall returns a stream handle; that limited boundary does not prove a lazy terminal adapter was constructed or began provider I/O. The `block-start` / `block-end` `index` correlation and the assembler together mean an adapter only has to emit well-formed chunks — block reassembly is not each adapter's problem. [architecture.md](../architecture.md#turn-flow) shows where `ctx.llm.stream()` and the `llm/stream` waterfall sit in one turn.
+`LlmAdapter` is the provider contract: subclass, implement `stream()`, and register one adapter instance with `ctx.llm.registerAdapter(providers, adapter)`. `GenerateOptions.provider` selects the registered adapter; `GenerateOptions.model` is passed to that adapter and need not be registered at lifecycle start. Duplicate provider routes fail atomically. Optional `providerRetryPolicy()` is captured per route with normal defaults, while `providerInfo()` and asynchronous `listModels()` feed `LlmRuntime.listProviders()` / `listModels()` with detached selector metadata, and an adapter whose catalog comes from outside the process implements `refreshModels()`, which `LlmRuntime.refreshModelCatalogs()` calls once per adapter for a surface offering an explicit refresh. That catalog is advisory rather than a request whitelist: the adapter remains authoritative and may accept unlisted model ids. One asynchronous `resolveModel()` query returns exact model identity plus optional correctness-sensitive context capacity, an adapter-configured `defaultMaxTokens`, and ordered model-owned reasoning ids with an optional deployment default; absent fields mean unavailable metadata or provider-owned behavior, not invalid catalog membership. The resolver receives optional cancellation and must settle promptly after abort. `LlmRuntime.resolveModelInfo()` validates and detaches the aggregate. At the final adapter boundary, `resolveCallConfig()` materializes the output default only when `maxTokens` is absent and validates and materializes reasoning, so direct calls cannot bypass either configured behavior; direct dispatch captures one registration before awaiting that resolution. The agent loop instead uses `prepareCall()` to keep the same registration across model resolution, durable header logging, and dispatch, retain detached context metadata from that exact lookup, and report which config fields the adapter defaulted. Adapter lookup happens at the terminal continuation of the `llm/stream` waterfall, so a listener may short-circuit the call or route a mutable one-shot request before lookup. AgentLoop observes a request attempt once the outer waterfall returns a stream handle; that limited boundary does not prove a lazy terminal adapter was constructed or began provider I/O. The `block-start` / `block-end` `index` correlation and the assembler together mean an adapter only has to emit well-formed chunks — block reassembly is not each adapter's problem. [architecture.md](../architecture.md#turn-flow) shows where `ctx.llm.stream()` and the `llm/stream` waterfall sit in one turn.
 
 ```ts type-equiv
 /** One model call whose config and adapter registration were resolved together. */
@@ -944,6 +944,20 @@ declare abstract class LlmAdapter {
    * @returns discoverable models in adapter-preferred order.
    */
   listModels(_provider: string): Promise<readonly LlmModelInfo[]>;
+  /**
+   * Fetch fresh model metadata for every route this adapter owns, when its
+   * catalog has a source outside the process. An adapter serving a fixed
+   * catalog resolves immediately, which is the default; one that reads a
+   * published directory fetches it and publishes the result through
+   * {@link listModels}.
+   *
+   * The call refreshes the adapter's whole catalog rather than one route's,
+   * because a source shared by several routes is fetched once. It settles when
+   * the fetch has published or failed; a rejection reaches the surface that
+   * asked, which owns its own retry.
+   * @returns a promise settling after the adapter's catalog reflects the fetch.
+   */
+  refreshModels(): Promise<void>;
   /**
    * Resolve all metadata available for one exact model. This query is
    * independent of the advisory catalog and does not validate request routing.
@@ -1124,6 +1138,14 @@ imageRequestTarget(provider: string, model: string, image: ImageAttachmentRef): 
 fileRequestText(ref: FileAttachmentRef): string
 
 /**
+ * Ask every registered adapter to fetch its model catalog again, so a surface
+ * can show models published since this process started. Each adapter is asked
+ * exactly once per registration set, however many routes it owns.
+ * @returns a promise settling after every adapter has answered.
+ */
+async refreshModelCatalogs(): Promise<void>
+
+/**
  * Discover models advertised by one registered provider. Catalog membership
  * does not constrain core routing. Catalog-driven entry points may restrict
  * selection and submission to the advertised models.
@@ -1273,7 +1295,7 @@ Prepare headers for one pi-ai inference call, excluding model discovery. Listene
  * details and non-Error values are replaced with safe guidance.
  * @mode waterfall
  * @param request - immutable routing metadata from the exact prepared call.
- * @param headers - fresh profile headers, shared only within this dispatch.
+ * @param headers - fresh profile headers, plus `x-opencode-session` on an OpenCode gateway route, shared only within this dispatch.
  * @param next - continue header preparation through the remaining listeners.
  * @returns headers passed to pi-ai after Harness attribution is applied.
  */

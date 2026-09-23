@@ -66,8 +66,12 @@ import type {} from '@deepseek-ai/dsh-fs'
 import { deepEqualJson } from '@deepseek-ai/dsh-util-values'
 import { PiAiAdapter } from './adapter.ts'
 import { authContextFrom, credentialStoreFrom } from './auth.ts'
-import { catalogProvider, catalogProviderIds } from './catalog.ts'
-import { assertServiceable, Config, resolveProfiles } from './config.ts'
+import { catalogModels, catalogProvider, catalogProviderIds } from './catalog.ts'
+import { mapCatalogOverlay } from './catalog-overlay.ts'
+import type { CatalogModel } from './catalog-overlay.ts'
+import { catalogSnapshotPath, startCatalogRefresh } from './catalog-sync.ts'
+import type { CatalogRefreshHandle } from './catalog-sync.ts'
+import { assertServiceable, catalogOverlaySource, Config, resolveProfiles } from './config.ts'
 import type { ResolvedPiAiProviderProfile } from './config.ts'
 import { discoverModels } from './discovery.ts'
 import type { StoredModelDiscoveryProfile } from './discovery.ts'
@@ -81,6 +85,7 @@ export type { PiAiRequestHeaderContext } from './types.ts'
 export { Config } from './config.ts'
 export type {
   Options,
+  PiAiCatalogOverlayConfig,
   PiAiCompatProfile,
   PiAiModality,
   PiAiModelOverride,
@@ -107,7 +112,7 @@ declare module '@deepseek-ai/cordis' {
      * details and non-Error values are replaced with safe guidance.
      * @mode waterfall
      * @param request - immutable routing metadata from the exact prepared call.
-     * @param headers - fresh profile headers, shared only within this dispatch.
+     * @param headers - fresh profile headers, plus `x-opencode-session` on an OpenCode gateway route, shared only within this dispatch.
      * @param next - continue header preparation through the remaining listeners.
      * @returns headers passed to pi-ai after Harness attribution is applied.
      */
@@ -171,6 +176,17 @@ function directoryEntries(
   return [...entries.values()]
 }
 
+/**
+ * The overlay field of plain `Options`: an unset section is omitted
+ * rather than stated as `undefined`.
+ * @param section - the live overlay section.
+ * @returns a detached copy of the section, or no field when it is unset.
+ */
+function overlayOption(section: Config['catalogOverlay']): Pick<import('./config.ts').Options, 'catalogOverlay'> {
+  const overlay = section.get()
+  return overlay === undefined ? {} : { catalogOverlay: structuredClone(overlay) }
+}
+
 /** Register one generic pi-ai adapter for all configured provider routes. */
 export function apply(ctx: Context, config: Config): void {
   ctx.inject(['settings'], (child) => { child.effect(() => child.settings.configure({ auto: false }, ctx.fiber)) })
@@ -178,18 +194,35 @@ export function apply(ctx: Context, config: Config): void {
   let lastRaw: ReturnType<Config['providers']['get']> | undefined
   let memoized: ReadonlyMap<string, ResolvedPiAiProviderProfile> | undefined
   /**
+   * Models the loaded directory supplies that the installed catalog does not
+   * describe, by route. Absent until a snapshot loads, and for a route the
+   * directory says nothing about.
+   */
+  let overlay: ReadonlyMap<string, readonly CatalogModel[]> | undefined
+  /** The overlay's identity, so a snapshot that changes nothing re-registers nothing. */
+  let overlayFacts: unknown
+  /**
+   * The running directory refresh, restarted whenever the overlay section
+   * changes. Declared with the other live state because the adapter's explicit
+   * refresh reaches it through a closure built before the section is read.
+   */
+  let refresh: CatalogRefreshHandle | undefined
+  /** This route's overlay entries, which the resolver merges under the installed catalog. */
+  const overlayFor = (provider: string): readonly CatalogModel[] | undefined => overlay?.get(provider)
+  /**
    * The resolved profiles for the current configuration, memoized by the raw
    * snapshot's identity — which is also what makes the adapter's own snapshot
    * stable across operations that observe no change.
    *
    * Catalog diagnostics stay in the snapshot beside serviceable models, so
    * stored configuration remains visible after an installed catalog changes.
-   * Scalar configuration errors still reject resolution.
+   * Scalar configuration errors still reject resolution. Loading an overlay
+   * drops the memo so every route re-resolves against it.
    */
   const profiles = (): ReadonlyMap<string, ResolvedPiAiProviderProfile> => {
     const raw = config.providers.get()
     if (raw === lastRaw && memoized !== undefined) return memoized
-    const next = resolveProfiles(structuredClone(raw) as import('./config.ts').Options['providers'], 'deferred')
+    const next = resolveProfiles(structuredClone(raw) as import('./config.ts').Options['providers'], 'deferred', overlayFor)
     lastRaw = raw
     memoized = next
     return next
@@ -200,8 +233,14 @@ export function apply(ctx: Context, config: Config): void {
     if (fiber !== ctx.fiber) return raw
     const candidate = Config(raw as import('./config.ts').Options)
     assertServiceable(
-      { providers: structuredClone(candidate.providers.get()) } as import('./config.ts').Options,
-      { providers: structuredClone(config.providers.get()) } as import('./config.ts').Options,
+      {
+        providers: structuredClone(candidate.providers.get()),
+        ...overlayOption(candidate.catalogOverlay),
+      } as import('./config.ts').Options,
+      {
+        providers: structuredClone(config.providers.get()),
+        ...overlayOption(config.catalogOverlay),
+      } as import('./config.ts').Options,
     )
     return raw
   })
@@ -252,6 +291,9 @@ export function apply(ctx: Context, config: Config): void {
         + ` sending that message as provider-neutral content (${reason})`,
       )
     },
+    // A surface's explicit refresh fetches the directory now; an unconfigured
+    // overlay has nothing to fetch, so the adapter's refresh settles at once.
+    refreshModelCatalog: async () => { await refresh?.refresh() },
   })
   // Independent of the route set: signing in is what makes a route worth
   // adding, so the flows are offered before any profile names their provider.
@@ -281,6 +323,66 @@ export function apply(ctx: Context, config: Config): void {
     directoryFacts = entries
   }
   ensureDirectory()
+  /**
+   * Adopt one directory snapshot: map it onto the installed catalog, then let
+   * every route resolve again against it. The routes, their names, and their
+   * retry policies do not depend on the model list, so the registration and the
+   * configurable-provider directory stand; dropping the memo is what makes the
+   * next operation resolve every route with the models the overlay adds.
+   */
+  const adoptSnapshot = (document: unknown): void => {
+    const mapped = mapCatalogOverlay(document, catalogProviderIds(), catalogModels)
+    const facts = [...mapped.models.entries()]
+    if (deepEqualJson(facts, overlayFacts)) return
+    overlayFacts = facts
+    overlay = mapped.models
+    memoized = undefined
+    const added = facts.reduce((total, [, models]) => total + models.length, 0)
+    const skipped = Object.entries(mapped.skipped)
+      .flatMap(([reason, count]) => count === 0 ? [] : [`${reason}=${count}`])
+    ctx.logger.info(
+      `llm-pi-ai: catalog overlay adds ${added} model(s) across ${mapped.models.size} route(s)`
+      + (skipped.length === 0 ? '' : `; skipped ${skipped.join(', ')}`),
+    )
+  }
+  /**
+   * Restart the directory refresh whenever the overlay section changes. The
+   * snapshot it loads is adopted through {@link adoptSnapshot}, so an overlay
+   * never has to be configured before settings supply one.
+   */
+  let refreshFacts: unknown
+  const ensureCatalogRefresh = (): void => {
+    const source = catalogOverlaySource(overlayOption(config.catalogOverlay))
+    if (deepEqualJson(source, refreshFacts)) return
+    refreshFacts = source
+    void refresh?.dispose()
+    if (source === undefined) {
+      // Removing the section removes what it fetched: every route falls back to
+      // the installed catalog rather than keeping a snapshot nothing refreshes.
+      refresh = undefined
+      overlay = undefined
+      overlayFacts = undefined
+      memoized = undefined
+      return
+    }
+    refresh = startCatalogRefresh({
+      source,
+      cachePath: catalogSnapshotPath(),
+      onSnapshot: adoptSnapshot,
+      logger: ctx.logger,
+    })
+  }
+  ctx.effect(function* () {
+    // A stored section this build cannot fetch from leaves the overlay off
+    // rather than failing the routes beside it.
+    try {
+      ensureCatalogRefresh()
+    } catch (error) {
+      ctx.logger.error('llm-pi-ai: leaving the model directory overlay off')
+      ctx.logger.error(error)
+    }
+    yield () => refresh?.dispose()
+  })
   /** Host-owned request inputs for discovery of one configured route. */
   const storedDiscoveryProfile = (
     provider: string | undefined,
@@ -302,6 +404,7 @@ export function apply(ctx: Context, config: Config): void {
   ctx.llm.registerModelDiscovery(settingsNs, (request, signal) => discoverModels(
     { ...request, ...signal === undefined ? {} : { signal } },
     () => storedDiscoveryProfile(request.provider),
+    overlayFor,
   ))
   // Route effects bind to this apply fiber via the stable `ctx` reference,
   // even when a swap runs inside the scoped settings callback below. A bare
@@ -338,6 +441,14 @@ export function apply(ctx: Context, config: Config): void {
     try { ensureRegistrationFacts(); ensureDirectory() }
     catch (error) {
       ctx.logger.error('llm-pi-ai: configuration conflicts with an existing provider route')
+      ctx.logger.error(error)
+    }
+    // The overlay section is a live setting like the routes: a section that
+    // appears starts a refresh, one that changes retargets it, and one that
+    // is removed stops it and drops the overlay with it.
+    try { ensureCatalogRefresh() }
+    catch (error) {
+      ctx.logger.error('llm-pi-ai: keeping the previous model directory overlay after a refused update')
       ctx.logger.error(error)
     }
   })

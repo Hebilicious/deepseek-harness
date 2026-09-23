@@ -1,6 +1,6 @@
 /** Profile patch edits and credential updates reach the next real adapter request. */
 
-import { mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
@@ -14,6 +14,7 @@ import AuthorizationService from '@deepseek-ai/dsh-authorization'
 import LocalCredentialProvider from '@deepseek-ai/dsh-credentials-local'
 import { profileComposition } from '../../../settings/settings/tests/profile-composition.ts'
 import * as LlmPiAi from '@deepseek-ai/dsh-llm-pi-ai'
+import { writeCatalogSnapshot } from '../src/catalog-sync.ts'
 import { assemble } from './assemble.ts'
 import { closeMockServers, mockServer, textEvents } from './mock-server.ts'
 
@@ -38,9 +39,30 @@ afterEach(async () => {
   vi.unstubAllEnvs()
 })
 
-/** Boot the dormant composition: a bare `llm-pi-ai` row with no config at all. */
-async function loadComposition(): Promise<{ ctx: Context; settingsPath: string }> {
+/** The two optional inputs one composition case supplies before the Loader boots. */
+interface CompositionOptions {
+  /** The profile patch document to boot with. */
+  settings?: string
+  /** Seed the harness home, for a case that starts from a cache instead of a fetch. */
+  prepare?: (home: string) => Promise<void>
+}
+
+/**
+ * Boot the dormant composition: a bare `llm-pi-ai` row with no config at all.
+ * The harness home is this case's own directory, so the catalog snapshot cache
+ * is never the real one.
+ */
+async function loadComposition(
+  options: CompositionOptions = {},
+): Promise<{ ctx: Context; settingsPath: string; home: string }> {
   root = await mkdtemp(join(tmpdir(), 'dsh-pi-composition-'))
+  vi.stubEnv('DSH_HOME', root)
+  if (options.settings !== undefined) {
+    // initProfile keeps an existing patch file, so this document is the one the profile boots with.
+    await mkdir(join(root, 'profile'), { recursive: true })
+    await writeFile(join(root, 'profile', 'cordis.patch.yml'), options.settings)
+  }
+  await options.prepare?.(root)
   await writeFile(join(root, '.credentials.yaml'), 'version: 1\nrefs:\n  PI_COMPOSITION_KEY: key-from-store\n', { mode: 0o600 })
 
   const configPath = join(root, 'cordis.yml')
@@ -84,7 +106,7 @@ async function loadComposition(): Promise<{ ctx: Context; settingsPath: string }
   }
   ctx.loader.internal = internal
   const patchPath = await profileComposition(ctx, root, configPath)
-  return { ctx, settingsPath: patchPath }
+  return { ctx, settingsPath: patchPath, home: root }
 }
 
 describe('llm-pi-ai real dormant composition', () => {
@@ -308,5 +330,246 @@ describe('llm-pi-ai real dormant composition', () => {
         { role: 'user', content: 'continue' },
       ],
     })
+  })
+})
+
+describe('llm-pi-ai catalog overlay composition', () => {
+  /** One OpenCode Go entry the installed catalog of this build does not describe. */
+  const directory = {
+    'opencode-go': {
+      models: {
+        'mimo-v2.8-flash': {
+          name: 'MiMo V2.8 Flash',
+          tool_call: true,
+          reasoning: true,
+          modalities: { input: ['text', 'image'] },
+          limit: { context: 1048576, output: 131072 },
+          provider: { npm: '@ai-sdk/openai-compatible' },
+        },
+      },
+    },
+  }
+
+  it('serves and requests a directory model the installed catalog does not describe', async () => {
+    vi.stubEnv('PI_COMPOSITION_KEY', '')
+    const server = await mockServer([
+      { body: JSON.stringify(directory) },
+      { events: textEvents },
+    ])
+    const { ctx, home } = await loadComposition({
+      settings: [
+        '- id: llm-pi-ai',
+        '  config:',
+        '    providers:',
+        '      opencode-go:',
+        '        apiKeyEnv: PI_COMPOSITION_KEY',
+        `        baseURL: ${server.url}`,
+        '    catalogOverlay:',
+        `      url: ${server.url}`,
+        '      refreshHours: 0',
+        '',
+      ].join('\n'),
+    })
+
+    // The snapshot lands after the settings section resolved, so the route is
+    // registered before the overlay exists and has to pick it up live.
+    await vi.waitFor(async () => {
+      const models = await ctx.llm.listModels('opencode-go')
+      expect(models.map(model => model.id)).toContain('mimo-v2.8-flash')
+    }, { timeout: 5000 })
+
+    const resolved = await ctx.llm.resolveModelInfo('opencode-go', 'mimo-v2.8-flash')
+    expect(resolved).toMatchObject({
+      provider: 'opencode-go',
+      id: 'mimo-v2.8-flash',
+      name: 'MiMo V2.8 Flash',
+      context: { contextWindow: 1048576 },
+    })
+
+    const result = await assemble(ctx, { provider: 'opencode-go', model: 'mimo-v2.8-flash', messages: [] })
+    expect(result.message.content).toEqual([{ type: 'text', text: 'hello' }])
+    expect(server.requests[1]).toMatchObject({ model: 'mimo-v2.8-flash' })
+    expect(server.headers[1]?.authorization).toBe('Bearer key-from-store')
+
+    // The snapshot is cached, which is what lets a start with no reachable
+    // directory still serve the overlay.
+    await expect(readFile(join(home, 'cache', 'llm-pi-ai', 'models-dev.json'), 'utf8'))
+      .resolves.toContain('mimo-v2.8-flash')
+  })
+
+  it('serves the cached snapshot when the directory is unreachable', async () => {
+    vi.stubEnv('PI_COMPOSITION_KEY', '')
+    // Port 9 is the discard service: nothing accepts a connection there.
+    const { ctx } = await loadComposition({
+      settings: [
+        '- id: llm-pi-ai',
+        '  config:',
+        '    providers:',
+        '      opencode-go:',
+        '        apiKeyEnv: PI_COMPOSITION_KEY',
+        '    catalogOverlay:',
+        '      url: http://127.0.0.1:9/catalog.json',
+        '      refreshHours: 12',
+        '',
+      ].join('\n'),
+      prepare: home => writeCatalogSnapshot(join(home, 'cache', 'llm-pi-ai', 'models-dev.json'), {
+        document: directory,
+        url: 'http://127.0.0.1:9/catalog.json',
+        fetchedAt: Date.now(),
+      }),
+    })
+
+    await vi.waitFor(async () => {
+      const models = await ctx.llm.listModels('opencode-go')
+      expect(models.map(model => model.id)).toContain('mimo-v2.8-flash')
+    }, { timeout: 5000 })
+  })
+
+  it('adopts an unchanged snapshot once and leaves installed ids to the catalog', async () => {
+    vi.stubEnv('PI_COMPOSITION_KEY', '')
+    const repeated = {
+      'opencode-go': {
+        models: {
+          ...directory['opencode-go'].models,
+          // An id the installed catalog already describes: the overlay counts it
+          // as skipped and the catalog entry keeps serving.
+          'mimo-v2.5': { name: 'MiMo V2.5 renamed by the directory', tool_call: true },
+        },
+      },
+    }
+    const server = await mockServer([
+      { body: JSON.stringify(repeated) },
+      { body: JSON.stringify(repeated) },
+    ])
+    const { ctx } = await loadComposition({
+      settings: [
+        '- id: llm-pi-ai',
+        '  config:',
+        '    providers:',
+        '      opencode-go:',
+        '        apiKeyEnv: PI_COMPOSITION_KEY',
+        '    catalogOverlay:',
+        `      url: ${server.url}`,
+        '      refreshHours: 12',
+        '',
+      ].join('\n'),
+    })
+    await vi.waitFor(async () => {
+      const models = await ctx.llm.listModels('opencode-go')
+      expect(models.map(model => model.id)).toContain('mimo-v2.8-flash')
+    }, { timeout: 5000 })
+
+    // The second fetch returns the same document: it is adopted once, and the
+    // installed entry keeps its name either way.
+    await ctx.llm.refreshModelCatalogs()
+    expect(server.paths).toHaveLength(2)
+    const models = await ctx.llm.listModels('opencode-go')
+    expect(models.map(model => model.id)).toContain('mimo-v2.8-flash')
+    expect(models.find(model => model.id === 'mimo-v2.5')?.name).not.toBe('MiMo V2.5 renamed by the directory')
+  })
+
+  it('publishes a model the directory starts serving later on the explicit refresh', async () => {
+    vi.stubEnv('PI_COMPOSITION_KEY', '')
+    const first = { 'opencode-go': { models: { 'mimo-v2.8-flash': { name: 'MiMo V2.8 Flash', tool_call: true } } } }
+    const second = {
+      'opencode-go': {
+        models: {
+          'mimo-v2.8-flash': { name: 'MiMo V2.8 Flash', tool_call: true },
+          'mimo-v2.9-flash': { name: 'MiMo V2.9 Flash', tool_call: true },
+        },
+      },
+    }
+    const server = await mockServer([
+      { body: JSON.stringify(first) },
+      { body: JSON.stringify(second) },
+    ])
+    const { ctx } = await loadComposition({
+      settings: [
+        '- id: llm-pi-ai',
+        '  config:',
+        '    providers:',
+        '      opencode-go:',
+        '        apiKeyEnv: PI_COMPOSITION_KEY',
+        '    catalogOverlay:',
+        `      url: ${server.url}`,
+        '      refreshHours: 12',
+        '',
+      ].join('\n'),
+    })
+    await vi.waitFor(async () => {
+      const models = await ctx.llm.listModels('opencode-go')
+      expect(models.map(model => model.id)).toContain('mimo-v2.8-flash')
+    }, { timeout: 5000 })
+    expect((await ctx.llm.listModels('opencode-go')).map(model => model.id)).not.toContain('mimo-v2.9-flash')
+
+    // What the selector's refresh button triggers on the Host.
+    await ctx.llm.refreshModelCatalogs()
+
+    await vi.waitFor(async () => {
+      const models = await ctx.llm.listModels('opencode-go')
+      expect(models.map(model => model.id)).toContain('mimo-v2.9-flash')
+    }, { timeout: 5000 })
+  })
+
+  it('drops the overlay when the section is removed', async () => {
+    vi.stubEnv('PI_COMPOSITION_KEY', '')
+    const server = await mockServer([{ body: JSON.stringify(directory) }])
+    const { ctx, settingsPath } = await loadComposition({
+      settings: [
+        '- id: llm-pi-ai',
+        '  config:',
+        '    providers:',
+        '      opencode-go:',
+        '        apiKeyEnv: PI_COMPOSITION_KEY',
+        '    catalogOverlay:',
+        `      url: ${server.url}`,
+        '      refreshHours: 0',
+        '',
+      ].join('\n'),
+    })
+    await vi.waitFor(async () => {
+      const models = await ctx.llm.listModels('opencode-go')
+      expect(models.map(model => model.id)).toContain('mimo-v2.8-flash')
+    }, { timeout: 5000 })
+
+    await writeFile(settingsPath, [
+      '- id: llm-pi-ai',
+      '  config:',
+      '    providers:',
+      '      opencode-go:',
+      '        apiKeyEnv: PI_COMPOSITION_KEY',
+      '',
+    ].join('\n'))
+
+    await vi.waitFor(async () => {
+      const models = await ctx.llm.listModels('opencode-go')
+      expect(models.map(model => model.id)).not.toContain('mimo-v2.8-flash')
+    }, { timeout: 5000 })
+  })
+
+  it('keeps the routes serving when the stored overlay section cannot be fetched from', async () => {
+    vi.stubEnv('PI_COMPOSITION_KEY', '')
+    const server = await mockServer([{ events: textEvents }])
+    const { ctx } = await loadComposition({
+      settings: [
+        '- id: llm-pi-ai',
+        '  config:',
+        '    providers:',
+        '      deepseek:',
+        '        apiKeyEnv: PI_COMPOSITION_KEY',
+        `        baseURL: ${server.url}`,
+        '    catalogOverlay:',
+        '      url: ""',
+        '',
+      ].join('\n'),
+    })
+
+    // The URL is refused where the overlay would start, which is after the
+    // routes registered: the adapter keeps them and the overlay simply stays off.
+    await vi.waitFor(() => {
+      expect(ctx.llm.listProviders().map(provider => provider.id)).toEqual(['deepseek'])
+    }, { timeout: 5000 })
+    const result = await assemble(ctx, { provider: 'deepseek', model: 'deepseek-flash', messages: [] })
+    expect(result.message.content).toEqual([{ type: 'text', text: 'hello' }])
   })
 })

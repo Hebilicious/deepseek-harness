@@ -25,7 +25,10 @@
 import { INVALID_CREDENTIAL_CODE, LlmError, normalizeApiKey } from '@deepseek-ai/dsh-llm'
 import type { LlmDiscoveredModel, LlmModelDiscoveryOperation } from '@deepseek-ai/dsh-llm'
 import { attributionHeaders } from '@deepseek-ai/dsh-llm'
+import type { Api, Model } from '@earendil-works/pi-ai'
+import { OversizedBodyError, readBounded } from './bounded-body.ts'
 import { catalogModels } from './catalog.ts'
+import { overlayCatalog } from './catalog-overlay.ts'
 
 /**
  * Protocols whose model listing this module can read. OpenAI protocols use
@@ -119,49 +122,6 @@ function listingUrl(baseURL: string, api: string): string {
   if (api !== 'anthropic-messages') return `${base}/models`
   const root = base.endsWith('/v1') ? base.slice(0, -3) : base
   return `${root}/v1/models?limit=${String(ANTHROPIC_MODEL_LIMIT)}`
-}
-
-/**
- * Read a reply body, refusing one that outgrows the ceiling. A declared length
- * is checked first so an honest server is turned away without transferring
- * anything; the accumulated total is what actually enforces the bound, because
- * a server that under-declares (or streams) tells us nothing up front.
- */
-async function readBounded(response: Response, url: string): Promise<string> {
-  const oversized = (): LlmError =>
-    new LlmError(`${url} answered with more than ${MAX_RESPONSE_BYTES} bytes`, 'DISCOVERY_FAILED')
-  const declared = Number(response.headers.get('content-length') ?? Number.NaN)
-  if (Number.isFinite(declared) && declared > MAX_RESPONSE_BYTES) {
-    await response.body?.cancel()
-    throw oversized()
-  }
-  /* v8 ignore next -- fetch always exposes a body stream on a 2xx Response; the null guard is defensive. */
-  if (response.body === null) return ''
-  const reader = response.body.getReader()
-  const chunks: Uint8Array[] = []
-  let total = 0
-  try {
-    for (;;) {
-      const { done, value } = await reader.read()
-      if (done) break
-      total += value.byteLength
-      if (total > MAX_RESPONSE_BYTES) throw oversized()
-      chunks.push(value)
-    }
-  } finally {
-    /* v8 ignore next 4 -- cancel() after a completed or abandoned read settles without rejecting; unobserved best-effort cleanup. */
-    await reader.cancel().catch(() => {
-      // Cancel after a drained read, or after this function walked away from
-      // an oversized one, is cleanup; the reply is already decided either way.
-    })
-  }
-  const body = new Uint8Array(total)
-  let offset = 0
-  for (const chunk of chunks) {
-    body.set(chunk, offset)
-    offset += chunk.byteLength
-  }
-  return new TextDecoder().decode(body)
 }
 
 /**
@@ -262,6 +222,8 @@ export interface StoredModelDiscoveryProfile {
  * @param storedProfile - Host-owned headers and lazy credential resolution for
  *   the named route. It is read only on the path that reaches the network; the
  *   credential is resolved only when the draft carries none.
+ * @param overlayFor - the route's directory overlay, so a catalog route advertises
+ *   the models it actually serves rather than the installed catalog alone.
  * @returns the advertised models in endpoint order.
  * @throws LlmError when the protocol has no readable listing, the endpoint
  *   refuses or fails the request, or the reply is not a model listing.
@@ -269,11 +231,12 @@ export interface StoredModelDiscoveryProfile {
 export async function discoverModels(
   request: LlmModelDiscoveryOperation,
   storedProfile?: () => StoredModelDiscoveryProfile | undefined,
+  overlayFor?: (provider: string) => readonly Model<Api>[] | undefined,
 ): Promise<readonly LlmDiscoveredModel[]> {
   // A catalog route already has its answer, and a better one: the installed
   // entries carry context windows and output caps no listing endpoint reports.
   if (request.provider !== undefined) {
-    const installed = catalogModels(request.provider)
+    const installed = overlayCatalog(catalogModels(request.provider), overlayFor?.(request.provider))
     if (installed.size > 0) {
       return [...installed.values()].map(model => ({
         id: model.id,
@@ -343,13 +306,18 @@ export async function discoverModels(
   }
   let text: string
   try {
-    text = await readBounded(response, url)
+    text = await readBounded(response, url, MAX_RESPONSE_BYTES)
   } catch (error: unknown) {
     // Cancellation during the body read rejects with the abort reason, which
     // may be any value; the caller gets the same coded failure it would have
-    // for a cancellation before the request went out.
+    // for a cancellation before the request went out. An oversized body is the
+    // one read refusal this seam reports itself, so it keeps the discovery code
+    // and message a surface shows; anything else stays as it arrived.
     if (request.signal?.aborted) {
       throw new LlmError('model discovery aborted by caller', 'ABORTED', { cause: error })
+    }
+    if (error instanceof OversizedBodyError) {
+      throw new LlmError(error.message, 'DISCOVERY_FAILED', { cause: error })
     }
     throw error
   }

@@ -28,19 +28,28 @@ interface ListingServer {
 
 /**
  * A stand-in provider that answers one scripted `GET /models`. `chunks` writes
- * without a declared length, which is how a real streamed reply arrives.
+ * without a declared length, which is how a real streamed reply arrives;
+ * `invalidEncoding` answers with headers a client accepts and a body that fails
+ * while it is read, which is how a transport fault arrives after the request
+ * succeeded.
  */
 async function listingServer(behavior: {
   status?: number
   body?: string
   chunks?: string[]
   holdOpenMs?: number
+  invalidEncoding?: boolean
 }): Promise<ListingServer> {
   const paths: string[] = []
   const headers: IncomingMessage['headers'][] = []
   const server = createServer((request: IncomingMessage, response: ServerResponse) => {
     paths.push(request.url ?? '')
     headers.push(request.headers)
+    if (behavior.invalidEncoding === true) {
+      response.writeHead(200, { 'content-type': 'application/json', 'content-encoding': 'gzip' })
+      response.end('not a gzip stream')
+      return
+    }
     if (behavior.chunks !== undefined) {
       // No declared length: the ceiling has to hold on what is read.
       response.writeHead(behavior.status ?? 200, { 'content-type': 'application/json' })
@@ -377,6 +386,18 @@ describe('draft-provider model discovery', () => {
     // Port 9 is the discard service: nothing accepts a connection there.
     await expect(ctx.llm.discoverModels('llm-pi-ai', { baseURL: 'http://127.0.0.1:9/v1' }))
       .rejects.toMatchObject({ code: 'DISCOVERY_FAILED' })
+  })
+
+  it('propagates a body read that fails for a reason of its own', async () => {
+    const ctx = await harness()
+    const broken = await listingServer({ invalidEncoding: true })
+    const failure = await ctx.llm.discoverModels('llm-pi-ai', { baseURL: broken.url })
+      .then(() => undefined, (error: unknown) => error)
+
+    // The seam relabels the two read outcomes it owns (cancellation and an
+    // oversized reply); a transport failure keeps the error it arrived as.
+    expect(failure).toBeInstanceOf(Error)
+    expect((failure as { code?: string }).code).toBeUndefined()
   })
 
   it.each(['azure-openai-responses', 'openai-codex-responses', 'google-generative-ai'])(

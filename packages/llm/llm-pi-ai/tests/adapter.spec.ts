@@ -148,7 +148,7 @@ describe('PiAiAdapter provider routing', () => {
     })
     await assemble(ctx, {
       provider: 'opencode-go',
-      model: 'deepseek-v4-flash',
+      model: 'deepseek-v4-pro',
       messages: [],
       sessionId: 'session-abc' as never,
     })
@@ -171,7 +171,7 @@ describe('PiAiAdapter provider routing', () => {
     })
     await assemble(ctx, {
       provider: 'opencode-go',
-      model: 'deepseek-v4-flash',
+      model: 'deepseek-v4-pro',
       messages: [],
       sessionId: 'session-live' as never,
     })
@@ -189,7 +189,7 @@ describe('PiAiAdapter provider routing', () => {
       })
       await assemble(ctx, {
         provider: 'opencode-go',
-        model: 'deepseek-v4-flash',
+        model: 'deepseek-v4-pro',
         messages: [],
         ...sessionId === undefined ? {} : { sessionId },
       })

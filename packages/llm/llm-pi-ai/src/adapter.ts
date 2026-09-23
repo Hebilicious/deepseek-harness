@@ -126,6 +126,12 @@ export interface PiAiAdapterOptions {
    * conversion because its stored replay state is unusable by this build.
    */
   onReplayDegrade?: (detail: { provider: string; model: string; reason: string }) => void
+  /**
+   * Fetch the model directory again and publish what it holds, which is how a
+   * selector's explicit refresh reaches models published since this process
+   * started. Absent means the deployment serves the installed catalog alone.
+   */
+  refreshModelCatalog?: () => Promise<void>
 }
 
 /** The two auth injectables a pi-ai collection is built with. */
@@ -395,6 +401,15 @@ export class PiAiAdapter extends LlmAdapter {
         inputModalities: [...model.input],
       }))
     })
+  }
+
+  /**
+   * Fetch the model directory now, when the deployment configured one. One
+   * directory serves every route, so this adapter is asked once and refreshes
+   * them all.
+   */
+  override async refreshModels(): Promise<void> {
+    await this.config.refreshModelCatalog?.()
   }
 
   override resolveModel(
