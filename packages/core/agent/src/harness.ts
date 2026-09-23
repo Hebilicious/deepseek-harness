@@ -76,8 +76,9 @@ export function agentHarnessOf(
  * A child belongs to the same harness as the session it descends from, which is
  * what the single-harness world did implicitly: the caller passes the result as
  * the create/resume `harness`. A session recording no harness yields
- * `undefined`, and the host then resolves its sole mounted harness or refuses
- * with its own message, so no caller invents a harness id for it. The
+ * `undefined`, and the host then resolves the harness that claims those logs —
+ * the in-process loop — or its sole mounted harness, refusing only when neither
+ * exists, so no caller invents a harness id for it. The
  * projection registry is optional; without one this read has nothing to fold
  * and yields `undefined` too.
  * @param ctx - context the projection registry is resolved from.

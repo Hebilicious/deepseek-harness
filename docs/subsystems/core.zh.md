@@ -861,6 +861,19 @@ setFactory(factory: AgentFactory): () => void
 harnesses(): readonly AgentHarness[]
 
 /**
+ * The harness that owns a stored Session whose log records none.
+ *
+ * The `agent/harness` record is younger than the sessions it describes: a log
+ * carrying no such event was written before the record existed, when a
+ * deployment ran one factory. In this harness that factory is the in-process
+ * loop, so a resume of such a log resolves the loop rather than refusing a
+ * conversation that predates the record. A deployment that mounts several
+ * harnesses without a loop has no owner to resolve and refuses the resume.
+ * @returns the mounted `dsh` loop harness id, or `undefined` without one.
+ */
+harnessForUnrecordedSession(): HarnessId | undefined
+
+/**
  * Create and publish a new agent through the registered factory.
  * Distinct from {@link register} (which records an already-constructed
  * agent): this constructs the agent and its session. Rejects if no factory is
@@ -874,7 +887,9 @@ async create(options: CreateAgentOptions): Promise<AgentHandle>
 /**
  * Load a persisted session and resume an agent on it through the registered
  * factory. Rejects if no factory is registered; the factory rejects if
- * session persistence is not configured or persistence/setup fails.
+ * session persistence is not configured or persistence/setup fails. An
+ * unnamed resume resolves {@link harnessForUnrecordedSession}, because the
+ * caller that read the log found no record in it.
  * @param options - persisted identity, optional live parent, configuration, and setup.
  * @returns the handle after setup, rollback-covered publication, and loop start complete.
  */

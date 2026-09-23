@@ -35,7 +35,7 @@ changes:
 <a id="compatibility"></a>
 ## Compatibility
 
-Same-version addition. Existing records remain valid and carry no harness event, which resume treats as unspecified. The event is appended once, by the owning harness's own factory, inside the pre-publication suffix, so it is durable before any turn runs. It is required-on-read like every other declared event: a build that does not declare it refuses a log that contains one, so a session created by a multi-harness deployment is opened by a build that ships this vocabulary. Resume routes through the recorded id, and a request that names a different harness is refused rather than replaying the conversation under a second harness.
+Same-version addition. Existing records remain valid and carry no harness event, which resume resolves to the in-process loop that wrote every log predating the record; a deployment mounting several harnesses without a loop refuses that resume. The event is appended once, by the owning harness's own factory, inside the pre-publication suffix, so it is durable before any turn runs. It is required-on-read like every other declared event: a build that does not declare it refuses a log that contains one, so a session created by a multi-harness deployment is opened by a build that ships this vocabulary. Resume routes through the recorded id, and a request that names a different harness is refused rather than replaying the conversation under a second harness.
 
 <a id="verification"></a>
 ## Verification

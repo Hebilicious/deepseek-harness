@@ -22,11 +22,14 @@ import { createServer } from 'node:http'
 import { createRequire, SourceMap } from 'node:module'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { constants, zstdCompressSync } from 'node:zlib'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import type { Browser, Page } from 'playwright'
 import { chromium } from 'playwright'
 import { afterAll, beforeAll, describe, expect, it, onTestFailed } from 'vitest'
 import WebSocket from 'ws'
+import { SESSION_FORMAT_VERSION } from '@deepseek-ai/dsh-session'
+import { projectKey } from '@deepseek-ai/dsh-session-persistence-jsonl/src/format.ts'
 import { REPO_ROOT, connectFreshWorkspace, newEnglishPage, probeFreePort, requireDist, saveFailureShot } from './support.ts'
 
 const WEB_SURFACE_PROMPT = fileURLToPath(new URL('./expected/web-runtime-context/web-surface-prompt.expected.md', import.meta.url))
@@ -507,6 +510,69 @@ describe('dsh web keyless CLI smoke', () => {
       if (child.exitCode === null) child.kill('SIGTERM')
       await closed
       await new Promise<void>(resolveClose => provider.close(() => { resolveClose() }))
+      rmSync(workspace, { recursive: true, force: true })
+    }
+  })
+
+  it('opens a session that records no harness in the multi-harness web profile', async () => {
+    requireDist()
+    const workspace = mkdtempSync(join(tmpdir(), 'dsh-web-unrecorded-'))
+    const harnessHome = join(workspace, '.dsh')
+    const sessionId = `session-${randomUUID()}`
+    // A deployment that ran one factory wrote this log before `agent/harness`
+    // existed, so the header is the whole record.
+    const sessionDir = join(harnessHome, 'sessions', projectKey(workspace), sessionId)
+    mkdirSync(sessionDir, { recursive: true })
+    writeFileSync(join(sessionDir, `session.v${String(SESSION_FORMAT_VERSION)}.jsonl.zstd`), zstdCompressSync(
+      Buffer.from(`${JSON.stringify({
+        version: SESSION_FORMAT_VERSION,
+        isSeeded: false,
+        createdAt: Date.now() - 60_000,
+        cwd: workspace,
+        delegationDepth: 0,
+        type: 'session',
+        id: sessionId,
+      })}\n`),
+      { params: { [constants.ZSTD_c_checksumFlag]: 1 } },
+    ))
+    const tsxLoader = pathToFileURL(createRequire(join(REPO_ROOT, 'package.json')).resolve('tsx')).href
+    const child = spawn(
+      process.execPath,
+      ['--import', tsxLoader, join(REPO_ROOT, 'apps/cli/src/bin.ts'), 'web', '--no-open', '--port', '0'],
+      {
+        cwd: workspace,
+        env: {
+          ...process.env,
+          DEEPSEEK_API_KEY: 'keyless-web-unrecorded',
+          DEEPSEEK_BASE_URL: 'http://127.0.0.1:1',
+          DSH_HOME: harnessHome,
+          DSH_AGENTS_HOME: join(workspace, '.agents'),
+          TSX_TSCONFIG_PATH: join(REPO_ROOT, 'tsconfig.json'),
+        },
+        stdio: ['ignore', 'pipe', 'pipe'],
+      },
+    )
+    try {
+      const baseUrl = await waitForReadyLine(child)
+      // The web profile mounts the loop beside the external harnesses, so an
+      // unnamed create is refused: several are mounted, which is the condition
+      // that made the seeded log below unresolvable before the loop claimed it.
+      await expect(remoteRpc(baseUrl, 'session/create', { request: {} }))
+        .rejects.toThrow('session.create needs a harness id')
+      await remoteRpc(baseUrl, 'session/rename', { request: { sessionId, title: 'before the record' } })
+
+      const listed = await remoteRpc<{
+        items: { sessionId: string; projections?: { values?: Record<string, unknown> } }[]
+      }>(baseUrl, 'session/list', { _request: {} })
+      const row = listed.items.find(item => item.sessionId === sessionId)
+      // Opening it resumed the loop, which recorded the owner from then on.
+      expect(row?.projections?.values?.['agentHarness']).toBe('dsh')
+    } finally {
+      const closed = child.exitCode === null
+        ? new Promise<void>((resolveClose) => { child.once('close', () => { resolveClose() }) })
+        : Promise.resolve()
+      if (child.exitCode === null) child.kill('SIGTERM')
+      await closed
       rmSync(workspace, { recursive: true, force: true })
     }
   })

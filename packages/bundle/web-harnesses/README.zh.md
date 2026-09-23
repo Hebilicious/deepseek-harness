@@ -145,7 +145,7 @@ Claude Code 自身不使用 Agent Client Protocol，因此 `claude` 条目运行
 - **每个外部 harness 都是独立程序**——Codex 与每条 ACP 条目各自启动进程：app-server 在首个会话绑定时启动，ACP harness 在首个会话绑定或模型选择器首次请求其目录时启动。每个可执行文件都必须已安装、已登录，并且能被服务进程按名称或绝对路径找到；对 mimocode 而言通常意味着把其安装目录加入 `PATH`，对 Claude Code 而言则意味着 `claude` 与可解析的适配器都要存在。
 - **Claude Code 依赖第三方适配器**——`claude` 条目运行 Zed 的 `claude-code-acp`，版本在本 bundle 中固定，并在首次使用时由 `npx` 获取；因此在适配器被缓存之前该 harness 需要网络访问，并且适配器必须与其驱动的 `claude` CLI 保持同步。Anthropic 未提供 ACP 模式，本 bundle 中该适配器是唯一受支持的路径。由于目录探测默认开启，全新安装中的首次模型选择器读取就会解析并启动该适配器；若部署在选定 Claude 会话之前不得运行它，可在该条目上设置 `probeCatalog: false`，并全局安装适配器，将 `executable` 设为 `claude-code-acp` 且不带参数。
 - **一个会话只属于一个 harness**——记录的 `agent/harness` 事件在创建时将其固定。以其他 harness 恢复该会话会被拒绝，因为另一个 harness 无法继续这段对话。
-- **未记录 harness 的会话需要显式认领调用**——本 profile 挂载的 harness 数量使未指名的创建或恢复没有唯一答案，因此在同一 `DSH_HOME` 的其他 profile 上、或在本记录出现之前创建的会话会被拒绝，并在消息中列出已挂载的 harness。以该会话 id 与某个 harness 调用 `session.create` 即可认领并记录该选择；Web 客户端目前还没有对应的控件，因此在这种情形下请新建会话。
+- **未记录 harness 的会话由进程内循环恢复**——在 `agent/harness` 记录出现之前写下的日志由进程内循环驱动，因此打开或 fork 它会在 `dsh` 上继续，并从那时起记录该 harness。记录着本 profile 未挂载的 harness 的会话仍会被拒绝。
 - **审批与沙箱策略按 harness 各自生效**——每条 ACP 条目携带自己的 `sandbox` 与 `approval` 默认值；不提供只读模式的 harness 无法满足只读预期，驱动器会记录实际生效的模式。
 - **模型目录来自 harness**——条目读取自已绑定会话自身的通告或配置好的目录命令，因此不可达或损坏的 harness 可执行文件会让其分组在选择器中为空。
 

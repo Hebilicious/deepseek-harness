@@ -483,7 +483,12 @@ export class ApiSessionAgentController {
     }
     const recorded = recordedHarness(observation.events)
     this.assertHarnessMounted(recorded)
-    if (recorded === undefined && this.ctx.agents.harnesses().length > 1) {
+    // A log that records no harness predates the record: this deployment's
+    // in-process loop wrote it, and resumes it here. Only a deployment whose
+    // several harnesses include no loop leaves the owner unresolved, and that
+    // request must name the harness it adopts the session under.
+    const harness = recorded ?? this.ctx.agents.harnessForUnrecordedSession()
+    if (harness === undefined && this.ctx.agents.harnesses().length > 1) {
       throw new RemoteError(
         'gateway/bad-request',
         `session "${sessionId}" records no agent harness and this deployment mounts ${this.ctx.agents.harnesses().map(entry => entry.id).join(', ')}; adopt it through session.create with a harness id`,
@@ -492,7 +497,7 @@ export class ApiSessionAgentController {
     }
     return (await this.ctx.agents.resume({
       resumeSessionId: sessionId,
-      ...recorded === undefined ? {} : { harness: recorded },
+      ...harness === undefined ? {} : { harness },
       agentOptions: this.agentOptions(),
       setup: composition.setup,
     })).agent
@@ -555,8 +560,9 @@ export class ApiSessionAgentController {
         const composition = await this.composeAgent(storedPreset)
         // A session whose log records no harness predates the record: the
         // request may bind it to one, and the owning factory records that
-        // binding before publication.
-        const storedHarness = recorded ?? harness
+        // binding before publication. A request that names none continues the
+        // session under the loop that wrote every such log.
+        const storedHarness = recorded ?? harness ?? this.ctx.agents.harnessForUnrecordedSession()
         this.assertHarnessMounted(storedHarness)
         return (await this.ctx.agents.resume({
           resumeSessionId: sessionId,

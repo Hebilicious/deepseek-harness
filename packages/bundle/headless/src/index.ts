@@ -283,8 +283,8 @@ async function resolveAgent(
       setup,
       // The log names the harness that owns this conversation, so a profile
       // mounting several still resolves the resume. A session recording none
-      // leaves the registry to answer with its sole mounted harness or its own
-      // refusal.
+      // predates the record: the registry resumes it on the loop that wrote
+      // that log, then on the sole mounted harness, and refuses with neither.
       ...harness === undefined ? {} : { harness },
     })
     // The observation is a snapshot: another writer may have appended a preset
@@ -352,9 +352,10 @@ async function run(ctx: Context, config: Config, io: HeadlessIo): Promise<void> 
   const sessionId = brandString<SessionId>(config.sessionId ?? `session-${randomUUID()}`)
   const fs = ctx.get('fs')
   const cwd = fs === undefined ? process.cwd() : fs.processPath(await fs.resolve('.'))
-  // The CLI task carries no harness and this run descends from no Session, so
-  // both create and resume are unnamed: the headless profile must mount exactly
-  // one harness.
+  // The CLI task carries no harness and this run descends from no Session. An
+  // unnamed create needs a profile mounting exactly one harness; an unnamed
+  // resume resolves the loop that wrote a log recording none, then the sole
+  // mounted harness.
   const agent = config.sessionId === undefined
     ? (await agents.create({
       sessionId,

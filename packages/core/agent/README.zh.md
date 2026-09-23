@@ -170,7 +170,8 @@ await handle.agent.whenIdle()
 这些限制说明本包何时需要特别留意。它们是当前包约束，不是任务积压。
 
 - **一个会话只属于一个 harness。** 部署可以挂载多个 harness（`registerHarness()`），每个 harness 拥有自己的工厂；每个会话都会以 `agent/harness` 事件记录创建它的 harness。resume 依据该记录路由，命名其他 harness 的请求会被拒绝，会话也不会从一个 harness 转交给另一个。由于该记录在发布前追加，在持久化下创建的会话在首轮之前就已拥有存储产物。
-- **挂载多个 harness 的部署必须在每次 create/resume 时指定一个。** 只挂载一个 harness 时 id 可省略；挂载多个时，`create()` 与 `resume()` 会拒绝未命名的调用，而不是任意选择。
+- **挂载多个 harness 的部署必须在每次 create 时指定一个。** 只挂载一个 harness 时 id 可省略；挂载多个时，`create()` 会拒绝未命名的调用，而不是任意选择。
+- **未命名的 resume 归进程内循环所有。** 只有当日志未记录任何 harness 时，`resume()` 才会以未命名状态到达注册表，而这只可能来自该记录出现之前写下的日志：`harnessForUnrecordedSession()` 会解析出写下这些日志的进程内循环，其次才是唯一挂载的 harness；挂载多个 harness 却没有循环的部署会拒绝，而不是猜测。
 - **发起方作用域只存在于进程内**：worker、子进程、HTTP、持久队列和重启必须显式传递所需身份。
 - **环境身份可能比存活状态更久**：消费方在生命周期敏感工作前，仍要检查 `agent.status`、取消状态和所属能力约定。
 - **创建监听器共享初始化生命周期。** `agent/created` 监听器不得等待 `agent.whenIdle()` 或自身所有者的 dispose：这些操作要等待创建完成。所需的异步工具与提示词安装完成后，监听器才可返回。

@@ -291,6 +291,7 @@ export const LINK_MAP: Readonly<Record<string, string>> = {
   AgentHandle: 'core.md',
   AgentHarness: 'core.md',
   AgentHarnessRegistration: 'core.md',
+  HarnessId: 'core.md',
   ModelSelection: 'core.md',
   AllowedModelRoute: 'subagent.md',
   SubagentModelSelectionSettings: 'subagent.md',

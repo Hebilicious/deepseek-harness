@@ -633,8 +633,9 @@ export class ContinuableActivationRegistry {
     const observer = this.observeActivation(provider, childId, parent)
     // A continuable child belongs to the harness that owns its parent's
     // session, fresh or resumed, so one read serves both materializations. A
-    // parent recording none leaves the option absent: the host then resolves
-    // its sole mounted harness or refuses with its own message.
+    // parent recording none leaves the option absent: a resumed child resolves
+    // the loop that wrote that log, and a fresh one needs the deployment's sole
+    // mounted harness.
     const harness = harnessOwning(this.ownerCtx, parent.session)
     const inheritedHarness = harness === undefined ? {} : { harness }
     const handle: AgentHandle = create === undefined

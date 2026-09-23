@@ -104,7 +104,7 @@ describe('AgentRegistry harnesses', () => {
     await ctx.fiber.dispose()
   })
 
-  it('resolves create and resume by explicit id, sole harness, or a loud failure', async () => {
+  it('resolves each call by explicit id, the loop for an unrecorded log, a sole harness, or a loud failure', async () => {
     const ctx = new Context()
     await ctx.plugin(AgentRegistry)
 
@@ -114,6 +114,7 @@ describe('AgentRegistry harnesses', () => {
       .rejects.toThrow('no agent factory registered (load an agent-loop plugin)')
     await expect(ctx.agents.create({ sessionId: SessionId('unknown'), harness: HarnessId('codex') }))
       .rejects.toThrow('agent harness "codex" is not registered (mounted: none)')
+    expect(ctx.agents.harnessForUnrecordedSession()).toBeUndefined()
 
     const dsh = recordingFactory()
     const disposeDsh = ctx.agents.registerHarness({
@@ -125,21 +126,27 @@ describe('AgentRegistry harnesses', () => {
     await ctx.agents.create({ sessionId: SessionId('sole') })
     await ctx.agents.resume({ resumeSessionId: SessionId('sole'), harness: HarnessId('dsh') })
     expect(dsh.calls).toEqual(['create:sole', 'resume:dsh'])
+    expect(ctx.agents.harnessForUnrecordedSession()).toBe(HarnessId('dsh'))
 
     const codex = recordingFactory()
     ctx.agents.registerHarness({ id: HarnessId('codex'), name: 'Codex', factory: codex.factory })
     await expect(ctx.agents.create({ sessionId: SessionId('ambiguous') }))
       .rejects.toThrow('agent creation needs a harness id (mounted: dsh, codex)')
-    await expect(ctx.agents.resume({ resumeSessionId: SessionId('ambiguous') }))
-      .rejects.toThrow('agent creation needs a harness id (mounted: dsh, codex)')
+    // A resume reaches the registry unnamed exactly when the caller's log
+    // records no harness, and the loop claims those logs instead of refusing.
+    await ctx.agents.resume({ resumeSessionId: SessionId('unrecorded') })
+    expect(dsh.calls).toEqual(['create:sole', 'resume:dsh', 'resume:sole'])
+    expect(codex.calls).toEqual([])
 
     await ctx.agents.create({ sessionId: SessionId('chosen'), harness: HarnessId('codex') })
     expect(codex.calls).toEqual(['create:codex'])
-    expect(dsh.calls).toEqual(['create:sole', 'resume:dsh'])
+    expect(dsh.calls).toEqual(['create:sole', 'resume:dsh', 'resume:sole'])
 
     disposeDsh()
+    expect(ctx.agents.harnessForUnrecordedSession()).toBeUndefined()
+    await ctx.agents.resume({ resumeSessionId: SessionId('last-resume') })
     await ctx.agents.create({ sessionId: SessionId('last') })
-    expect(codex.calls).toEqual(['create:codex', 'create:sole'])
+    expect(codex.calls).toEqual(['create:codex', 'resume:sole', 'create:sole'])
     await ctx.fiber.dispose()
   })
 
@@ -219,7 +226,7 @@ describe('agent/harness record', () => {
     await ctx.fiber.dispose()
 
     // A deployment mounting no projection registry has no record to fold: the
-    // read yields nothing and the host resolves its sole mounted harness.
+    // read yields nothing and the host resolves the owner itself.
     const bare = new Context()
     await bare.plugin(SessionStore)
     const unprojected = bare.sessions.create(SessionId('unprojected'), { meta: { cwd: '/workspace' } })

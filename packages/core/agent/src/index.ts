@@ -433,9 +433,27 @@ export class AgentRegistry extends Service {
   }
 
   /**
+   * The harness that owns a stored Session whose log records none.
+   *
+   * The `agent/harness` record is younger than the sessions it describes: a log
+   * carrying no such event was written before the record existed, when a
+   * deployment ran one factory. In this harness that factory is the in-process
+   * loop, so a resume of such a log resolves the loop rather than refusing a
+   * conversation that predates the record. A deployment that mounts several
+   * harnesses without a loop has no owner to resolve and refuses the resume.
+   * @returns the mounted `dsh` loop harness id, or `undefined` without one.
+   */
+  harnessForUnrecordedSession(): HarnessId | undefined {
+    return this.factories.get(HarnessId(DEFAULT_HARNESS_ID))?.harness.id
+  }
+
+  /**
    * Resolve the factory for one create/resume call. An explicit id must be
    * mounted; without one, a single mounted harness is the answer and several
-   * are a loud failure rather than an arbitrary choice.
+   * are a loud failure rather than an arbitrary choice. {@link resume} resolves
+   * {@link harnessForUnrecordedSession} before this fallback, so the loud
+   * failure reaches an unnamed resume only in a deployment with neither a loop
+   * nor a single harness.
    * @param harness - the requested harness id, or `undefined` for the sole mounted harness.
    * @returns the factory slot that owns the call.
    */
@@ -485,13 +503,15 @@ export class AgentRegistry extends Service {
   /**
    * Load a persisted session and resume an agent on it through the registered
    * factory. Rejects if no factory is registered; the factory rejects if
-   * session persistence is not configured or persistence/setup fails.
+   * session persistence is not configured or persistence/setup fails. An
+   * unnamed resume resolves {@link harnessForUnrecordedSession}, because the
+   * caller that read the log found no record in it.
    * @param options - persisted identity, optional live parent, configuration, and setup.
    * @returns the handle after setup, rollback-covered publication, and loop start complete.
    */
   async resume(options: ResumeAgentOptions): Promise<AgentHandle> {
     const ownerCtx = this.ctx
-    const { target } = this.requireFactory(options.harness)
+    const { target } = this.requireFactory(options.harness ?? this.harnessForUnrecordedSession())
     const receiver = getTraceable(ownerCtx, target)
     // oxlint-disable-next-line typescript/unbound-method -- Reflect.apply intentionally supplies the caller-traced receiver
     return Reflect.apply(target.resume, receiver, [ownerCtx, options])

@@ -324,6 +324,12 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
         returns: 'the harness identities and their display names.',
       },
       {
+        signature: 'harnessForUnrecordedSession(): HarnessId | undefined',
+        description: 'The harness that owns a stored Session whose log records none.\n\nThe `agent/harness` record is younger than the sessions it describes: a log carrying no such event was written before the record existed, when a deployment ran one factory. In this harness that factory is the in-process loop, so a resume of such a log resolves the loop rather than refusing a conversation that predates the record. A deployment that mounts several harnesses without a loop has no owner to resolve and refuses the resume.',
+        parameters: [],
+        returns: 'the mounted `dsh` loop harness id, or `undefined` without one.',
+      },
+      {
         signature: 'async create(options: CreateAgentOptions): Promise<AgentHandle>',
         description: 'Create and publish a new agent through the registered factory. Distinct from register (which records an already-constructed agent): this constructs the agent and its session. Rejects if no factory is registered or creation/setup fails. The resolved AgentHandle lets the owner tear down exactly this agent.',
         parameters: [{ name: 'options', description: 'shared identity, optional live parent, session seed/metadata, and agent options.' }],
@@ -331,7 +337,7 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
       },
       {
         signature: 'async resume(options: ResumeAgentOptions): Promise<AgentHandle>',
-        description: 'Load a persisted session and resume an agent on it through the registered factory. Rejects if no factory is registered; the factory rejects if session persistence is not configured or persistence/setup fails.',
+        description: 'Load a persisted session and resume an agent on it through the registered factory. Rejects if no factory is registered; the factory rejects if session persistence is not configured or persistence/setup fails. An unnamed resume resolves harnessForUnrecordedSession, because the caller that read the log found no record in it.',
         parameters: [{ name: 'options', description: 'persisted identity, optional live parent, configuration, and setup.' }],
         returns: 'the handle after setup, rollback-covered publication, and loop start complete.',
       },

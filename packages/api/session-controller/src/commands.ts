@@ -259,10 +259,11 @@ export class SessionCommandController {
     const childId = brandString<SessionId>(`session-${randomUUID()}`)
     const composition = await this.agents.composeAgent(this.agents.presetForObservation(source))
     // The fork continues the source conversation, so it runs the source's
-    // harness: a deployment mounting several cannot resolve an unnamed create.
-    // A source recording none leaves the host to resolve its sole mounted
-    // harness or refuse with its own message.
-    const harness = recordedHarness(source.events)
+    // harness. A source that records none predates the record: the loop wrote
+    // it, and its fork continues there. A deployment mounting several
+    // harnesses without a loop cannot resolve the child's owner and refuses
+    // inside the registry.
+    const harness = recordedHarness(source.events) ?? this.ctx.agents.harnessForUnrecordedSession()
     try {
       const { provider, model } = this.ctx.agentDefaultModel.currentSelection()
       await this.ctx.agents.create({

@@ -29,6 +29,7 @@ import type { TestSessionRemote } from './test-remote.ts'
 
 const DSH = HarnessId('dsh')
 const CODEX = HarnessId('codex')
+const DEVIN = HarnessId('devin')
 const CWD = '/workspace'
 
 const roots: Context[] = []
@@ -220,6 +221,21 @@ describe('Session harness selection', () => {
     expect(dsh.resume).toEqual([])
   })
 
+  it('adopts a session that records no harness under the in-process loop', async () => {
+    const w = await world()
+    const header = sessionHeader('unrecorded-loop-adoption')
+    w.persist(header)
+    const dsh = w.mount(DSH, 'DeepSeek Harness')
+    const codex = w.mount(CODEX, 'Codex')
+
+    const response = await w.remote.create({ sessionId: header.id, cwd: CWD })
+
+    if (!response.ok) throw response.error
+    expect(response.value.sessionId).toBe(header.id)
+    expect(dsh.resume).toHaveLength(1)
+    expect(codex.resume).toEqual([])
+  })
+
   it('refuses a request that names a harness other than the recorded one', async () => {
     const w = await world()
     const header = sessionHeader('recorded-dsh')
@@ -366,12 +382,31 @@ describe('Session harness selection', () => {
     expect(dsh.resume[0]?.harness).toBe(DSH)
   })
 
-  it('refuses to resume a session that records no harness while several are mounted', async () => {
+  it('resumes a session that records no harness under the in-process loop', async () => {
     const w = await world()
-    const header = sessionHeader('unrecorded-resume')
+    const header = sessionHeader('unrecorded-loop-resume')
     w.persist(header)
     const dsh = w.mount(DSH, 'DeepSeek Harness')
     const codex = w.mount(CODEX, 'Codex')
+
+    const result = await w.controller.resolveAgent(header.id)
+
+    // A log written before the harness record existed ran the deployment's
+    // loop, which claims it here rather than refusing among several mounts.
+    expect(result).toMatchObject({ agent: { id: header.id } })
+    expect(dsh.resume).toHaveLength(1)
+    expect(codex.resume).toEqual([])
+    const resumed = w.ctx.agents.get(header.id)
+    if (resumed === undefined) throw new Error('expected the resumed session to be published')
+    expect(recordedHarness(resumed.session.snapshotEvents())).toBe(DSH)
+  })
+
+  it('refuses to resume a session that records no harness when no loop is mounted', async () => {
+    const w = await world()
+    const header = sessionHeader('unrecorded-no-loop')
+    w.persist(header)
+    const codex = w.mount(CODEX, 'Codex')
+    const devin = w.mount(DEVIN, 'Devin')
 
     const result = await w.controller.resolveAgent(header.id)
 
@@ -381,12 +416,35 @@ describe('Session harness selection', () => {
         // unadoptable session from an internal fault.
         code: 'gateway/bad-request',
         message: expect.stringContaining(
-          `session "${header.id}" records no agent harness and this deployment mounts dsh, codex`,
+          `session "${header.id}" records no agent harness and this deployment mounts codex, devin`,
         ) as string,
       },
     })
-    expect(dsh.resume).toEqual([])
     expect(codex.resume).toEqual([])
+    expect(devin.resume).toEqual([])
+  })
+
+  it('forks a completed session that records no harness under the in-process loop', async () => {
+    const w = await world()
+    const source = w.ctx.sessions.create(SessionId('fork-unrecorded'), { meta: { cwd: CWD } })
+    source.append('turn/start', { turn: 1 })
+    source.append('user/message', createUserMessage({
+      content: [{ type: 'text', text: 'work' }], source: { kind: 'user' },
+    }), { surfaceOp: 'append' })
+    source.append('turn/end', { turn: 1, reason: { kind: 'completed' } })
+    w.persist({ ...source.header }, source.snapshotEvents())
+    const dsh = w.mount(DSH, 'DeepSeek Harness')
+    const codex = w.mount(CODEX, 'Codex')
+
+    const response = await w.remote.fork({ sessionId: source.id })
+
+    if (!response.ok) throw response.error
+    expect(dsh.create).toHaveLength(1)
+    expect(codex.create).toEqual([])
+    expect(dsh.create[0]?.harness).toBe(DSH)
+    const child = w.ctx.agents.get(response.value.sessionId)
+    if (child === undefined) throw new Error('expected the fork child to be published')
+    expect(recordedHarness(child.session.snapshotEvents())).toBe(DSH)
   })
 
   it('forks a completed session under the harness its log records', async () => {
