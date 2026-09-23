@@ -2,6 +2,12 @@
   - treeitem "{{workspace}}" [expanded]:
     - img
     - text: {{workspace}}
-  - treeitem "Newest conversation now" [selected]
-  - treeitem "Middle conversation 1min"
-  - treeitem "Oldest conversation 2min"
+  - treeitem "DSH Loop Newest conversation now" [selected]:
+    - img "DSH Loop"
+    - text: Newest conversation now
+  - treeitem "DSH Loop Middle conversation 1min":
+    - img "DSH Loop"
+    - text: Middle conversation 1min
+  - treeitem "DSH Loop Oldest conversation 2min":
+    - img "DSH Loop"
+    - text: Oldest conversation 2min

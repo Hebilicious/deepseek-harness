@@ -80,6 +80,13 @@ export interface Config {
    * never spawns a harness CLI per request.
    */
   catalogCacheMs?: number
+  /**
+   * How long one harness's failed catalog read is remembered before the next
+   * attempt (default 30000). Every caller inside the window receives that
+   * read's failure without spawning anything, so a harness that keeps failing
+   * (for example an executable missing from PATH) is not respawned per poll.
+   */
+  catalogFailureCacheMs?: number
 }
 
 /** One harness entry with every default except `cwd` applied. */
@@ -126,6 +133,11 @@ export const DEFAULT_EOF_GRACE_MS = 2000
 export const DEFAULT_CLI_TIMEOUT_MS = 180_000
 /** Default reuse window for one harness's catalog read. */
 export const DEFAULT_CATALOG_CACHE_MS = 300_000
+/**
+ * Default window remembering one harness's failed catalog read, shorter than
+ * {@link DEFAULT_CATALOG_CACHE_MS} so a repaired harness recovers sooner.
+ */
+export const DEFAULT_CATALOG_FAILURE_CACHE_MS = 30_000
 /** Harness ids are lowercase slugs so they are usable as provider routes and registry keys. */
 const HARNESS_ID_PATTERN = /^[a-z][a-z0-9-]*$/
 /** Default arguments after a harness executable. */

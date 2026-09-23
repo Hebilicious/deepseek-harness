@@ -1,4 +1,5 @@
 - banner:
+  - img "DSH Loop"
   - navigation "Session hierarchy":
     - 'button "Plan a small change: add" [disabled]'
   - img

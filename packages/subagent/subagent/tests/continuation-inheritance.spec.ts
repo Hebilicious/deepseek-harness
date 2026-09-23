@@ -11,7 +11,8 @@ import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { Context } from '@deepseek-ai/cordis'
-import type { Agent } from '@deepseek-ai/dsh-agent'
+import { HarnessId, agentHarnessOf, recordedHarness } from '@deepseek-ai/dsh-agent'
+import type { Agent, AgentFactory } from '@deepseek-ai/dsh-agent'
 import AgentLoop from '@deepseek-ai/dsh-agent-loop'
 import { mountAgentLoopTestDependencies } from '@deepseek-ai/dsh-agent-loop-testkit'
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
@@ -312,5 +313,75 @@ describe('continuable policy inheritance', () => {
       { data: { mode: 'read-only', source: 'delegation' } },
     ])
     expect(foldedSandboxMode(ctx, started.childId, loaded.events)).toBe('read-only')
+  })
+})
+
+/**
+ * Mount a second harness beside the loop's `dsh`, as the shipped web profile
+ * does. Every entry point rejects and is recorded: a child of a `dsh` parent
+ * that reached this factory was routed to the wrong harness.
+ */
+function mountForeignHarness(ctx: Context): string[] {
+  const calls: string[] = []
+  const factory: AgentFactory = {
+    createAgent: () => {
+      calls.push('create')
+      return Promise.reject(new Error('the foreign harness must not create a child of a dsh parent'))
+    },
+    resume: () => {
+      calls.push('resume')
+      return Promise.reject(new Error('the foreign harness must not resume a child of a dsh parent'))
+    },
+  }
+  ctx.agents.registerHarness({ id: HarnessId('foreign'), name: 'Foreign', factory })
+  return calls
+}
+
+describe('continuable child harness', () => {
+  it('creates and cold-resumes the child under the parent session harness', { timeout: 20_000 }, async () => {
+    const { ctx, parent } = await setup([textResponse('child done'), textResponse('resumed child done')])
+    const foreign = mountForeignHarness(ctx)
+
+    const started = await ctx.subagents.startContinuable(startSpec(parent))
+
+    const child = ctx.agents.get(started.childId)
+    if (child === undefined) throw new Error('expected the continuable child to be published')
+    expect(agentHarnessOf(ctx.sessionProjections, child.session)).toBe('dsh')
+    await waitNoActivation(ctx, started.childId)
+    const created = await loadStoredSession(ctx.sessionPersistence, started.childId)
+    expect(recordedHarness(created.events)).toBe(HarnessId('dsh'))
+
+    await queueHostSubagentPrompt(
+      ctx.subagents,
+      parent,
+      started.childId,
+      [{ type: 'text', text: 'continue please' }],
+      { kind: 'user' },
+      new AbortController().signal,
+    )
+    await waitNoActivation(ctx, started.childId)
+
+    const resumed = await loadStoredSession(ctx.sessionPersistence, started.childId)
+    expect(recordedHarness(resumed.events)).toBe(HarnessId('dsh'))
+    expect(foreign).toEqual([])
+  })
+
+  it('refuses an unrecorded parent through the host instead of inventing a harness', { timeout: 20_000 }, async () => {
+    const { ctx } = await setup([textResponse('unused')])
+    mountForeignHarness(ctx)
+    // A Session created before the record, or by an out-of-tree caller: the
+    // child has no ancestor harness to inherit, so the host owns the decision.
+    const session = ctx.sessions.create(SessionId('unrecorded-parent'), { meta: { cwd: process.cwd() } })
+    const parent = {
+      id: session.id,
+      session,
+      status: 'idle',
+      options: { provider: 'mock', model: 'mock' },
+      ctx,
+    } as unknown as Agent
+    await ctx.agents.register(parent)
+
+    await expect(ctx.subagents.startContinuable(startSpec(parent)))
+      .rejects.toThrow('agent creation needs a harness id (mounted: dsh, foreign)')
   })
 })

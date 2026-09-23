@@ -2,9 +2,9 @@
 
 import { mkdir } from 'node:fs/promises'
 import type { Context } from '@deepseek-ai/cordis'
-import { installModelSelection, recordedHarness } from '@deepseek-ai/dsh-agent'
+import { HarnessId, agentHarnessOf, installModelSelection, recordedHarness } from '@deepseek-ai/dsh-agent'
 import type {
-  Agent, AgentOptions, AgentSetup, HarnessId, ModelSelection as AgentModelSelection, ModelSelectionRef,
+  Agent, AgentOptions, AgentSetup, ModelSelection as AgentModelSelection, ModelSelectionRef,
 } from '@deepseek-ai/dsh-agent'
 import type {} from '@deepseek-ai/dsh-agent-default-model'
 import type {} from '@deepseek-ai/dsh-agent-presets'
@@ -12,7 +12,7 @@ import { ReasoningEffortId } from '@deepseek-ai/dsh-llm'
 import type { Session, SessionId } from '@deepseek-ai/dsh-session'
 import type { SessionInspection } from '@deepseek-ai/dsh-session-persistence'
 import { SessionQueryError, type SessionObservation } from '@deepseek-ai/dsh-session-query'
-import { RemoteError } from '@deepseek-ai/dsh-typert-protocol'
+import { RemoteError, remoteErrorOf } from '@deepseek-ai/dsh-typert-protocol'
 import type {} from '@deepseek-ai/dsh-typert-registry'
 import type { ModelSelection } from './types.ts'
 
@@ -74,7 +74,14 @@ export class ApiSessionHarnessConflict extends Error {
 }
 
 /** Failures produced while resolving one ordinary Session identity to its live Agent. */
-export type ApiSessionAgentError = RemoteError<'session/not-found' | 'session/agent-busy' | 'session/writer-held' | 'gateway/internal'>
+export type ApiSessionAgentError = RemoteError<
+  | 'session/not-found'
+  | 'session/agent-busy'
+  | 'session/writer-held'
+  | 'session/harness-unavailable'
+  | 'gateway/bad-request'
+  | 'gateway/internal'
+>
 
 /** Result of resolving one ordinary Session identity to its live Agent. */
 export type ApiSessionAgentResult =
@@ -234,6 +241,22 @@ export class ApiSessionAgentController {
       if (error instanceof Error && error.name === 'SessionAlreadyOwnedError') {
         return { error: new RemoteError('session/writer-held', error.message, { sessionId }) }
       }
+      // A typed failure raised by this controller or the registry keeps its
+      // code and details: the client renders an unmounted or conflicting
+      // harness differently from an internal fault.
+      const typed = remoteErrorOf(error)
+      if (typed !== undefined) {
+        // The codes this path can actually raise: an unmounted recorded
+        // harness, and the refusal to resume a session that records none while
+        // the deployment mounts several. Anything else stays internal.
+        switch (typed.code) {
+          case 'session/harness-unavailable':
+          case 'gateway/bad-request':
+            return { error: new RemoteError(typed.code, typed.message, typed.details) }
+          default:
+            break
+        }
+      }
       return {
         error: new RemoteError(
           'gateway/internal',
@@ -286,6 +309,12 @@ export class ApiSessionAgentController {
     }
     if (presetId !== undefined) {
       this.assertPresetUnchanged(sessionId, presetId, this.presetForSession(agent.session))
+    }
+    if (harness !== undefined) {
+      // A live or concurrently created agent resolves without the persisted
+      // checks above, so the harness is verified on the resolution result too.
+      const recorded = agentHarnessOf(this.ctx.sessionProjections, agent.session)
+      this.assertHarnessUnchanged(sessionId, harness, recorded === undefined ? undefined : HarnessId(recorded))
     }
     if (agent.session.header.cwd !== cwd) {
       throw new ApiSessionCwdConflict(sessionId, cwd, agent.session.header.cwd)

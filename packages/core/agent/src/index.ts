@@ -257,8 +257,11 @@ interface FactorySlot {
 /**
  * Agent service (`ctx.agents`): tracks live agents and carries the initiating
  * Agent through one process-local asynchronous driver chain. Agent *creation*
- * is provided by whichever plugin implements the {@link AgentFactory}
- * (`@deepseek-ai/dsh-agent-loop`), registered via {@link setFactory}.
+ * is provided by the plugins that implement the {@link AgentFactory}
+ * (`@deepseek-ai/dsh-agent-loop`, `@deepseek-ai/dsh-agent-codex`, and
+ * `@deepseek-ai/dsh-agent-acp`), each registered under its harness id via
+ * {@link registerHarness}; {@link setFactory} remains for a deployment that
+ * mounts one factory and needs no harness choice.
  *
  * Initiator methods provide same-process causal attribution only. Ambient
  * presence is neither liveness proof nor authorization; subjects and owners
@@ -395,6 +398,10 @@ export class AgentRegistry extends Service {
         target,
         harness: { id, name, ...description === undefined ? {} : { description } },
       })
+      // Deleting by key cannot remove a later registration: a second
+      // registration under this id throws while the slot is present, and this
+      // effect's disposer is single-shot, so no stale disposer can run after a
+      // replacement.
       return () => { this.factories.delete(id) }
     }, `agents.registerHarness(${id})`)
     // The exact cordis effect disposer (the agents.register() convention): a
@@ -407,8 +414,9 @@ export class AgentRegistry extends Service {
 
   /**
    * Register the sole agent-creation factory under the default harness id.
-   * Deployments that mount one harness use this; a deployment that offers a
-   * choice registers each harness with {@link registerHarness}.
+   * Remains for a deployment whose single factory needs no harness choice;
+   * every in-tree driver registers itself with {@link registerHarness} so that
+   * a session's id and display name are its own.
    * @param factory - the factory {@link create}/{@link resume} delegate to.
    * @returns the disposer that removes the harness.
    */

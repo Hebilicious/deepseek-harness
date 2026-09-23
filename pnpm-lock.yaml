@@ -5252,6 +5252,9 @@ importers:
       '@deepseek-ai/cordis':
         specifier: workspace:^
         version: link:../../../vendor/cordis
+      '@deepseek-ai/dsh-agent':
+        specifier: workspace:^
+        version: link:../../core/agent
       '@deepseek-ai/dsh-api-remotes':
         specifier: workspace:^
         version: link:../../api/remotes
@@ -11744,6 +11747,9 @@ importers:
 
   packages/test-support/client-runtime:
     dependencies:
+      '@deepseek-ai/dsh-web-harnesses':
+        specifier: workspace:^
+        version: link:../../bundle/web-harnesses
       '@testing-library/dom':
         specifier: ^10.4.1
         version: 10.4.1

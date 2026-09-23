@@ -2,13 +2,14 @@
  * Official marks of the harnesses this repository ships entries for, drawn at
  * one size in the current label color.
  *
- * Each mark keeps the source artwork's own geometry and viewBox, so the shape
- * is never redrawn or re-proportioned; only the fill follows the theme through
- * `currentColor`, which is how a monochrome product mark is meant to be shown.
- * `harness-logo-artwork.manifest.json` records where each file came from and
- * the terms attached to it. A harness with no published symbol (Devin today)
- * has no entry here and falls back to its monogram tile in
- * {@link HarnessBadge}.
+ * Each mark keeps the source artwork's own shapes, copied verbatim, and draws
+ * them in the source viewBox unless the published file frames its ink inside a
+ * much larger box: MiMo's favicon devotes 25% of each side to padding, which
+ * would draw at half the optical size of the neighbouring marks, so its
+ * rendered box is the ink box instead. `harness-logo-artwork.manifest.json`
+ * records both boxes, where each file came from, and the terms attached to it.
+ * A harness with no published symbol (Devin today) has no entry here and falls
+ * back to its monogram tile in {@link HarnessBadge}.
  *
  * @module @deepseek-ai/dsh-client-ui-primitives/harness-logos
  */
@@ -66,8 +67,12 @@ export const HARNESS_LOGOS: Readonly<Record<string, HarnessLogo>> = {
       { kind: 'path', data: 'M22 24H2V0h20zM17 4.8H7v14.4h10z' },
     ],
   },
+  // The published file frames its 128..384 x 96..416 ink inside a 512 box,
+  // which would draw at half the optical size of the neighbouring marks. The
+  // shapes are unchanged; the rendered box is the ink's centre with the larger
+  // ink dimension as its side.
   mimo: {
-    viewBox: '0 0 512 512',
+    viewBox: '96 96 320 320',
     shapes: [
       { kind: 'path', data: 'M320 224V352H192V224H320Z' },
       { kind: 'path', data: 'M384 416H128V96H384V416ZM320 160H192V352H320V160Z' },

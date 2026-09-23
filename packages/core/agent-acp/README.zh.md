@@ -68,6 +68,7 @@ kind: "package-reference"
 | `harnesses[].catalogArgs` | — | 模型目录 CLI 参数；省略时目录取自会话声明 |
 | `harnesses[].probeCatalog` | `true` | 在任何会话绑定之前，通过开启一个一次性会话来读取目录 |
 | `catalogCacheMs` | `300000` | 复用某 harness 目录读取结果的时长 |
+| `catalogFailureCacheMs` | `30000` | 记住某 harness 目录读取失败的时长，超过后才会再次尝试 |
 | `harnesses[].authStatusArgs` | `['auth', 'status']` | 认证状态命令参数；显式空列表表示没有 CLI 命令 |
 | `harnesses[].authLogoutArgs` | `['auth', 'logout']` | 认证登出命令参数 |
 | `disposeGraceMs` | `5000` | 受管范围终止层级之间的宽限期 |
@@ -104,7 +105,7 @@ kind: "package-reference"
 
 ### 模型目录
 
-每个 harness id 同时也是一个 `ctx.llm` 提供方路由，由为该 id 注册的 `AcpCatalogAdapter` 服务。目录就是该 harness 自己的会话声明：agent 发送 `models.availableModels` 时用它，否则用 `model` 配置选项的可选值。已绑定会话最近一次非空声明胜出，因此选择器反映正在运行的 harness。在任何会话绑定之前，条目按以下顺序读取目录：先运行配置好的 `catalogArgs` CLI 列表命令，然后在 `probeCatalog` 保持默认值时开启一个一次性会话，发布其声明，并在 agent 声明 `close` 或 `delete` 时关闭该会话。两者都不声明的 agent 会让该探测会话保留到进程退出，因为不关闭就断开连接会让 harness 认为该会话仍然存活；若不愿为读取目录而启动 harness，可设置 `probeCatalog: false`，此时该路由在真实会话绑定前不列出任何模型。一次读取服务所有调用方，其结果（包括空结果）在 `catalogCacheMs` 内被复用，因此轮询的选择器不会为每个请求启动 harness CLI 或探测会话；会话绑定后会用自身声明取代缓存结果。该路由不提供 stream，流请求会明确失败。
+每个 harness id 同时也是一个 `ctx.llm` 提供方路由，由为该 id 注册的 `AcpCatalogAdapter` 服务。目录就是该 harness 自己的会话声明：agent 发送 `models.availableModels` 时用它，否则用 `model` 配置选项的可选值。已绑定会话最近一次非空声明胜出，因此选择器反映正在运行的 harness。在任何会话绑定之前，条目按以下顺序读取目录：先运行配置好的 `catalogArgs` CLI 列表命令，然后在 `probeCatalog` 保持默认值时开启一个一次性会话，发布其声明，并在 agent 声明 `close` 或 `delete` 时关闭该会话，关闭失败时只记录日志并把该会话留给进程生命周期，而不会让读取失败。两者都不声明的 agent 会让该探测会话保留到进程退出，因为不关闭就断开连接会让 harness 认为该会话仍然存活；若不愿为读取目录而启动 harness，可设置 `probeCatalog: false`，此时该路由在真实会话绑定前不列出任何模型。一次读取服务所有调用方，其结果（包括空结果）在 `catalogCacheMs` 内被复用，因此轮询的选择器不会为每个请求启动 harness CLI 或探测会话；会话绑定后会用自身声明取代缓存结果。读取失败会在 `catalogFailureCacheMs` 内被记住，并在该窗口内向每个调用方重新抛出同一失败，因此持续失败的 harness（例如 `PATH` 中缺失的可执行文件）不会被每次轮询重新启动；窗口之后的下一次读取会重试，而会话声明仍然优先于被记住的失败。探测的每一步都受 `cliTimeoutMs` 截止时间约束，因为一次读取是单飞的：某个 harness 启动了却从不回答 `session/new`，否则会让该路由一直挂起到进程结束。被该截止时间终止的读取会在下一次读取时重试，而不会被记住；来自其他调用方的取消同样如此，因为两者都不是对该 harness 的判定。该路由不提供 stream，流请求会明确失败。
 
 ### 权限、模式与推理强度
 
@@ -112,7 +113,7 @@ kind: "package-reference"
 
 ### 认证操作
 
-`acpHarness` 服务在 `acp` 命名空间发布一个 Remote：`status`、`login` 与 `logout`，各自接收 harness id。登出在 agent 声明时优先使用 ACP `logout` 请求，否则运行该条目的 `authLogoutArgs`，因为随包发布的 Devin 把 `agentCapabilities.auth` 回答为 `{}`。
+`acpHarness` 服务在 `acp` 命名空间发布一个 Remote：`status`、`login` 与 `logout`，各自接收 harness id。登出在 agent 声明时优先使用 ACP `logout` 请求，否则运行该条目的 `authLogoutArgs`，因为随包发布的 Devin 把 `agentCapabilities.auth` 回答为 `{}`。当 harness 尚未连接时，`login` 与 `logout` 会按需连接，因此刚挂载的 harness 依据 agent 自己的 initialize 响应作答，而不是在它开口之前就被判定。
 
 ### 源码导图
 
@@ -196,7 +197,7 @@ dsh 每轮只贡献新的用户输入；harness 为自身的提示词、历史�
 - **某个 harness 可能没有为 DSH 旋钮提供模式**——opencode 与 mimocode 声明 `build` 与 `plan`，因此驱动器为可写会话应用 `build`；当只提供 `plan`（或什么都没有）时，记录一条日志指明请求与实际生效的模式。永远会记录日志，绝不静默跳过。
 - **每个 harness 拥有轮次，dsh 拥有外壳**——循环、提示词、工具、MCP 服务器与配置都在 harness 内。DSH 保有持久会话、transcript、审批、通知与模型选择器；驱动器每轮转发模型选择，并上报 harness 自报的当前模型。
 - **每个 harness 需要各自的登录**——会话需要每个 harness 已登录的 CLI（`devin auth login`、`grok login` 等）；dsh 既不存储也不提供这些凭据。
-- **目录需要已绑定的会话**——选择器路由依据活动会话的声明作答，因此尚无会话的条目不会列出任何模型，除非部署为其配置了 `catalogArgs`。CLI 目录较慢的 harness（Devin 会通过网络刷新）会让每次选择器读取都等待它，并受调用方 signal 与 `cliTimeoutMs` 约束。
+- **目录读取可能启动 harness 或其 CLI**——当 `probeCatalog` 保持默认值时，既无绑定会话又无 `catalogArgs` 的条目会开启一个一次性会话来读取声明；配置了 `catalogArgs` 的条目则运行该 CLI 命令；两者都会在首次选择器读取时启动 harness，结果随后在 `catalogCacheMs` 内复用（失败结果在 `catalogFailureCacheMs` 内复用）。若某条目的进程不应为读取目录而启动，请设置 `probeCatalog: false`，此时该路由在真实会话绑定前不列出任何模型。
 - **受限子进程中的目录写入可能失败**——在 Linux 上，本地子进程提供方的 systemd-scope 路径会让子进程的 stdout 处于非阻塞状态，因此 Devin 约 180 KB 的目录写入可能以 `exited 101 ... Resource temporarily unavailable (os error 11)` 失败；驱动器上报 CLI 的退出码与 stderr 末尾，该 stdio 缺陷属于子进程提供方，而非本包。
 - **会话只能在其记录的 harness 上恢复**——持久的 `agent/harness` 记录决定恢复路由，其他 harness 会拒绝该会话，而不是重放它无法驱动的对话。
 - **没有轮次中途转向**——ACP 不携带转向通道，因此 `steer()` 输入会留在队列中等待下一轮，而不会到达正在运行的轮次。

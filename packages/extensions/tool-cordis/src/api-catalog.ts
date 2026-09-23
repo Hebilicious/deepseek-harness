@@ -94,7 +94,7 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
       },
       {
         signature: '@Remote(\'login\') async login(request: { harness: string; methodId?: string }, signal: AbortSignal): Promise<void>',
-        description: 'Start one harness\'s browser authentication flow (`devin-browser` on Devin).',
+        description: 'Start one harness\'s browser authentication flow (`devin-browser` on Devin). A harness that has not connected yet is connected first, because only its agent\'s initialize response names the method to start.',
         parameters: [{ name: 'request', description: '`{harness, methodId}`; the method defaults to the first one the harness advertised.' }, { name: 'signal', description: 'caller lifetime.' }],
       },
       {
@@ -275,7 +275,7 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
   {
     key: 'agents',
     summary: 'Agent service (`ctx.agents`): tracks live agents and carries the initiating Agent through one process-local asynchronous driver chain.',
-    description: 'Agent service (`ctx.agents`): tracks live agents and carries the initiating Agent through one process-local asynchronous driver chain. Agent *creation* is provided by whichever plugin implements the AgentFactory (`@deepseek-ai/dsh-agent-loop`), registered via setFactory.\n\nInitiator methods provide same-process causal attribution only. Ambient presence is neither liveness proof nor authorization; subjects and owners remain explicit, as does identity at worker, process, persistence, and wire boundaries. Returned Promise boundaries drain during teardown, except a nested lineage that starts an owning-fiber unload is excluded from its own drain.',
+    description: 'Agent service (`ctx.agents`): tracks live agents and carries the initiating Agent through one process-local asynchronous driver chain. Agent *creation* is provided by the plugins that implement the AgentFactory (`@deepseek-ai/dsh-agent-loop`, `@deepseek-ai/dsh-agent-codex`, and `@deepseek-ai/dsh-agent-acp`), each registered under its harness id via registerHarness; setFactory remains for a deployment that mounts one factory and needs no harness choice.\n\nInitiator methods provide same-process causal attribution only. Ambient presence is neither liveness proof nor authorization; subjects and owners remain explicit, as does identity at worker, process, persistence, and wire boundaries. Returned Promise boundaries drain during teardown, except a nested lineage that starts an owning-fiber unload is excluded from its own drain.',
     methods: [
       {
         signature: 'currentInitiator(): Agent | undefined',
@@ -313,7 +313,7 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
       },
       {
         signature: 'setFactory(factory: AgentFactory): () => void',
-        description: 'Register the sole agent-creation factory under the default harness id. Deployments that mount one harness use this; a deployment that offers a choice registers each harness with registerHarness.',
+        description: 'Register the sole agent-creation factory under the default harness id. Remains for a deployment whose single factory needs no harness choice; every in-tree driver registers itself with registerHarness so that a session\'s id and display name are its own.',
         parameters: [{ name: 'factory', description: 'the factory {@link create}/{@link resume} delegate to.' }],
         returns: 'the disposer that removes the harness.',
       },
@@ -4170,7 +4170,7 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   },
   {
     name: 'ApiSessionAgentError',
-    declaration: 'export type ApiSessionAgentError = RemoteError<\'session/not-found\' | \'session/agent-busy\' | \'session/writer-held\' | \'gateway/internal\'>;',
+    declaration: 'export type ApiSessionAgentError = RemoteError<\'session/not-found\' | \'session/agent-busy\' | \'session/writer-held\' | \'session/harness-unavailable\' | \'gateway/bad-request\' | \'gateway/internal\'>;',
   },
   {
     name: 'ApiSessionAgentResult',
@@ -7130,7 +7130,7 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   },
   {
     name: 'WebhookSessionRequest',
-    declaration: 'export interface WebhookSessionRequest {\n    readonly workspacePath: string;\n    readonly title: string;\n    readonly prompt: string;\n    readonly agentPreset: string;\n    readonly permissionPreset: string;\n    readonly model?: WebhookModelSelection;\n}',
+    declaration: 'export interface WebhookSessionRequest {\n    readonly workspacePath: string;\n    readonly title: string;\n    readonly prompt: string;\n    readonly agentPreset: string;\n    readonly permissionPreset: string;\n    readonly harness?: HarnessId;\n    readonly model?: WebhookModelSelection;\n}',
   },
   {
     name: 'WebhookSourceId',

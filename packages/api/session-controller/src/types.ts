@@ -188,6 +188,11 @@ declare module '@deepseek-ai/dsh-typert-protocol' {
   interface RemoteErrorDetailsMap {
     'session/model-unavailable': { readonly provider: string; readonly model: string }
     'session/harness-unavailable': { readonly harness: string; readonly available: readonly string[] }
+    'session/harness-conflict': {
+      readonly sessionId: SessionId
+      readonly requestedHarness: string
+      readonly recordedHarness: string
+    }
     'session/conflict': {
       readonly sessionId: SessionId
       readonly requestedCwd: string

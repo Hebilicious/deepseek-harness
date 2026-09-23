@@ -1,7 +1,8 @@
 import { ToolCallId, createUserMessage } from '@deepseek-ai/dsh-llm'
 import { describe, expect, it } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'
-import { type Agent, type AgentOptions } from '@deepseek-ai/dsh-agent'
+import { HarnessId, agentHarnessOf } from '@deepseek-ai/dsh-agent'
+import type { Agent, AgentFactory, AgentOptions } from '@deepseek-ai/dsh-agent'
 import { SessionId } from '@deepseek-ai/dsh-session'
 import AgentLoop from '@deepseek-ai/dsh-agent-loop'
 import { mountAgentLoopTestDependencies } from '@deepseek-ai/dsh-agent-loop-testkit'
@@ -53,7 +54,41 @@ function text(blocks: readonly { type: string; text?: string }[]): string {
   return blocks.filter(block => block.type === 'text').map(block => block.text).join('')
 }
 
+/**
+ * Mount a second harness beside the loop's `dsh`, as the shipped web profile
+ * does. Every entry point rejects: a child of a `dsh` parent that reached this
+ * factory was routed to the wrong harness.
+ */
+function mountForeignHarness(ctx: Context): string[] {
+  const calls: string[] = []
+  const factory: AgentFactory = {
+    createAgent: () => {
+      calls.push('create')
+      return Promise.reject(new Error('the foreign harness must not create a child of a dsh parent'))
+    },
+    resume: () => {
+      calls.push('resume')
+      return Promise.reject(new Error('the foreign harness must not resume a child of a dsh parent'))
+    },
+  }
+  ctx.agents.registerHarness({ id: HarnessId('foreign'), name: 'Foreign', factory })
+  return calls
+}
+
 describe('startInProcessRun', () => {
+  it('creates the child of a recorded parent under that parent harness', async () => {
+    const { ctx, parent } = await setup([textResponse('driver answer')])
+    const foreign = mountForeignHarness(ctx)
+    expect(ctx.agents.harnesses().map(entry => entry.id)).toEqual([HarnessId('dsh'), HarnessId('foreign')])
+
+    const run = await startInProcessRun(request(parent), {})
+
+    expect(agentHarnessOf(ctx.sessionProjections, ctx.agents.get(run.id)!.session)).toBe('dsh')
+    await expect(run.result).resolves.toMatchObject({ stopReason: 'completed' })
+    expect(foreign).toEqual([])
+    await run.dispose()
+  })
+
   it('returns only after publication, drives a fresh child, and disposes it', async () => {
     const { ctx, parent } = await setup([textResponse('driver answer')])
     const run = await startInProcessRun(request(parent), {})

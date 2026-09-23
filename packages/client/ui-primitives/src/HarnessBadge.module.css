@@ -15,7 +15,7 @@
   justify-content: center;
   border-radius: 4px;
   corner-shape: round;
-  background: var(--dsh-harness-mark-tone, var(--dsw-static-neutral-400));
+  background: var(--dsh-harness-mark-tone, var(--dsw-static-neutral-600));
   color: var(--dsw-static-neutral-00);
   font-weight: 600;
   line-height: 1;

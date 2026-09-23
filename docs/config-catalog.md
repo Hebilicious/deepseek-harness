@@ -56,6 +56,13 @@ export interface Config {
    * never spawns a harness CLI per request.
    */
   catalogCacheMs?: number
+  /**
+   * How long one harness's failed catalog read is remembered before the next
+   * attempt (default 30000). Every caller inside the window receives that
+   * read's failure without spawning anything, so a harness that keeps failing
+   * (for example an executable missing from PATH) is not respawned per poll.
+   */
+  catalogFailureCacheMs?: number
 }
 
 /** One configured ACP harness: how to spawn it and the deployment defaults for its sessions. */

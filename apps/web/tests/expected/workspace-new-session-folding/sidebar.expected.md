@@ -6,7 +6,9 @@
       - img
     - button "New session in {{workspace}}":
       - img
-  - treeitem "New Session" [selected]
+  - treeitem "DSH Loop New Session" [selected]:
+    - img "DSH Loop"
+    - text: New Session
   - treeitem "{{workspace}} 1min"
   - treeitem "{{workspace}} 1min"
   - treeitem "{{workspace}} 1min"

@@ -14,7 +14,7 @@
 import { randomUUID } from 'node:crypto'
 import type { Context } from '@deepseek-ai/cordis'
 import { brandString } from '@deepseek-ai/dsh-brand'
-import { foldConsumedWork } from '@deepseek-ai/dsh-agent'
+import { foldConsumedWork, harnessOwning } from '@deepseek-ai/dsh-agent'
 import type { Agent, AgentHandle } from '@deepseek-ai/dsh-agent'
 import { SessionLogOffset } from '@deepseek-ai/dsh-session'
 import type { SessionEvent, SessionId, SessionLogOffset as SessionLogOffsetType, TurnEndReason } from '@deepseek-ai/dsh-session'
@@ -96,7 +96,8 @@ function attachDescriptorAppend(childCtx: Context, descriptor: SubagentDescripto
  * and disposal work through the returned run. Rejection means the agent
  * factory's unpublished creation transaction reached quiescence without
  * publishing a child. Every start appends its resolved descriptor inside the
- * child's initial turn.
+ * child's initial turn. The child is created under the harness that owns the
+ * parent's session, so a deployment mounting several still resolves it.
  * @param request - the trusted typed start request, including its required signal.
  * @param options - the optional fork seed.
  * @returns a published holder-owned run.
@@ -117,6 +118,12 @@ export async function startInProcessRun(
   // Capture before the first await: a later parent switch belongs to the
   // parent's future.
   const inherited = captureDelegatedPolicyOverrides(parent)
+  // A child never chooses a harness of its own: it belongs to the harness that
+  // owns the parent's session, which is what a deployment mounting several
+  // needs to resolve the create. A parent recording none (a session predating
+  // the record, or one created outside this repository) leaves the host to
+  // resolve its sole mounted harness or refuse with its own message.
+  const harness = harnessOwning(parent.ctx, parent.session)
 
   let structured: StructuredAttachment | undefined
   const setup = (childCtx: Context, child: Agent): void => {
@@ -133,6 +140,7 @@ export async function startInProcessRun(
 
   const handle = await parent.ctx.agents.create({
     sessionId: childId,
+    ...harness === undefined ? {} : { harness },
     parentAgent: parent,
     meta: childSessionMeta(parent, childDepth, seed !== undefined),
     ...seed !== undefined ? { seed } : {},

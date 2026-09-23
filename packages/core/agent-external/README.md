@@ -29,7 +29,7 @@ Write an agent driver that reuses every session-facing behavior dsh already defi
 
 Every driver in dsh extends this package instead of reimplementing the session shell. `dsh-agent-loop` extends `ManagedAgent` and keeps its own step loop; `dsh-agent-codex` and `dsh-agent-acp` extend `ExternalAgent` so a Codex account or the Devin CLI owns the loop, prompt, tools, MCP servers, and config. Choose `ManagedAgent` when your driver calls `ctx.llm` and `ctx.tools` itself, and `ExternalAgent` plus `ExternalAgentHost` when the model work happens in another process over a wire protocol.
 
-A driver registers itself as one agent harness: `AgentRegistry.registerHarness({ id, name, factory })` keys each registration by harness id, so several drivers coexist in one process and `session.create`/`resume` name the harness that owns each session. A driver that owns a whole profile may keep using `ctx.agents.setFactory()`, which registers the built-in `dsh` id.
+A driver registers itself as one agent harness: `AgentRegistry.registerHarness({ id, name, factory })` keys each registration by harness id, so several drivers coexist in one process and `session.create`/`resume` name the harness that owns each session. `ctx.agents.setFactory()` remains for a deployment that mounts one factory under the built-in `dsh` id; every in-tree driver registers with `registerHarness` instead.
 
 ### Entry point
 

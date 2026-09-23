@@ -67,8 +67,8 @@ interface PreparedAgent<TAgent extends ManagedAgent> {
 export interface ExternalAgentHostOptions {
   /**
    * Identity this driver registers under. Every session it creates records
-   * the id in its durable header, and resume reaches this host through the
-   * same id, so two drivers can never claim one session.
+   * the id as a durable `agent/harness` event, and resume reaches this host
+   * through the same id, so two drivers can never claim one session.
    */
   readonly harness: AgentHarness
   /**

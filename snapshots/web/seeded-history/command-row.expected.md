@@ -1,4 +1,5 @@
 - banner:
+  - img "DSH Loop"
   - navigation "Session hierarchy":
     - button "Use the read tool twice" [disabled]
   - button "More actions":

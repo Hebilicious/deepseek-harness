@@ -294,7 +294,6 @@ export interface ConversationHeaderCornerOwnerProps {
   children?: never
 }
 
-/** The leading seat's occupant derives its state from standard Session props. */
 /** Owner share of the Session header harness mark. */
 export interface ConversationHeaderHarnessOwnerProps {
   /** Marker field: the occupant reads the session's recorded harness itself. */

@@ -58,8 +58,10 @@ describe.skipIf(webSnapshotMode() === 'record')('historical preset restoration t
           && (row['data'] as { agentPreset: string }).agentPreset === 'code'
           ? { ...row, data: { agentPreset: 'ptc' } }
           : row),
-        // Agent activation closes its restored prefix with a fresh seed marker.
+        // Agent activation closes its restored prefix with a fresh seed marker,
+        // and the factory records the harness that owns the session.
         { type: 'session/end-seed', seq: rows.length, time: 0, data: {} },
+        { type: 'agent/harness', seq: rows.length + 1, time: 0, data: { harness: 'dsh' } },
       ].map(row => JSON.stringify(row)).join('\n') + '\n'
       const context = { sessionIds: [id], cwd: scaffold.workspaceCwd }
       expect(normalizeSessionSnapshots([published], context)).toEqual(normalizeSessionSnapshots([expected], context))

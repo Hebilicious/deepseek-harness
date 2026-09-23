@@ -3,6 +3,7 @@
 import { randomUUID } from 'node:crypto'
 import type { Context } from '@deepseek-ai/cordis'
 import { brandString } from '@deepseek-ai/dsh-brand'
+import { recordedHarness } from '@deepseek-ai/dsh-agent'
 import type { Agent, ModelSelection as AgentModelSelection } from '@deepseek-ai/dsh-agent'
 import { AttachmentError } from '@deepseek-ai/dsh-attachment'
 import type {
@@ -197,7 +198,9 @@ export class SessionCommandController {
   }
 
   /**
-   * Create a new ordinary Session from one completed-turn prefix.
+   * Create a new ordinary Session from one completed-turn prefix. The child
+   * belongs to the harness the source Session records, so a deployment mounting
+   * several still resolves the create.
    * @param request - source Session and optional event anchor.
    * @returns the new Session identity.
    */
@@ -255,10 +258,16 @@ export class SessionCommandController {
     }
     const childId = brandString<SessionId>(`session-${randomUUID()}`)
     const composition = await this.agents.composeAgent(this.agents.presetForObservation(source))
+    // The fork continues the source conversation, so it runs the source's
+    // harness: a deployment mounting several cannot resolve an unnamed create.
+    // A source recording none leaves the host to resolve its sole mounted
+    // harness or refuse with its own message.
+    const harness = recordedHarness(source.events)
     try {
       const { provider, model } = this.ctx.agentDefaultModel.currentSelection()
       await this.ctx.agents.create({
         sessionId: childId,
+        ...harness === undefined ? {} : { harness },
         seed: source.events.slice(0, cut),
         inheritedEventCount: cut,
         meta: {
@@ -523,9 +532,12 @@ export class SessionCommandController {
   private rejectCreation(sessionId: SessionId, error: unknown): never {
     if (remoteErrorOf(error) !== undefined) throw error
     if (error instanceof ApiSessionHarnessConflict) {
-      throw new RemoteError('session/harness-unavailable', error.message, {
-        harness: error.requestedHarness,
-        available: this.ctx.agents.harnesses().map(entry => entry.id),
+      // The requested harness is mounted; it is the session that belongs to
+      // another one, so this is a conflict rather than an unavailable id.
+      throw new RemoteError('session/harness-conflict', error.message, {
+        sessionId: error.sessionId,
+        requestedHarness: error.requestedHarness,
+        recordedHarness: error.recordedHarness,
       })
     }
     if (error instanceof ApiSessionPresetConflict) {

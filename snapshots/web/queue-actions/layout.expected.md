@@ -1,4 +1,5 @@
 - banner:
+  - img "DSH Loop"
   - navigation "Session hierarchy":
     - button "workspace" [disabled]
   - img

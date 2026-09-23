@@ -61,8 +61,10 @@ export class AgentHarnessSeatController {
     // A deployment that mounts fewer than two harnesses stages nothing: the
     // host resolves its sole harness for a create request that names none, so
     // those deployments keep the request they sent before this surface existed.
-    if (current === null || harnesses.length < 2) return
-    this.ctx.sessions.stageHarness(current)
+    // Clearing matters as much as staging: a stage left over from a catalog
+    // that no longer mounts that harness would be sent by the next create and
+    // refused, with no picker on screen to correct it.
+    this.ctx.sessions.stageHarness(current !== null && harnesses.length >= 2 ? current : undefined)
   }
 
   /**

@@ -1,4 +1,5 @@
 - banner:
+  - img "DSH Loop"
   - navigation "Session hierarchy":
     - button "Reference order target" [disabled]
   - button "More actions":

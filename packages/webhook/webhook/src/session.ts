@@ -4,7 +4,7 @@ import type { Context } from '@deepseek-ai/cordis'
 import { randomUUID } from 'node:crypto'
 import { isAbsolute } from 'node:path'
 import { brandString } from '@deepseek-ai/dsh-brand'
-import type { ModelSelection } from '@deepseek-ai/dsh-agent'
+import type { HarnessId, ModelSelection } from '@deepseek-ai/dsh-agent'
 import type {} from '@deepseek-ai/dsh-agent-default-model'
 import type {} from '@deepseek-ai/dsh-agent-presets'
 import { boundContextSummary, createUserMessage, errorChain, type LlmCallConfig } from '@deepseek-ai/dsh-llm'
@@ -22,6 +22,7 @@ interface ResolvedWebhookSessionRequest {
   readonly prompt: string
   readonly agentPreset: string
   readonly permissionPreset: string
+  readonly harness: HarnessId | undefined
   readonly modelSelection: ModelSelection
   readonly agentOptions: {
     readonly provider: string
@@ -58,6 +59,7 @@ function resolveRequest(ctx: Context, input: WebhookSessionRequest): ResolvedWeb
   if (model !== undefined && (model === null || typeof model !== 'object' || Array.isArray(model))) {
     throw new TypeError('webhook Session request model must be an object')
   }
+  const harness = record['harness'] === undefined ? undefined : requiredString(record, 'harness') as HarnessId
   let agentOptions: ResolvedWebhookSessionRequest['agentOptions']
   let modelSelection: ModelSelection
   if (model === undefined) {
@@ -80,7 +82,7 @@ function resolveRequest(ctx: Context, input: WebhookSessionRequest): ResolvedWeb
     }
     modelSelection = { provider, model: modelId }
   }
-  return { workspacePath, title, prompt, agentPreset, permissionPreset, modelSelection, agentOptions }
+  return { workspacePath, title, prompt, agentPreset, permissionPreset, harness, modelSelection, agentOptions }
 }
 
 /** Log a rollback failure without replacing the operation's original failure. */
@@ -108,6 +110,11 @@ function installInitialModelSelection(agentCtx: Context, selection: ModelSelecti
  * Successful prompt admission ends webhook ownership of the operation; the
  * Agent remains lifecycle-owned by `ctx` and follows normal Session behavior.
  *
+ * A webhook delivery descends from no Session and carries no harness of its
+ * own, so the rule names the harness on the request; omitting it resolves the
+ * sole mounted harness, and a deployment mounting several refuses the delivery
+ * with the registry's own message.
+ *
  * @param ctx - untraced runtime context that owns the resulting Agent.
  * @param delivery - exact verified provider delivery recorded in the message source.
  * @param ruleId - rule that returned the request.
@@ -133,6 +140,7 @@ export async function createWebhookSession(
   const handle = await ctx.agents.create({
     sessionId,
     signal,
+    ...resolved.harness === undefined ? {} : { harness: resolved.harness },
     meta: { cwd: workspace.path, agentPreset: preset.id },
     agentOptions: resolved.agentOptions,
     setup: async (agentCtx) => {

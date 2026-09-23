@@ -45,6 +45,31 @@ export interface AcpRuntimeOptions {
   readonly cliTimeoutMs: number
   /** How long a catalog read is reused before the next read (ms; default 300000). */
   readonly catalogCacheMs: number
+  /** How long a failed catalog read is remembered before the next attempt (ms; default 30000). */
+  readonly catalogFailureCacheMs: number
+}
+
+/**
+ * Classify one catalog rejection for the failure cache.
+ *
+ * A cancellation says nothing about the harness and must not empty its picker
+ * for the failure window: callers of {@link AcpRuntime.catalog} share one
+ * memoized connect, so a cancel that belongs to whichever caller started it (a
+ * session bind aborted with its turn, say) surfaces here too. The runtime's own
+ * probe deadline is its own bound expiring rather than a harness verdict, so a
+ * stalled harness answers the next read instead of every poll inside a window.
+ * @param deadline - the deadline signal the runtime passes to its own reads.
+ * @param error - the rejection to classify.
+ * @returns true when the rejection is a fact about the harness.
+ * @internal
+ */
+export function isHarnessFailure(deadline: AbortSignal | undefined, error: unknown): boolean {
+  // Read cancelled by this runtime's own deadline rather than refused by the
+  // harness: remembering it would answer every poll inside the failure window
+  // with a stale timeout instead of letting a recovered harness through.
+  const ownDeadline = deadline !== undefined && deadline.aborted && error === deadline.reason
+  const cancellations = error instanceof Error && (error.name === 'AbortError' || error.name === 'TimeoutError')
+  return !ownDeadline && !cancellations
 }
 
 /**
@@ -59,7 +84,10 @@ export class AcpRuntime {
   private initializeResponse: InitializeResponse | undefined
   private advert: readonly AcpCatalogModel[] = []
   private catalogRead: { at: number; models: readonly AcpCatalogModel[] } | undefined
+  private catalogFailure: { at: number; error: unknown } | undefined
   private catalogPending: Promise<readonly AcpCatalogModel[]> | undefined
+  /** Deadline of the probe currently in flight, so a rejection can be classified. */
+  private catalogDeadline: AbortSignal | undefined
   private disposed = false
 
   /**
@@ -116,42 +144,40 @@ export class AcpRuntime {
   }
 
   /**
-   * Run the configured catalog CLI verb, in the shape the harness's own
-   * listing command answers with (Devin: `devin models list --format json`),
-   * flattened into one entry per variant. The command answers from a local
-   * cache or refreshes it over the network, so it is bounded by the caller's
-   * signal and the configured CLI deadline; an exit failure carries the CLI's
-   * own diagnostic. A harness with no configured catalog verb lists nothing.
-   * @param signal - caller cancellation.
-   * @returns catalog entries in CLI order.
-   */
-  /**
    * The model catalog this harness publishes to the picker. A bound session's
    * advert wins; otherwise the configured CLI verb answers; otherwise, when
    * probing is enabled, the runtime opens one throwaway session to read what
    * the harness offers, so a deployment that has not started a session of this
-   * harness yet still offers real models in the picker. The probe is memoized
-   * for the process lifetime and its session stays open on the harness side,
-   * because the same child serves the sessions that follow.
-   * @param signal - caller cancellation for the catalog read.
+   * harness yet still offers real models in the picker. The probe's session is
+   * closed again when the agent advertises `close` or `delete`, and its result
+   * is reused for `catalogCacheMs` like any other read.
+   * @param signal - caller cancellation, checked before the read starts because
+   *   a read already shared with another caller is not that caller's to cancel.
    * @returns the advertised or CLI-listed models, possibly empty.
    */
   async catalog(signal?: AbortSignal): Promise<readonly AcpCatalogModel[]> {
     if (this.advert.length > 0) return this.advert
     const cached = this.catalogRead
     if (cached !== undefined && Date.now() - cached.at < this.options.catalogCacheMs) return cached.models
+    const failed = this.catalogFailure
+    if (failed !== undefined && Date.now() - failed.at < this.options.catalogFailureCacheMs) throw failed.error
     // One read serves every caller: a picker that polls must not spawn a
-    // harness CLI per request, and a failure is remembered for the cache
-    // window instead of retried on every read.
+    // harness CLI per request, and both its result and its failure are
+    // remembered for their windows instead of retried on every read. The read
+    // is not bound to a caller's signal, so an already-cancelled caller starts
+    // nothing: a rejection nothing awaits would surface as an unhandled
+    // rejection instead.
+    signal?.throwIfAborted()
     this.catalogPending ??= this.readCatalog()
       .then((models) => {
         this.catalogRead = { at: Date.now(), models }
+        this.catalogFailure = undefined
         return models
+      }, (error: unknown) => {
+        if (isHarnessFailure(this.catalogDeadline, error)) this.catalogFailure = { at: Date.now(), error }
+        throw error
       })
       .finally(() => { this.catalogPending = undefined })
-    // The shared read owns its own deadline; a caller's cancellation must not
-    // cancel a read another caller is waiting on.
-    signal?.throwIfAborted()
     return await this.catalogPending
   }
 
@@ -169,33 +195,70 @@ export class AcpRuntime {
    * session the operator asked for, so it must not accumulate: an agent that
    * advertises no close keeps the session until the process exits, because
    * dropping the connection without closing would leave the harness believing
-   * the session is live.
+   * the session is live. Closing is best effort: a close that fails leaves the
+   * session to the process lifetime and must not fail the catalog read or make
+   * the next read open another probe.
+   *
+   * Every step carries `cliTimeoutMs`: this read is single-flight, so a harness
+   * that starts but never answers would leave the picker's route for this
+   * harness pending for the process lifetime. Cancelling the request is what
+   * tells the harness to drop the session it was opening, so the deadline does
+   * not leave one behind.
    */
   private async probeCatalog(): Promise<readonly AcpCatalogModel[]> {
-    const connection = await this.connect()
-    const response = await connection.request<AcpSessionAdvert & { sessionId?: string }>(
-      'session/new',
-      { cwd: this.options.cwd, mcpServers: [] },
-    )
-    const sessionId = response.sessionId
-    if (typeof sessionId !== 'string' || sessionId.length === 0) {
-      throw new AcpProtocolError(`${this.prefix}: session/new returned no session id`)
+    const deadline = new AbortController()
+    // Published so a rejection can be told apart from another caller's cancel;
+    // the promise handler that reads it runs while this probe is still the
+    // single in-flight read.
+    this.catalogDeadline = deadline.signal
+    const timer = setTimeout(() => {
+      deadline.abort(
+        new AcpProtocolError(`${this.prefix}: the catalog probe did not answer within ${String(this.options.cliTimeoutMs)}ms`),
+      )
+    }, this.options.cliTimeoutMs)
+    try {
+      const connection = await this.connect(deadline.signal)
+      const response = await connection.request<AcpSessionAdvert & { sessionId?: string }>(
+        'session/new',
+        { cwd: this.options.cwd, mcpServers: [] },
+        deadline.signal,
+      )
+      const sessionId = response.sessionId
+      if (typeof sessionId !== 'string' || sessionId.length === 0) {
+        throw new AcpProtocolError(`${this.prefix}: session/new returned no session id`)
+      }
+      const models = acpAdvertisedModels(response)
+      this.recordAdvert(models)
+      try {
+        await this.closeProbeSession(connection, sessionId, deadline.signal)
+      } catch (error: unknown) {
+        this.ctx.logger.warn(`${this.prefix}: closing the catalog probe session failed: ${errorChain(error)}`)
+      }
+      return models
+    } finally {
+      clearTimeout(timer)
     }
-    const models = acpAdvertisedModels(response)
-    this.recordAdvert(models)
-    await this.closeProbeSession(connection, sessionId)
-    return models
   }
 
-  /** Close a probe session through whichever capability the agent advertises. */
-  private async closeProbeSession(connection: AcpClientConnection, sessionId: string): Promise<void> {
+  /**
+   * Close a probe session through whichever capability the agent advertises.
+   * @param connection - the live shared connection.
+   * @param sessionId - the probe session to close.
+   * @param signal - the probe's own deadline, so a close that never answers
+   *   cannot hold the single-flight catalog read open.
+   */
+  private async closeProbeSession(
+    connection: AcpClientConnection,
+    sessionId: string,
+    signal?: AbortSignal,
+  ): Promise<void> {
     const capabilities = this.initializeResponse?.agentCapabilities?.sessionCapabilities
     if (capabilities?.close !== undefined) {
-      await connection.request('session/close', { sessionId })
+      await connection.request('session/close', { sessionId }, signal)
       return
     }
     if (capabilities?.delete !== undefined) {
-      await connection.request('session/delete', { sessionId })
+      await connection.request('session/delete', { sessionId }, signal)
     }
   }
 
@@ -289,10 +352,13 @@ export class AcpRuntime {
    * Sign the account out: the ACP `logout` request when the connected agent
    * advertises it, otherwise the harness's auth-logout CLI. Real Devin answers
    * `agentCapabilities.auth` as `{}` — no logout method — so the CLI carries
-   * that deployment, and a request the agent does not serve is never sent.
+   * that deployment, and a request the agent does not serve is never sent. A
+   * harness that has not connected yet is connected first, because only the
+   * agent's own initialize response says whether it serves `logout`.
    * @param signal - caller cancellation.
    */
   async logout(signal?: AbortSignal): Promise<void> {
+    if (this.initializeResponse === undefined) await this.connect(signal)
     const connection = this.connection
     if (connection === undefined || !this.advertisesLogout()) {
       await this.authLogout(signal)

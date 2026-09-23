@@ -143,6 +143,21 @@ describe('AcpHarness Remote surface', () => {
     expect((failure as RemoteError).message).toContain('runtime is disposed')
   }, TEST_TIMEOUT)
 
+  it('normalizes a cancelled authentication into the ACP login code', async () => {
+    bench = await setup({
+      MOCK_AUTH_METHODS: JSON.stringify([{ id: 'devin-browser', name: 'Log in with browser' }]),
+    })
+    await bench.ctx.agents.create({ sessionId: SessionId('r3'), agentOptions: {} })
+
+    const failure: unknown = await bench.ctx.acpHarness.login(
+      { harness: 'devin', methodId: 'devin-browser' },
+      AbortSignal.abort(new Error('caller left')),
+    ).then(() => undefined, (error: unknown) => error)
+    expect(failure).toBeInstanceOf(RemoteError)
+    expect((failure as RemoteError).code).toBe('acp/login-failed')
+    expect((failure as RemoteError).message).toContain('caller left')
+  }, TEST_TIMEOUT)
+
   it('runs the CLI logout verb the fallback selects', async () => {
     bench = await setup()
     await bench.ctx.acpHarness.logout({ harness: 'devin' }, new AbortController().signal)
@@ -150,5 +165,44 @@ describe('AcpHarness Remote surface', () => {
       .filter(call => call.method === 'cli')
       .map(call => (call.params as { argv: readonly string[] }).argv)
     expect(argv.some(entry => entry.includes('logout'))).toBe(true)
+  }, TEST_TIMEOUT)
+
+  it('connects a freshly mounted harness so login starts the method its agent advertises', async () => {
+    bench = await setup({
+      MOCK_AUTH_METHODS: JSON.stringify([{ id: 'devin-browser', name: 'Log in with browser' }]),
+    })
+    // Nothing connected this harness: the Remote must, because only the
+    // agent's initialize response names the method to start.
+    await bench.ctx.acpHarness.login({ harness: 'devin' }, new AbortController().signal)
+
+    const calls = await recordedCalls(bench.recordFile)
+    expect(calls.some(call => call.method === 'initialize')).toBe(true)
+    const authenticate = calls.find(call => call.method === 'authenticate')
+    expect((authenticate?.params as { methodId: string }).methodId).toBe('devin-browser')
+  }, TEST_TIMEOUT)
+
+  it('connects a freshly mounted harness so logout uses the advertised ACP method', async () => {
+    // No CLI logout verb is configured, so the refusal this Remote would
+    // otherwise raise ("advertises no ACP logout method") is only true once
+    // the agent itself has answered.
+    bench = await setup({ MOCK_LOGOUT: '1' }, { config: { authLogoutArgs: [] } })
+    await bench.ctx.acpHarness.logout({ harness: 'devin' }, new AbortController().signal)
+
+    const calls = await recordedCalls(bench.recordFile)
+    expect(calls.some(call => call.method === 'initialize')).toBe(true)
+    expect(calls.some(call => call.method === 'logout')).toBe(true)
+    expect(calls.some(call => call.method === 'cli')).toBe(false)
+  }, TEST_TIMEOUT)
+
+  it('connects a freshly mounted harness before refusing logout for an agent with no method', async () => {
+    bench = await setup({}, { config: { authLogoutArgs: [] } })
+    const failure: unknown = await bench.ctx.acpHarness.logout({ harness: 'devin' }, new AbortController().signal)
+      .then(() => undefined, (error: unknown) => error)
+    expect(failure).toBeInstanceOf(RemoteError)
+    expect((failure as RemoteError).code).toBe('acp/login-failed')
+    expect((failure as RemoteError).message).toContain('advertises no ACP logout method')
+    // The harness connected before the refusal, so the message is a fact about
+    // the agent rather than an assumption made before it answered.
+    expect((await recordedCalls(bench.recordFile)).some(call => call.method === 'initialize')).toBe(true)
   }, TEST_TIMEOUT)
 })

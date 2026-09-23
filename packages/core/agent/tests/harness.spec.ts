@@ -6,6 +6,7 @@ import AgentRegistry, {
   HarnessId,
   agentHarnessOf,
   agentHarnessProjectionDefinition,
+  harnessOwning,
   recordedHarness,
 } from '@deepseek-ai/dsh-agent'
 import type { Agent, AgentFactory } from '@deepseek-ai/dsh-agent'
@@ -189,13 +190,40 @@ describe('agent/harness record', () => {
     await ctx.fiber.dispose()
 
     expect(recordedHarness([])).toBeUndefined()
+    // Malformed and unrelated entries are skipped; the one valid record wins.
     expect(recordedHarness([
       harnessEvent(0, 'codex'),
       harnessEvent(1, ''),
       harnessEvent(2, undefined),
       harnessEvent(3, 7),
       unrelatedEvent(4),
-      harnessEvent(5, 'acme'),
-    ])).toEqual(HarnessId('acme'))
+    ])).toEqual(HarnessId('codex'))
+    // A second valid id is a corrupt log, exactly as the live fold treats it:
+    // one session is never handed from one harness to another.
+    expect(() => recordedHarness([
+      harnessEvent(0, 'codex'),
+      harnessEvent(1, 'acme'),
+    ])).toThrow('duplicate agent/harness at session seq 1')
+  })
+
+  it('resolves the harness a descendant inherits, and nothing when there is none', async () => {
+    const ctx = new Context()
+    await ctx.plugin(SessionStore)
+    await ctx.plugin(SessionProjectionRegistry)
+    await ctx.plugin(AgentRegistry)
+    const session = ctx.sessions.create(SessionId('owning-harness'), { meta: { cwd: '/workspace' } })
+
+    expect(harnessOwning(ctx, session)).toBeUndefined()
+    session.append('agent/harness', { harness: 'codex' })
+    expect(harnessOwning(ctx, session)).toBe(HarnessId('codex'))
+    await ctx.fiber.dispose()
+
+    // A deployment mounting no projection registry has no record to fold: the
+    // read yields nothing and the host resolves its sole mounted harness.
+    const bare = new Context()
+    await bare.plugin(SessionStore)
+    const unprojected = bare.sessions.create(SessionId('unprojected'), { meta: { cwd: '/workspace' } })
+    expect(harnessOwning(bare, unprojected)).toBeUndefined()
+    await bare.fiber.dispose()
   })
 })

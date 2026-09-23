@@ -266,7 +266,10 @@ describe('web e2e: workspace management (create / rename / grouping / hover affo
     // is the nearest groupSection ancestor, not the immediate parent.
     const groupSection = groupRow.locator('xpath=ancestor::*[contains(@class, "groupSection")][1]')
     if (await groupRow.getAttribute('aria-expanded') !== 'true') await groupRow.click()
-    const blankRow = groupSection.getByRole('treeitem', { name: 'New Session', exact: true })
+    // A blank row's accessible name carries the harness mark it is staged on,
+    // so only its title text is exact.
+    const blankRow = groupSection.getByRole('treeitem')
+      .filter({ has: page.getByText('New Session', { exact: true }) })
     await expect.poll(() => blankRow.getAttribute('aria-selected'), { timeout: 10_000 }).toBe('true')
     // The seed is this account's only non-blank Session; its title changes on resume.
     const seededRow = groupSection.locator('[role="treeitem"][aria-selected]')

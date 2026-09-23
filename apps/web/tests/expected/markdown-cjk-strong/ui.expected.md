@@ -1,4 +1,5 @@
 - banner:
+  - img "DSH Loop"
   - navigation "Session hierarchy":
     - button "CJK strong emphasis" [disabled]
   - button "More actions":

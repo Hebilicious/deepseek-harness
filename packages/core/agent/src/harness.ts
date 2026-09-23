@@ -13,10 +13,11 @@
  */
 
 import { z } from 'zod'
+import type { Context } from '@deepseek-ai/cordis'
 import type { Session, SessionEvent } from '@deepseek-ai/dsh-session'
 import type { ProjectionDefinition } from '@deepseek-ai/dsh-session-projection'
 import type SessionProjectionRegistry from '@deepseek-ai/dsh-session-projection'
-import type { HarnessId } from './types.ts'
+import { HarnessId } from './types.ts'
 
 declare module '@deepseek-ai/dsh-session/types' {
   interface SessionEventMap {
@@ -69,19 +70,54 @@ export function agentHarnessOf(
 }
 
 /**
+ * Read the harness that owns a live session's agent, for a caller that creates
+ * or resumes a descendant of that session.
+ *
+ * A child belongs to the same harness as the session it descends from, which is
+ * what the single-harness world did implicitly: the caller passes the result as
+ * the create/resume `harness`. A session recording no harness yields
+ * `undefined`, and the host then resolves its sole mounted harness or refuses
+ * with its own message, so no caller invents a harness id for it. The
+ * projection registry is optional; without one this read has nothing to fold
+ * and yields `undefined` too.
+ * @param ctx - context the projection registry is resolved from.
+ * @param session - live session whose log is folded.
+ * @returns the recorded harness id, or `undefined` when the session records none.
+ */
+export function harnessOwning(ctx: Context, session: Session): HarnessId | undefined {
+  const projections: Pick<SessionProjectionRegistry, 'stateOf'> | undefined = ctx.get('sessionProjections')
+  if (projections === undefined) return undefined
+  const recorded = agentHarnessOf(projections, session)
+  return recorded === undefined ? undefined : HarnessId(recorded)
+}
+
+/**
  * Read the harness recorded in a persisted log, for a resume that must resolve
  * the owning factory before an agent exists.
+ *
+ * A log recording two different harnesses is corrupt rather than rebound: one
+ * session is never handed from one harness to another, so routing to the later
+ * id would resume a conversation the earlier harness owns. A repeat of the same
+ * id answers with that id, which is what a resume into a seed carrying the
+ * record produces; the live fold is the stricter reader and rejects any second
+ * record, so a log this scanner accepts is still refused where a live session
+ * folds it. Malformed or empty values are skipped, because the fold owns
+ * their validation for live reads and an unknown id fails loudly in the
+ * registry with the mounted ids listed.
  * @param events - the persisted session events, oldest first.
- * @returns the last recorded harness id, or `undefined` when the log holds none.
+ * @returns the recorded harness id, or `undefined` when the log holds none.
+ * @throws when the log records two different harnesses.
  */
 export function recordedHarness(events: readonly SessionEvent[]): HarnessId | undefined {
   let harness: string | undefined
   for (const event of events) {
     if (event.type !== 'agent/harness') continue
     const value = (event.data as { harness?: unknown }).harness
-    if (typeof value === 'string' && value !== '') harness = value
+    if (typeof value !== 'string' || value === '') continue
+    if (harness !== undefined && harness !== value) {
+      throw new Error(`duplicate agent/harness at session seq ${event.seq}`)
+    }
+    harness = value
   }
-  // The projection owns validation for live reads; this path only routes, and
-  // an unknown id fails loudly in the registry with the mounted ids listed.
   return harness === undefined ? undefined : harness as HarnessId
 }

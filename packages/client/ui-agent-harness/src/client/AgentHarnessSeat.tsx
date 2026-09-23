@@ -53,7 +53,9 @@ export function AgentHarnessSeat({
   const [open, setOpen] = useState(false)
 
   useEffect(() => {
-    void load()
+    // A failed read leaves the chip on the state it has; a rejection nothing
+    // awaits would surface as an unhandled rejection in the browser.
+    void load().catch(() => { /* the chip keeps the state it has */ })
   }, [load])
 
   // One mounted harness is no choice, and the host resolves it for a create
@@ -82,6 +84,10 @@ export function AgentHarnessSeat({
   }
 
   const chosen = mounted(state.current)
+  // The label is empty while the catalog is between reads, so the trigger
+  // always carries an accessible name; once a harness is staged that name
+  // starts with the visible label, which voice control matches on.
+  const triggerName = chosen === undefined ? t('seatHint') : t('seatHintNamed', { name: chosen.name })
   return (
     <Menu
       open={open}
@@ -113,6 +119,7 @@ export function AgentHarnessSeat({
           className={css.seat}
           aria-haspopup="menu"
           aria-expanded={open}
+          aria-label={triggerName}
           title={t('seatHint')}
           onClick={() => { setOpen(value => !value) }}
         >

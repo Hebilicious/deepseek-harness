@@ -132,6 +132,10 @@ describe('AcpHarness.Config', () => {
     expect(resolved.harnesses[0]?.args).toEqual(['acp'])
     expect(resolved.harnesses[0]?.sandbox).toBe('workspace-write')
     expect(resolved.disposeGraceMs).toBe(5000)
+    // A failed catalog read is remembered for a shorter window than a
+    // successful one, so a repaired harness recovers without a restart.
+    expect(resolved.catalogCacheMs).toBe(300_000)
+    expect(resolved.catalogFailureCacheMs).toBe(30_000)
   })
 
   it('rejects an id that is not a lowercase slug', () => {

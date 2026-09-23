@@ -14,6 +14,8 @@
  * - `MOCK_DELETE`       — advertise `sessionCapabilities.delete` and serve
  *                         `session/delete`, the other capability the catalog
  *                         probe closes a throwaway session through.
+ * - `MOCK_CLOSE_ERROR`  — reject `session/close`, so the catalog probe's
+ *                         best-effort close has a failing producer.
  * - `MOCK_CONFIG_OPTIONS` — JSON `SessionConfigOption[]` returned by
  *                         `session/new` and `session/load`; the mock tracks
  *                         `session/set_config_option` writes and echoes the
@@ -77,6 +79,8 @@
  * - `MOCK_CRASH_AFTER_CHUNK`   — exit after streaming the assistant chunk, so
  *                         partial output survives a fatal connection loss.
  * - `MOCK_MISSING_SESSION_ID`  — return `{}` from `session/new`.
+ * - `MOCK_HANG_SESSION_NEW`    — never answer `session/new`, so the catalog
+ *                         probe's own deadline is the only thing that ends it.
  * - `MOCK_AUTH_METHODS` — JSON auth-method array for the initialize response.
  * - `MOCK_LOGOUT`       — advertise `agentCapabilities.auth.logout` and serve
  *                         the ACP `logout` request; off by default because real
@@ -173,6 +177,7 @@ const READY_FILE = process.env.MOCK_READY_FILE
 const LOAD_SESSION = process.env.MOCK_LOAD_SESSION === '1'
 const CLOSE = process.env.MOCK_CLOSE === '1'
 const DELETE = process.env.MOCK_DELETE === '1'
+const CLOSE_ERROR = process.env.MOCK_CLOSE_ERROR === '1'
 const EMIT_TOOL = process.env.MOCK_TOOL === '1'
 const EMIT_TOOL_OPEN = process.env.MOCK_TOOL_OPEN === '1'
 const FLUSH_ON_EOF = process.env.MOCK_FLUSH_ON_EOF
@@ -310,6 +315,7 @@ function makeAgent() {
     },
     newSession(params: NewSessionRequest): Promise<NewSessionResponse> {
       record('session/new', params)
+      if (process.env.MOCK_HANG_SESSION_NEW === '1') return new Promise(() => {})
       if (process.env.MOCK_MISSING_SESSION_ID === '1') return Promise.resolve({} as NewSessionResponse)
       const models = sessionModels()
       const response = {
@@ -339,6 +345,7 @@ function makeAgent() {
 
     closeSession(params: unknown): Promise<Record<string, never>> {
       record('session/close', params)
+      if (CLOSE_ERROR) return Promise.reject(new Error('mock close failed'))
       return Promise.resolve({})
     },
     setConfigOption(params: SetSessionConfigOptionRequest): Promise<SetSessionConfigOptionResponse> {

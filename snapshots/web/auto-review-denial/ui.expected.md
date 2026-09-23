@@ -1,6 +1,7 @@
 ## Collapsed
 
 - banner:
+  - img "DSH Loop"
   - navigation "Session hierarchy":
     - button "{{workspace}}" [disabled]
   - button "More actions":
@@ -42,6 +43,7 @@
 ## Expanded
 
 - banner:
+  - img "DSH Loop"
   - navigation "Session hierarchy":
     - button "{{workspace}}" [disabled]
   - button "More actions":
@@ -87,6 +89,7 @@
 ## Trajectory
 
 - banner:
+  - img "DSH Loop"
   - navigation "Session hierarchy":
     - button "{{workspace}}" [disabled]
   - button "More actions":

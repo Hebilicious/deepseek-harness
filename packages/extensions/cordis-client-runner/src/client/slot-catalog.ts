@@ -1342,7 +1342,7 @@ export const CLIENT_SLOT_API: readonly ClientSlotEntry[] = [
     doc: 'Seat immediately left of the Session title, for the mark of the harness\nthat owns the session. Occupied by the agent-harness client plugin; a\nsession whose log records no harness leaves it empty.',
     registerOptions: [],
     ownerProps: [
-      '/** The leading seat\'s occupant derives its state from standard Session props. */\n/** Owner share of the Session header harness mark. */\nexport interface ConversationHeaderHarnessOwnerProps {\n  /** Marker field: the occupant reads the session\'s recorded harness itself. */\n  children?: never\n}',
+      '/** Owner share of the Session header harness mark. */\nexport interface ConversationHeaderHarnessOwnerProps {\n  /** Marker field: the occupant reads the session\'s recorded harness itself. */\n  children?: never\n}',
     ],
     ownerPropsReferences: [],
     standardProps: [

@@ -184,7 +184,8 @@ describe('ui-agent-harness apply', () => {
     const face = seatFace(b.slots)
 
     expect(face.hooks.agentHarnessSeat.getSnapshot().harnesses).toHaveLength(1)
-    expect(b.stages).toEqual([])
+    // One harness is no choice: the stage is cleared rather than shipped.
+    expect(b.stages).toEqual([undefined])
   })
 
   it('stages nothing when the catalog read fails', async () => {
@@ -213,11 +214,13 @@ describe('ui-agent-harness apply', () => {
   it('follows the deployment when it mounts a second harness', async () => {
     const b = await bench(SINGLE)
     declareConversation(b.slots)
-    await vi.waitFor(() => { expect(b.stages).toEqual([]) })
+    await vi.waitFor(() => { expect(b.stages).toEqual([undefined]) })
 
     b.setCatalog(CATALOG)
     await seatFace(b.slots).load()
 
-    expect(b.stages).toEqual(['dsh'])
+    // The second harness turns the deployment into a choice, so the first
+    // mounted harness is staged.
+    expect(b.stages).toEqual([undefined, 'dsh'])
   })
 })

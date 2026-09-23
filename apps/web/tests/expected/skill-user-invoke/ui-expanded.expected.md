@@ -1,4 +1,5 @@
 - banner:
+  - img "DSH Loop"
   - navigation "Session hierarchy":
     - button "/user-invoke-demo @\"meeting notes.md\" an" [disabled]
   - img

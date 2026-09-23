@@ -25,7 +25,7 @@ Pick which agent harness runs a new Web GUI session from the harnesses this depl
 <a id="use-this-package"></a>
 ## Use this package
 
-Mount this plugin alongside the conversation package; the new-session screen receives the `conversation.hero.agentHarness` chip beside the workspace and agent-mode controls. The mounted harnesses come from the host catalog, read once at load and again after a reconnect; a read that fails leaves the chip on the catalog it already had.
+Mount this plugin alongside the conversation package; the new-session screen receives the `conversation.hero.agentHarness` chip beside the workspace and agent-mode controls. The mounted harnesses come from the host catalog, read when the plugin applies, again on every reconnect, and again each time either surface mounts; a read that fails leaves the chip on the catalog it already had.
 
 ### Choosing a harness
 

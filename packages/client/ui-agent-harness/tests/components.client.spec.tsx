@@ -43,9 +43,10 @@ function renderSeat(options: {
   state?: Partial<AgentHarnessSeatState>
   session?: string
   recorded?: string | null | undefined
+  load?: () => Promise<void>
 } = {}) {
   const store = createSnapshotStore<AgentHarnessSeatState>({ ...READY, ...options.state })
-  const actions = { load: vi.fn(() => Promise.resolve()), select: vi.fn() }
+  const actions = { load: vi.fn(options.load ?? (() => Promise.resolve())), select: vi.fn() }
   render(<AgentHarnessSeat {...({
     ...actions,
     sessionId: options.session === undefined ? undefined : SessionId(options.session),
@@ -61,8 +62,12 @@ describe('the new-session picker', () => {
     const { actions } = renderSeat()
 
     await waitFor(() => { expect(actions.load).toHaveBeenCalledTimes(1) })
-    expect(screen.getByRole('button').textContent).toContain('Codex')
-    expect(screen.getByRole('button').getAttribute('title')).toBe(en.seatHint)
+    const trigger = screen.getByRole('button')
+    expect(trigger.textContent).toContain('Codex')
+    expect(trigger.getAttribute('title')).toBe(en.seatHint)
+    // The accessible name keeps the visible label, which voice control matches
+    // on, and repeats the hint that the tooltip carries.
+    expect(trigger.getAttribute('aria-label')).toBe(translate('seatHintNamed', { name: 'Codex' }))
   })
 
   it('offers every mounted harness with what it is for', () => {
@@ -117,7 +122,16 @@ describe('the new-session picker', () => {
   it('shows an empty label while the catalog carries harnesses but no choice', () => {
     renderSeat({ state: { current: null } })
 
+    // An empty label would leave the trigger nameless, so it carries the hint.
     expect(screen.getByRole('button').textContent).toBe('')
+    expect(screen.getByRole('button').getAttribute('aria-label')).toBe(en.seatHint)
+  })
+
+  it('keeps the chip on the state it has when the catalog read fails', async () => {
+    const failing = renderSeat({ load: () => Promise.reject(new Error('offline')) })
+
+    await waitFor(() => { expect(failing.actions.load).toHaveBeenCalledTimes(1) })
+    expect(screen.getByRole('button').textContent).toContain('Codex')
   })
 })
 
@@ -164,13 +178,19 @@ describe('a session that already exists', () => {
 
 describe('the Session header harness mark', () => {
   /** Render the header mark against one session projection value. */
-  function renderMark(recorded: string | null | undefined, state?: Partial<AgentHarnessSeatState>) {
+  function renderMark(
+    recorded: string | null | undefined,
+    state?: Partial<AgentHarnessSeatState>,
+    load: () => Promise<void> = () => Promise.resolve(),
+  ) {
     const store = createSnapshotStore<AgentHarnessSeatState>({ ...READY, ...state })
+    const spy = vi.fn(load)
     render(<HarnessBadgeSeat {...({
-      load: vi.fn(() => Promise.resolve()),
+      load: spy,
       useAgentHarnessSeat: bindSnapshotSelector(store),
       useProjection: () => recorded,
     } as unknown as HarnessBadgeSeatProps)} />)
+    return { load: spy }
   }
 
   it('marks the session with the recorded harness and its catalog name', () => {
@@ -203,5 +223,14 @@ describe('the Session header harness mark', () => {
 
     renderMark(undefined)
     expect(screen.queryByRole('img')).toBeNull()
+  })
+
+  it('keeps the label on the raw id when the catalog read fails', async () => {
+    const failure = renderMark('codex', { harnesses: [] }, () => Promise.reject(new Error('offline')))
+
+    // The mark is drawn from the session record alone, so a failed read cannot
+    // blank it; the id stands in for the name the catalog would have supplied.
+    await waitFor(() => { expect(failure.load).toHaveBeenCalledTimes(1) })
+    expect(screen.getByRole('img', { name: 'codex' }).getAttribute('data-harness')).toBe('codex')
   })
 })

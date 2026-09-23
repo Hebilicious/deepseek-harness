@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'
-import AgentRegistry, { HarnessId } from '@deepseek-ai/dsh-agent'
+import AgentRegistry, { HarnessId, recordedHarness } from '@deepseek-ai/dsh-agent'
 import type {
   Agent,
   AgentFactory,
@@ -14,7 +14,9 @@ import type {
   CreateAgentOptions,
   ResumeAgentOptions,
 } from '@deepseek-ai/dsh-agent'
-import SessionStore, { SESSION_FORMAT_VERSION, SessionId } from '@deepseek-ai/dsh-session'
+import { createUserMessage } from '@deepseek-ai/dsh-llm'
+import { RemoteError } from '@deepseek-ai/dsh-typert-protocol'
+import SessionStore, { SESSION_FORMAT_VERSION, SessionId, SessionLogOffset } from '@deepseek-ai/dsh-session'
 import type { SessionEvent, SessionHeader } from '@deepseek-ai/dsh-session'
 import type SessionController from '../src/index.ts'
 import {
@@ -48,7 +50,9 @@ interface HarnessWorld {
   readonly ctx: Context
   readonly controller: SessionController
   readonly remote: TestSessionRemote
-  mount(id: HarnessId, name: string, description?: string): HarnessCalls
+  mount(id: HarnessId, name: string, description?: string, record?: boolean): HarnessCalls
+  /** Mount a harness whose resume rejects with one exact failure. */
+  mountFailingResume(id: HarnessId, error: unknown): void
   persist(header: SessionHeader, events?: readonly SessionEvent[]): void
 }
 
@@ -90,23 +94,38 @@ async function world(): Promise<HarnessWorld> {
     meta: CreateAgentOptions['meta'] | SessionHeader | undefined,
     seed: readonly SessionEvent[],
     setup: AgentSetup | undefined,
+    harness: HarnessId | undefined,
+    inheritedEventCount?: SessionLogOffset,
   ): Promise<AgentHandle> => {
     const session = ctx.sessions.create(sessionId, {
       ...(meta === undefined ? {} : { meta }),
       ...(seed.length === 0 ? {} : { seed: [...seed] }),
+      ...(inheritedEventCount === undefined ? {} : { inheritedEventCount }),
     })
     const agent = { id: sessionId, session, status: 'idle', ctx: ownerCtx } as Agent
     await setup?.(ownerCtx, agent)
+    // The production host records the owning harness before publication; a
+    // resumed seed that already names the same harness tolerates the repeat.
+    // A raw mount stands in for a Session created before this feature.
+    if (harness !== undefined) session.append('agent/harness', { harness })
     await ctx.agents.register(agent)
     return { agent, dispose: () => Promise.resolve() }
   }
 
-  const mount = (id: HarnessId, name: string, description?: string): HarnessCalls => {
+  const mount = (id: HarnessId, name: string, description?: string, record = true): HarnessCalls => {
     const calls: HarnessCalls = { create: [], resume: [] }
     const factory: AgentFactory = {
       async createAgent(ownerCtx, options) {
         calls.create.push(options)
-        return publish(ownerCtx, options.sessionId, options.meta, options.seed ?? [], options.setup)
+        return publish(
+          ownerCtx,
+          options.sessionId,
+          options.meta,
+          options.seed ?? [],
+          options.setup,
+          record ? id : undefined,
+          options.inheritedEventCount,
+        )
       },
       async resume(ownerCtx, options) {
         calls.resume.push(options)
@@ -114,11 +133,19 @@ async function world(): Promise<HarnessWorld> {
         if (persisted === undefined) {
           throw new Error(`harness test has no persisted session "${options.resumeSessionId}"`)
         }
-        return publish(ownerCtx, options.resumeSessionId, persisted.meta, persisted.events, options.setup)
+        return publish(ownerCtx, options.resumeSessionId, persisted.meta, persisted.events, options.setup, record ? id : undefined)
       },
     }
     ctx.agents.registerHarness({ id, name, ...(description === undefined ? {} : { description }), factory })
     return calls
+  }
+
+  const mountFailingResume = (id: HarnessId, error: unknown): void => {
+    const factory: AgentFactory = {
+      createAgent: () => Promise.reject(error instanceof Error ? error : new Error(String(error))),
+      resume: () => Promise.reject(error instanceof Error ? error : new Error(String(error))),
+    }
+    ctx.agents.registerHarness({ id, name: id, factory })
   }
 
   return {
@@ -126,6 +153,7 @@ async function world(): Promise<HarnessWorld> {
     controller,
     remote: createSessionTestRemote(ctx, defaults),
     mount,
+    mountFailingResume,
     persist: (header, events = []) => { stored.set(header.id, { meta: header, events }) },
   }
 }
@@ -204,13 +232,91 @@ describe('Session harness selection', () => {
     expect(response).toMatchObject({
       ok: false,
       error: {
-        code: 'session/harness-unavailable',
+        // The requested harness is mounted; the session belongs to another
+        // one, which is a conflict rather than an unavailable id.
+        code: 'session/harness-conflict',
         message: `session "${header.id}" runs agent harness "dsh", not "codex"`,
-        details: { harness: CODEX, available: [DSH, CODEX] },
+        details: { sessionId: header.id, requestedHarness: CODEX, recordedHarness: DSH },
       },
     })
     expect(dsh.resume).toEqual([])
     expect(codex.resume).toEqual([])
+  })
+
+  it('reports an unmounted recorded harness through the resume path too', async () => {
+    const w = await world()
+    const header = sessionHeader('unmounted-resolve')
+    w.persist(header, [harnessRecord(CODEX, 0)])
+    w.mount(DSH, 'DeepSeek Harness')
+
+    // Opening a session goes through resolveAgent, not create: the typed
+    // failure must survive that path instead of becoming an internal fault.
+    const result = await w.controller.resolveAgent(header.id)
+
+    expect(result).toMatchObject({
+      error: {
+        code: 'session/harness-unavailable',
+        message: expect.stringContaining('agent harness "codex" is not mounted') as string,
+        details: { harness: CODEX, available: [DSH] },
+      },
+    })
+  })
+
+  it('refuses a live session resolved under a harness other than its record', async () => {
+    const w = await world()
+    const header = sessionHeader('live-conflict')
+    w.persist(header)
+    const dsh = w.mount(DSH, 'DeepSeek Harness')
+    w.mount(CODEX, 'Codex')
+    const handle = await w.ctx.agents.create({ sessionId: header.id, harness: DSH, meta: { cwd: CWD } })
+
+    // The live-agent fast path skips the persisted checks, so the resolution
+    // result itself must be verified against the requested harness.
+    const response = await w.remote.create({ sessionId: header.id, cwd: CWD, harness: CODEX })
+
+    expect(response).toMatchObject({
+      ok: false,
+      error: {
+        code: 'session/harness-conflict',
+        details: { sessionId: header.id, requestedHarness: CODEX, recordedHarness: DSH },
+      },
+    })
+    expect(dsh.create).toHaveLength(1)
+    await handle.dispose()
+  })
+
+  it('adopts a live session that records no harness under the requested one', async () => {
+    const w = await world()
+    const header = sessionHeader('live-unrecorded')
+    // A raw mount stands in for a Session created before this feature.
+    const dsh = w.mount(DSH, 'DeepSeek Harness', undefined, false)
+    w.mount(CODEX, 'Codex')
+    const handle = await w.ctx.agents.create({ sessionId: header.id, harness: DSH, meta: { cwd: CWD } })
+
+    const response = await w.remote.create({ sessionId: header.id, cwd: CWD, harness: CODEX })
+
+    // Nothing records which harness owns the live agent, so the request is not
+    // a conflict: this is the pre-feature session the adoption path exists for.
+    expect(response).toMatchObject({ ok: true, value: { sessionId: header.id } })
+    expect(dsh.create).toHaveLength(1)
+    await handle.dispose()
+  })
+
+  it('keeps a failure this boundary cannot name internal', async () => {
+    const w = await world()
+    const header = sessionHeader('typed-but-unmapped')
+    w.persist(header)
+    w.mountFailingResume(DSH, new RemoteError('session/agent-busy', 'busy', {
+      reason: 'the harness is mid-turn',
+    }))
+
+    const result = await w.controller.resolveAgent(header.id)
+
+    // Only the harness codes above cross this boundary; another typed failure
+    // stays an internal fault rather than inventing a client-facing code.
+    expect(result).toMatchObject({
+      error: { code: 'gateway/internal', message: expect.stringContaining('busy') as string },
+    })
   })
 
   it('refuses a session whose recorded harness is not mounted', async () => {
@@ -271,7 +377,9 @@ describe('Session harness selection', () => {
 
     expect(result).toMatchObject({
       error: {
-        code: 'gateway/internal',
+        // The typed refusal survives the resume path, so a client can tell an
+        // unadoptable session from an internal fault.
+        code: 'gateway/bad-request',
         message: expect.stringContaining(
           `session "${header.id}" records no agent harness and this deployment mounts dsh, codex`,
         ) as string,
@@ -279,5 +387,33 @@ describe('Session harness selection', () => {
     })
     expect(dsh.resume).toEqual([])
     expect(codex.resume).toEqual([])
+  })
+
+  it('forks a completed session under the harness its log records', async () => {
+    const w = await world()
+    const source = w.ctx.sessions.create(SessionId('fork-source'), { meta: { cwd: CWD } })
+    // Codex, not the loop's `dsh`: a hardcoded or sole-harness fallback would
+    // route the child to the wrong factory here.
+    source.append('agent/harness', { harness: CODEX })
+    source.append('turn/start', { turn: 1 })
+    source.append('user/message', createUserMessage({
+      content: [{ type: 'text', text: 'work' }], source: { kind: 'user' },
+    }), { surfaceOp: 'append' })
+    source.append('turn/end', { turn: 1, reason: { kind: 'completed' } })
+    w.persist({ ...source.header }, source.snapshotEvents())
+    const dsh = w.mount(DSH, 'DeepSeek Harness')
+    const codex = w.mount(CODEX, 'Codex')
+
+    const response = await w.remote.fork({ sessionId: source.id })
+
+    if (!response.ok) throw response.error
+    expect(codex.create).toHaveLength(1)
+    expect(dsh.create).toEqual([])
+    expect(codex.create[0]?.harness).toBe(CODEX)
+    // The child's own log opens with the source prefix, so its durable record
+    // carries the harness the fork ran.
+    const child = w.ctx.agents.get(response.value.sessionId)
+    if (child === undefined) throw new Error('expected the fork child to be published')
+    expect(recordedHarness(child.session.snapshotEvents())).toBe(CODEX)
   })
 })

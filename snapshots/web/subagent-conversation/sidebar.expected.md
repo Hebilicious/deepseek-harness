@@ -2,4 +2,6 @@
   - treeitem "workspace" [expanded]:
     - img
     - text: workspace
-  - treeitem "Ask a research subagent to now"
+  - treeitem "DSH Loop Ask a research subagent to now":
+    - img "DSH Loop"
+    - text: Ask a research subagent to now

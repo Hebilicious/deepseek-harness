@@ -1,4 +1,5 @@
 - banner:
+  - img "DSH Loop"
   - navigation "会话层级":
     - button "只回复 MESSAGES_WEB_READY，不调用" [disabled]
   - img

@@ -25,7 +25,7 @@ kind: "package-reference"
 <a id="use-this-package"></a>
 ## 使用本包
 
-把本插件与对话包一起挂载；新建会话界面随后在工作区与 agent 模式控件旁得到 `conversation.hero.agentHarness` chip。已挂载的 harness 来自宿主目录，加载时读取一次，重连后再读一次；读取失败时 chip 保持它已有的目录。
+把本插件与对话包一起挂载；新建会话界面随后在工作区与 agent 模式控件旁得到 `conversation.hero.agentHarness` chip。已挂载的 harness 来自宿主目录：插件生效时读取一次，每次重连后再读一次，两个界面每次挂载时也各读一次；读取失败时 chip 保持它已有的目录。
 
 在会话标题左侧，同一插件还提供 harness 标记：一个 `HarnessBadge`，显示当前打开的会话由哪个 harness 拥有；只要会话记录了 harness 就会渲染，无论部署挂载一个还是多个。它不承载任何操作，因为 harness 在创建时即已固定。
 

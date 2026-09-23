@@ -497,9 +497,15 @@ export class SessionManager {
     } = {},
   ): Promise<RemoteResult<{ sessionId: SessionId }>> {
     const shared = opts.sessionId === undefined ? {} : { sessionId: opts.sessionId }
-    // An adopted identity keeps the harness its own log records; only a new
-    // Session takes the staged choice.
-    const harness = opts.harness ?? (opts.sessionId === undefined ? this.stagedHarness : undefined)
+    // A new Session takes the staged choice. A preallocated identity takes it
+    // only when the client knows that Session is unbound — one created before
+    // this feature reports the projection as null — because the host refuses an
+    // unnamed create once several harnesses are mounted and the record is what
+    // it would otherwise route by. A bound or unknown identity keeps today's
+    // request: the host routes by its record or refuses with a message naming
+    // the harness it needs.
+    const takesStage = opts.sessionId === undefined || this.unboundHarness(opts.sessionId) === true
+    const harness = opts.harness ?? (takesStage ? this.stagedHarness : undefined)
     const payload = {
       ...opts.workspaceId !== undefined
         ? { workspaceId: opts.workspaceId }
@@ -512,6 +518,11 @@ export class SessionManager {
       this.recordMutation({ kind: 'upsert', summary: {
         sessionId: result.value.sessionId, updatedAt: Date.now(), running: false, blank: true,
         ...(opts.cwd !== undefined ? { cwd: opts.cwd } : {}),
+        // Record the harness this create named, so an `unboundHarness` read made
+        // before the host's own frame arrives already answers "bound". This
+        // list baseline serves a row the client has not summarized yet; an
+        // existing summary keeps its own projections.
+        ...(harness === undefined ? {} : { projections: { asOfSeq: 0, values: { agentHarness: harness } } }),
       } })
     } else {
       const publishedSessionId = workspaceAttachSessionId(result.error)
@@ -531,11 +542,28 @@ export class SessionManager {
   }
 
   /**
-   * Stage the harness the next created Session runs.
-   * @param harness - mounted harness id.
+   * Stage the harness the next created Session runs, or clear the stage when
+   * the deployment no longer mounts that harness: a create that named an
+   * unmounted id would be refused, and no surface could correct it.
+   * @param harness - mounted harness id, or `undefined` to clear the stage.
    */
-  stageHarness(harness: HarnessId): void {
+  stageHarness(harness: HarnessId | undefined): void {
     this.stagedHarness = harness
+  }
+
+  /**
+   * Whether a known Session reports no owning harness, which is the only
+   * preallocated identity the staged choice may bind. Live frames win over the
+   * list baseline, and a Session with no record at all answers `undefined`:
+   * sending a harness the host did not expect would refuse a resume that works
+   * today.
+   */
+  private unboundHarness(sessionId: SessionId): boolean | undefined {
+    const live = this.projectionValues(sessionId)
+    if (live !== undefined && 'agentHarness' in live) return live.agentHarness === null
+    const block = this.summaries.find(candidate => candidate.sessionId === sessionId)?.projections
+    if (block === undefined || !('agentHarness' in block.values)) return undefined
+    return block.values.agentHarness === null
   }
 
   /**

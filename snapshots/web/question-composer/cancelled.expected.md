@@ -1,4 +1,5 @@
 - banner:
+  - img "DSH Loop"
   - navigation "Session hierarchy":
     - button "Use the ask_user_question tool to" [disabled]
   - button "More actions":

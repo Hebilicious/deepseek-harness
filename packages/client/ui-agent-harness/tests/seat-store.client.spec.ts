@@ -93,8 +93,9 @@ describe('the harness catalog read', () => {
     await b.answer({ ok: true, value: SINGLE })
 
     expect(b.controller.store.getSnapshot().harnesses).toHaveLength(1)
-    // The host resolves its sole harness for a create that names none.
-    expect(b.stages).toEqual([])
+    // The host resolves its sole harness for a create that names none, and any
+    // stage an earlier catalog left behind is cleared rather than shipped.
+    expect(b.stages).toEqual([undefined])
   })
 
   it('stages nothing while the deployment mounts none', async () => {
@@ -103,7 +104,8 @@ describe('the harness catalog read', () => {
     await b.answer({ ok: true, value: { harnesses: [] } })
 
     expect(b.controller.store.getSnapshot()).toEqual({ harnesses: [], current: null })
-    expect(b.stages).toEqual([])
+    // Nothing to stage, so the stage is cleared.
+    expect(b.stages).toEqual([undefined])
   })
 
   it('keeps the previous catalog and stage when a later read fails', async () => {
@@ -123,6 +125,7 @@ describe('the harness catalog read', () => {
     await b.answer(FAILURE)
 
     expect(b.controller.store.getSnapshot()).toEqual({ harnesses: [], current: null })
+    // A failed read publishes nothing, so it neither stages nor clears.
     expect(b.stages).toEqual([])
   })
 
@@ -170,6 +173,8 @@ describe('the staged choice', () => {
     await b.answer({ ok: true, value: SINGLE })
 
     expect(b.controller.store.getSnapshot().current).toBe('dsh')
-    expect(b.stages).toEqual([])
+    // The earlier stage no longer names a mounted harness, so it is cleared
+    // rather than left for the next create to be refused.
+    expect(b.stages).toEqual([undefined])
   })
 })

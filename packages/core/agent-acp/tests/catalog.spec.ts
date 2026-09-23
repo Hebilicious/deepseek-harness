@@ -135,6 +135,16 @@ describe('AcpCatalogAdapter', () => {
     await expect(bench.ctx.llm.listModels('devin')).rejects.toThrow('session/new returned no session id')
   }, TEST_TIMEOUT)
 
+  it('remembers a failed read so a polling picker does not spawn per poll', async () => {
+    // A harness the picker cannot read, such as a mis-installed executable,
+    // must fail the poll it belongs to rather than start a process per poll.
+    bench = await setup({ MOCK_MODELS_EXIT: '3' })
+    await expect(bench.ctx.llm.listModels('devin')).rejects.toThrow(/exited 3$/)
+    await expect(bench.ctx.llm.listModels('devin')).rejects.toThrow(/exited 3$/)
+    const calls = await recordedCalls(bench.recordFile)
+    expect(calls.filter(call => call.method === 'cli')).toHaveLength(1)
+  }, TEST_TIMEOUT)
+
   it('keeps the picker route empty when probing is disabled and no session bound', async () => {
     bench = await setup({}, { harnesses: [await extraEntry('bare', 'Bare harness', {}, { probeCatalog: false })] })
 

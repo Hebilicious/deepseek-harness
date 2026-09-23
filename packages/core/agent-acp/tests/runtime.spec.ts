@@ -11,10 +11,10 @@ import { mkdtemp, readFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'
 import LocalSubprocessRuntime from '@deepseek-ai/dsh-subprocess-local'
-import { AcpRuntime, type AcpRuntimeOptions } from '../src/runtime.ts'
+import { AcpRuntime, isHarnessFailure, type AcpRuntimeOptions } from '../src/runtime.ts'
 
 const mockAgent = fileURLToPath(new URL('./mock-acp-agent.ts', import.meta.url))
 
@@ -81,6 +81,7 @@ async function runtimeBench(
     authStatusArgs: [mockAgent, 'auth', 'status'],
     authLogoutArgs: [mockAgent, 'auth', 'logout'],
     catalogCacheMs: 300_000,
+    catalogFailureCacheMs: 30_000,
     cliTimeoutMs: 60_000,
     ...options,
   })
@@ -177,10 +178,14 @@ describe('AcpRuntime lifecycle', () => {
 })
 
 describe('AcpRuntime auth', () => {
-  it('falls back to the devin CLI for logout without a connection and without the capability', async () => {
+  it('connects on demand and falls back to the devin CLI when the agent advertises no logout', async () => {
     bench = await runtimeBench()
+    expect(bench.runtime.initializeInfo).toBeUndefined()
 
     await bench.runtime.logout()
+    // The connect happened on demand, so "advertises no logout method" is a
+    // fact about the agent rather than an assumption made before it answered.
+    expect(bench.runtime.initializeInfo).toBeDefined()
     const connection = await bench.runtime.connect()
     await bench.runtime.logout()
 
@@ -193,9 +198,9 @@ describe('AcpRuntime auth', () => {
     expect(connection.closed).toBe(false)
   }, 30_000)
 
-  it('sends the ACP logout request when the agent advertises it', async () => {
+  it('sends the ACP logout request when the agent advertises it, without a prior connect', async () => {
     bench = await runtimeBench({ MOCK_LOGOUT: '1' })
-    await bench.runtime.connect()
+    expect(bench.runtime.initializeInfo).toBeUndefined()
     await bench.runtime.logout()
 
     const calls = await recordedCalls(bench.recordFile)
@@ -309,6 +314,139 @@ describe('AcpRuntime model catalog', () => {
     bench = await runtimeBench({ MOCK_MODELS_EXIT: '3' })
     await expect(bench.runtime.listCatalogCli()).rejects.toThrow(/exited 3$/)
   }, 30_000)
+
+  it('remembers a failed read for its own window and rethrows that failure', async () => {
+    // A harness that keeps failing (a mis-installed executable the picker sees
+    // as a spawn failure) must not be spawned once per picker poll.
+    bench = await runtimeBench({ MOCK_MODELS_EXIT: '3' }, { catalogFailureCacheMs: 30_000 })
+    const first: unknown = await bench.runtime.catalog().then(() => undefined, (error: unknown) => error)
+    expect(String(first)).toContain('exited 3')
+
+    const second: unknown = await bench.runtime.catalog().then(() => undefined, (error: unknown) => error)
+    expect(second).toBe(first)
+    expect((await recordedCalls(bench.recordFile)).filter(call => call.method === 'cli')).toHaveLength(1)
+  }, 30_000)
+
+  it('retries the read once the failure window has passed', async () => {
+    bench = await runtimeBench({ MOCK_MODELS_EXIT: '3' }, { catalogFailureCacheMs: 50 })
+    await expect(bench.runtime.catalog()).rejects.toThrow(/exited 3$/)
+    expect((await recordedCalls(bench.recordFile)).filter(call => call.method === 'cli')).toHaveLength(1)
+
+    await new Promise(resolve => setTimeout(resolve, 120))
+    await expect(bench.runtime.catalog()).rejects.toThrow(/exited 3$/)
+    expect((await recordedCalls(bench.recordFile)).filter(call => call.method === 'cli')).toHaveLength(2)
+  }, 30_000)
+
+  it('lets a session advert win over a remembered failure', async () => {
+    bench = await runtimeBench({ MOCK_MODELS_EXIT: '3' }, { catalogFailureCacheMs: 30_000 })
+    await expect(bench.runtime.catalog()).rejects.toThrow(/exited 3$/)
+
+    bench.runtime.recordAdvert([{ id: 'swe-1', name: 'SWE 1' }])
+    await expect(bench.runtime.catalog()).resolves.toEqual([{ id: 'swe-1', name: 'SWE 1' }])
+  }, 30_000)
+
+  it('starts no read for a caller that is already aborted', async () => {
+    // A caller that is already cancelled must not leave a read behind that
+    // nothing awaits: its rejection would surface as an unhandled rejection
+    // and, under installFailLoud, end the process.
+    const rejections: unknown[] = []
+    const onUnhandled = (reason: unknown): void => { rejections.push(reason) }
+    process.on('unhandledRejection', onUnhandled)
+    try {
+      bench = await runtimeBench({ MOCK_MODELS_EXIT: '3' })
+      const controller = new AbortController()
+      controller.abort(new Error('caller already aborted'))
+
+      await expect(bench.runtime.catalog(controller.signal)).rejects.toThrow('caller already aborted')
+      // Waiting past the CLI's own failure gives a read the aborted caller had
+      // started time to reject with nobody awaiting it.
+      await new Promise(resolve => setTimeout(resolve, 500))
+    } finally {
+      process.off('unhandledRejection', onUnhandled)
+    }
+    expect(rejections).toEqual([])
+
+    // The abort started nothing, so a live caller still gets the real read.
+    await expect(bench.runtime.catalog()).rejects.toThrow(/exited 3$/)
+  }, 30_000)
+
+  it('returns the probed catalog when closing the probe session fails', async () => {
+    bench = await runtimeBench({
+      // The CLI lists nothing, so the read falls through to the probe.
+      MOCK_MODELS_JSON: JSON.stringify({ families: [] }),
+      MOCK_SESSION_MODELS: JSON.stringify([{ modelId: 'opus', name: 'Opus' }]),
+      MOCK_CLOSE: '1',
+      MOCK_CLOSE_ERROR: '1',
+    })
+    const warn = vi.spyOn(bench.ctx.logger, 'warn')
+
+    await expect(bench.runtime.catalog()).resolves.toEqual([{ id: 'opus', name: 'Opus' }])
+    const warnings = warn.mock.calls.map(call => String(call[0]))
+    expect(warnings.some(message => message.includes('agent-acp[devin]') && message.includes('probe session')))
+      .toBe(true)
+    warn.mockRestore()
+
+    // The failed close neither fails the read nor leaves the next one to open
+    // another probe session.
+    await expect(bench.runtime.catalog()).resolves.toEqual([{ id: 'opus', name: 'Opus' }])
+    const calls = await recordedCalls(bench.recordFile)
+    expect(calls.filter(call => call.method === 'session/close')).toHaveLength(1)
+    expect(calls.filter(call => call.method === 'session/new')).toHaveLength(1)
+  }, 30_000)
+
+  it('ends a probe the harness never answers, and probes again on the next read', async () => {
+    // The read is single-flight, so a harness that accepts the connection and
+    // never answers `session/new` would otherwise leave this harness's picker
+    // route pending for the process lifetime.
+    bench = await runtimeBench({
+      // The CLI lists nothing, so the read falls through to the probe.
+      MOCK_MODELS_JSON: JSON.stringify({ families: [] }),
+      MOCK_HANG_SESSION_NEW: '1',
+    }, { cliTimeoutMs: 1_500 })
+    const started = Date.now()
+    await expect(bench.runtime.catalog()).rejects.toThrow(/catalog probe did not answer within 1500ms/)
+    expect(Date.now() - started).toBeLessThan(5_000)
+
+    // That deadline is this runtime's own bound, not a harness verdict: the
+    // next read probes again rather than answering from a remembered failure.
+    const again = Date.now()
+    await expect(bench.runtime.catalog()).rejects.toThrow(/catalog probe did not answer within 1500ms/)
+    expect(Date.now() - again).toBeGreaterThan(1_000)
+  }, 30_000)
+
+  it('retries a probe its own deadline ended, and remembers a harness refusal', async () => {
+    bench = await runtimeBench({
+      // The CLI lists nothing, so the read falls through to the probe, and the
+      // mock holds its initialize response well past the deadline below.
+      MOCK_MODELS_JSON: JSON.stringify({ families: [] }),
+      MOCK_INITIALIZE_DELAY_MS: '10000',
+    }, { cliTimeoutMs: 3_000 })
+
+    await expect(bench.runtime.catalog()).rejects.toThrow('did not answer within 3000ms')
+
+    const again = Date.now()
+    await expect(bench.runtime.catalog()).rejects.toThrow('did not answer within 3000ms')
+    expect(Date.now() - again).toBeGreaterThan(1_000)
+  }, 30_000)
+})
+
+describe('catalog failure classification', () => {
+  it('tells a harness failure apart from a cancellation and from its own deadline', () => {
+    const deadline = new AbortController()
+    const timeout = new Error('the catalog probe did not answer within 300ms')
+    deadline.abort(timeout)
+
+    // The runtime's own deadline expiring is its own bound, not a verdict.
+    expect(isHarnessFailure(deadline.signal, timeout)).toBe(false)
+    // A cancel that reached this read from another caller is not either, even
+    // once this runtime's deadline has also expired.
+    expect(isHarnessFailure(deadline.signal, new DOMException('caller left', 'AbortError'))).toBe(false)
+    expect(isHarnessFailure(undefined, new DOMException('caller left', 'TimeoutError'))).toBe(false)
+    // Anything that names no cancellation is a fact about the harness.
+    expect(isHarnessFailure(deadline.signal, new Error('exited 3'))).toBe(true)
+    expect(isHarnessFailure(undefined, new Error('exited 3'))).toBe(true)
+    expect(isHarnessFailure(undefined, 'not an error')).toBe(true)
+  })
 })
 
 describe('AcpClientConnection', () => {

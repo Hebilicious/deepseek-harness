@@ -1,9 +1,9 @@
 /**
  * ACP multi-harness driver plugin: one shared ACP process per configured
  * harness, one `ctx.agents` factory per harness, one `ctx.llm` catalog route
- * per harness for the model picker, and the harness-scoped auth Remote the
- * settings panel drives. Every harness is effect-scoped, so unloading the
- * plugin disposes each harness's own process.
+ * per harness for the model picker, and the harness-scoped `acp` Remote family
+ * (`status`, `login`, `logout`). Every harness is effect-scoped, so unloading
+ * the plugin disposes each harness's own process.
  *
  * @module @deepseek-ai/dsh-agent-acp
  */
@@ -31,6 +31,7 @@ import { AcpCatalogAdapter } from './catalog.ts'
 import {
   acpHarnessEntrySchema,
   DEFAULT_CATALOG_CACHE_MS,
+  DEFAULT_CATALOG_FAILURE_CACHE_MS,
   DEFAULT_CLI_TIMEOUT_MS,
   DEFAULT_DISPOSE_GRACE_MS,
   DEFAULT_EOF_GRACE_MS,
@@ -116,6 +117,7 @@ export class AcpHarness extends TypertRemoteService {
     eofGraceMs: z.number().default(DEFAULT_EOF_GRACE_MS),
     cliTimeoutMs: z.number().default(DEFAULT_CLI_TIMEOUT_MS),
     catalogCacheMs: z.number().default(DEFAULT_CATALOG_CACHE_MS),
+    catalogFailureCacheMs: z.number().default(DEFAULT_CATALOG_FAILURE_CACHE_MS),
   })
 
   /** Mounted harnesses by id, in config order. */
@@ -191,15 +193,22 @@ export class AcpHarness extends TypertRemoteService {
 
   /**
    * Start one harness's browser authentication flow (`devin-browser` on
-   * Devin).
+   * Devin). A harness that has not connected yet is connected first, because
+   * only its agent's initialize response names the method to start.
    * @param request - `{harness, methodId}`; the method defaults to the first one the harness advertised.
    * @param signal - caller lifetime.
    */
   @Remote('login')
   async login(request: { harness: string; methodId?: string }, signal: AbortSignal): Promise<void> {
     const { runtime } = this.require(request.harness)
-    const initialize = runtime.initializeInfo
-    const methodId = request.methodId ?? initialize?.authMethods?.[0]?.id
+    try {
+      // A harness that has not connected yet advertises its auth methods only
+      // in its initialize response, so connect before reading them.
+      if (runtime.initializeInfo === undefined) await runtime.connect(signal)
+    } catch (error: unknown) {
+      throw asRemoteError('acp/login-failed', error)
+    }
+    const methodId = request.methodId ?? runtime.initializeInfo?.authMethods?.[0]?.id
     if (methodId === undefined || methodId.length === 0) {
       throw new RemoteError(
         'gateway/bad-request',
@@ -264,6 +273,7 @@ function runtimeOptionsFor(entry: ResolvedAcpHarnessEntry, config: Config): AcpR
     authLogoutArgs: entry.authLogoutArgs,
     cliTimeoutMs: config.cliTimeoutMs ?? DEFAULT_CLI_TIMEOUT_MS,
     catalogCacheMs: config.catalogCacheMs ?? DEFAULT_CATALOG_CACHE_MS,
+    catalogFailureCacheMs: config.catalogFailureCacheMs ?? DEFAULT_CATALOG_FAILURE_CACHE_MS,
   }
 }
 

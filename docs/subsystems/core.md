@@ -435,7 +435,8 @@ The `acpHarness` service (`acp` Remote namespace). Owns one ACP runtime, one age
 
 /**
  * Start one harness's browser authentication flow (`devin-browser` on
- * Devin).
+ * Devin). A harness that has not connected yet is connected first, because
+ * only its agent's initialize response names the method to start.
  * @param request - `{harness, methodId}`; the method defaults to the first one the harness advertised.
  * @param signal - caller lifetime.
  */
@@ -764,7 +765,7 @@ Source: [`packages/preset/agent-presets/src/index.ts`](../../packages/preset/age
 
 ### `ctx.agents` — `AgentRegistry`
 
-Agent service (`ctx.agents`): tracks live agents and carries the initiating Agent through one process-local asynchronous driver chain. Agent *creation* is provided by whichever plugin implements the AgentFactory (`@deepseek-ai/dsh-agent-loop`), registered via setFactory.
+Agent service (`ctx.agents`): tracks live agents and carries the initiating Agent through one process-local asynchronous driver chain. Agent *creation* is provided by the plugins that implement the AgentFactory (`@deepseek-ai/dsh-agent-loop`, `@deepseek-ai/dsh-agent-codex`, and `@deepseek-ai/dsh-agent-acp`), each registered under its harness id via registerHarness; setFactory remains for a deployment that mounts one factory and needs no harness choice.
 
 Initiator methods provide same-process causal attribution only. Ambient presence is neither liveness proof nor authorization; subjects and owners remain explicit, as does identity at worker, process, persistence, and wire boundaries. Returned Promise boundaries drain during teardown, except a nested lineage that starts an owning-fiber unload is excluded from its own drain.
 
@@ -835,8 +836,9 @@ registerHarness(registration: AgentHarnessRegistration): () => void
 
 /**
  * Register the sole agent-creation factory under the default harness id.
- * Deployments that mount one harness use this; a deployment that offers a
- * choice registers each harness with {@link registerHarness}.
+ * Remains for a deployment whose single factory needs no harness choice;
+ * every in-tree driver registers itself with {@link registerHarness} so that
+ * a session's id and display name are its own.
  * @param factory - the factory {@link create}/{@link resume} delegate to.
  * @returns the disposer that removes the harness.
  */

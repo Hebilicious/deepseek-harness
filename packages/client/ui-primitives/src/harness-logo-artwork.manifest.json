@@ -4,39 +4,59 @@
   "note": "Agent-harness marks rendered by HarnessBadge. Shapes are copied verbatim from the sources below; only the fill follows the theme through currentColor. Trademarks belong to their owners and are used here to identify the harness a session runs, not to imply endorsement.",
   "marks": [
     {
-      "harness": "codex",
-      "source": "https://commons.wikimedia.org/wiki/File:OpenAI_logo_2025_(symbol).svg",
-      "terms": "Public domain on Wikimedia Commons; the OpenAI mark is a trademark of OpenAI.",
-      "viewBox": "1.68 1.75 16.65 16.5",
-      "shapes": 1
-    },
-    {
       "harness": "claude",
       "source": "https://cdn.simpleicons.org/claude",
       "terms": "Simple Icons file (CC0-1.0); the Claude mark is a trademark of Anthropic.",
-      "viewBox": "0 0 24 24",
-      "shapes": 1
+      "shapes": 1,
+      "sourceSha256": "5119ef950a0d648b3fd62865791e73f07f32e18ddab84e4f21160f8c641c0f5f",
+      "publishedViewBox": "0 0 24 24",
+      "renderedViewBox": "0 0 24 24"
+    },
+    {
+      "harness": "codex",
+      "source": "https://commons.wikimedia.org/wiki/File:OpenAI_logo_2025_(symbol).svg",
+      "terms": "Public domain on Wikimedia Commons; the OpenAI mark is a trademark of OpenAI.",
+      "shapes": 1,
+      "sourceSha256": "ca35a5723163b6a766b8b37de9bedd24c2b3ae81d3caa4b9429ccb91ef873cc7",
+      "publishedViewBox": "1.68 1.75 16.65 16.5",
+      "renderedViewBox": "1.68 1.75 16.65 16.5"
+    },
+    {
+      "harness": "dsh",
+      "source": "in-repo: packages/client/ui-primitives/src/FishLogo.tsx",
+      "terms": "This repository's own mark; no third-party rights involved.",
+      "publishedViewBox": "0 0 23.16 17.04",
+      "renderedViewBox": "0 0 23.16 17.04",
+      "shapes": 1,
+      "sourceSha256": "in-repo"
     },
     {
       "harness": "grok",
       "source": "https://commons.wikimedia.org/wiki/File:XAI-Logo.svg",
       "terms": "Public domain on Wikimedia Commons; the xAI mark is a trademark of xAI.",
-      "viewBox": "0 0 466.04 516.93",
-      "shapes": 4
-    },
-    {
-      "harness": "opencode",
-      "source": "https://cdn.simpleicons.org/opencode",
-      "terms": "Simple Icons file (CC0-1.0); the opencode mark belongs to its project.",
-      "viewBox": "0 0 24 24",
-      "shapes": 1
+      "shapes": 4,
+      "sourceSha256": "468299d83643011e499ae70bc71bf5295a4221829bb980bcf4fd150bd9927b30",
+      "publishedViewBox": "0 0 466.04 516.93",
+      "renderedViewBox": "0 0 466.04 516.93"
     },
     {
       "harness": "mimo",
       "source": "https://github.com/XiaomiMiMo/MiMo-Code/blob/main/packages/ui/src/assets/favicon/favicon-v3.svg",
       "terms": "MiMo-Code project asset (MIT-licensed repository); the mark belongs to Xiaomi.",
-      "viewBox": "0 0 512 512",
-      "shapes": 2
+      "shapes": 2,
+      "sourceSha256": "e29bbe33380ad1c1ada9134b52f229d30e9776d60481512c9d81f2bb6f37def9",
+      "publishedViewBox": "0 0 512 512",
+      "renderedViewBox": "96 96 320 320",
+      "renderedViewBoxNote": "The ink's centre with the larger ink dimension as its side, because the published file frames its 128..384 x 96..416 ink inside a 512 box; shapes are unchanged."
+    },
+    {
+      "harness": "opencode",
+      "source": "https://cdn.simpleicons.org/opencode",
+      "terms": "Simple Icons file (CC0-1.0); the opencode mark belongs to its project.",
+      "shapes": 1,
+      "sourceSha256": "c65afefdb1eb67be19a50f715d0a7a2c19558dbf0cbdc974feb367e055cd5f58",
+      "publishedViewBox": "0 0 24 24",
+      "renderedViewBox": "0 0 24 24"
     }
   ]
 }

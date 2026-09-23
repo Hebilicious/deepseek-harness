@@ -8,6 +8,7 @@
  * because the harness is fixed at creation.
  */
 
+import { useEffect } from 'react'
 import type { SnapshotStore } from '@deepseek-ai/dsh-client-store'
 import type { InjectFace, PropsLocale, PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
 import { HarnessBadge } from '@deepseek-ai/dsh-client-ui-primitives'
@@ -38,10 +39,17 @@ export type HarnessBadgeSeatProps =
  * @returns the badge, or null while the session records no harness.
  */
 export function HarnessBadgeSeat({
-  useProjection, useAgentHarnessSeat,
+  useProjection, useAgentHarnessSeat, load,
 }: HarnessBadgeSeatProps) {
   const recorded = useProjection('agentHarness')
   const state = useAgentHarnessSeat(snapshot => snapshot)
+
+  useEffect(() => {
+    // The store is filled at apply and after a reconnect; the first render of
+    // the mark may still precede either, and a failed read would leave the
+    // label on the raw id until something else asked again.
+    void load().catch(() => { /* the mark keeps the label it has */ })
+  }, [load])
   if (recorded === null || recorded === undefined) return null
   // The catalog names the harness; an id it does not carry yet still marks the
   // session, labelled by the id itself.

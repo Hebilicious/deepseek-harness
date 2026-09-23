@@ -276,7 +276,17 @@ async function resolveAgent(
   try {
     using observation = await query.observeSession(sessionId)
     assertAdoptable(observation.header, observation.events, sessionId, cwd)
-    const { agent } = await agents.resume({ resumeSessionId: sessionId, agentOptions, setup })
+    const harness = recordedHarness(observation.events)
+    const { agent } = await agents.resume({
+      resumeSessionId: sessionId,
+      agentOptions,
+      setup,
+      // The log names the harness that owns this conversation, so a profile
+      // mounting several still resolves the resume. A session recording none
+      // leaves the registry to answer with its sole mounted harness or its own
+      // refusal.
+      ...harness === undefined ? {} : { harness },
+    })
     // The observation is a snapshot: another writer may have appended a preset
     // selection before this process took the write lease. Re-check the log
     // resume actually attached, now that no other process can append.
@@ -342,6 +352,9 @@ async function run(ctx: Context, config: Config, io: HeadlessIo): Promise<void> 
   const sessionId = brandString<SessionId>(config.sessionId ?? `session-${randomUUID()}`)
   const fs = ctx.get('fs')
   const cwd = fs === undefined ? process.cwd() : fs.processPath(await fs.resolve('.'))
+  // The CLI task carries no harness and this run descends from no Session, so
+  // both create and resume are unnamed: the headless profile must mount exactly
+  // one harness.
   const agent = config.sessionId === undefined
     ? (await agents.create({
       sessionId,

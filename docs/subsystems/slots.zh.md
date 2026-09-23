@@ -146,6 +146,7 @@ root
 │     │     └─ conversation.trajectory.images
 │     ├─ conversation.session.header
 │     │  ├─ conversation.session.header.lineage
+│     │  ├─ conversation.session.header.harness
 │     │  ├─ conversation.session.header.leading
 │     │  ├─ conversation.session.header.actions
 │     │  ├─ conversation.session.header.utilities
@@ -166,7 +167,8 @@ root
 │     ├─ conversation.hero.brand.mark
 │     ├─ conversation.hero.workspace
 │     │  └─ conversation.hero.workspace.directoryFlow
-│     └─ conversation.hero.agentPreset
+│     ├─ conversation.hero.agentPreset
+│     └─ conversation.hero.agentHarness
 ├─ rightbar
 │  └─ rightbar.session
 │     ├─ sidebar.right.pane.tab

@@ -2,6 +2,7 @@
 import { cleanup, render } from '@testing-library/react'
 import { afterEach, describe, expect, it } from 'vitest'
 import { HarnessBadge, harnessMark, HARNESS_LOGOS } from '@deepseek-ai/dsh-client-ui-primitives'
+import artwork from '../src/harness-logo-artwork.manifest.json'
 
 afterEach(cleanup)
 
@@ -24,6 +25,26 @@ describe('HarnessBadge', () => {
       expect(shapes).toHaveLength(logo?.shapes.length ?? 0)
       expect([...shapes].every(shape => shape.getAttribute('fill') === 'currentColor')).toBe(true)
       cleanup()
+    }
+  })
+
+  it('matches the artwork manifest that records every mark source', () => {
+    const marks = artwork.marks as readonly {
+      harness: string
+      renderedViewBox: string
+      shapes: number
+      source: string
+      sourceSha256: string
+    }[]
+    // Every entry the manifest claims is drawn, with the box it claims, and
+    // every drawn mark is claimed: a silently redrawn or dropped mark fails here.
+    expect([...marks.map(mark => mark.harness)].sort()).toEqual(Object.keys(HARNESS_LOGOS).sort())
+    for (const mark of marks) {
+      const logo = HARNESS_LOGOS[mark.harness]
+      expect(logo?.viewBox).toBe(mark.renderedViewBox)
+      expect(logo?.shapes).toHaveLength(mark.shapes)
+      expect(mark.source).toMatch(/^https?:|^in-repo:/)
+      expect(mark.sourceSha256.length).toBeGreaterThan(0)
     }
   })
 
