@@ -2056,7 +2056,7 @@ Sources: [`packages/skill/tool-skill/src/index.ts:40`](../packages/skill/tool-sk
 
 SHA-256: `9edc162949abf93bd5ff049191b345454ba104f583937ce5580fb50f067d2b94`
 
-Sources: [`packages/webhook/webhook/src/types.ts:74`](../packages/webhook/webhook/src/types.ts)
+Sources: [`packages/webhook/webhook/src/types.ts:81`](../packages/webhook/webhook/src/types.ts)
 
 | Property | Presence | Type |
 |---|---|---|

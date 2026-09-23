@@ -2058,7 +2058,7 @@ SHA-256: `83079c8a3f733ac3fa603eefa0fbb4737ca4d8b69e7e2e7298b60f9ac4098693`
 
 SHA-256: `9edc162949abf93bd5ff049191b345454ba104f583937ce5580fb50f067d2b94`
 
-来源：[`packages/webhook/webhook/src/types.ts:74`](../packages/webhook/webhook/src/types.ts)
+来源：[`packages/webhook/webhook/src/types.ts:81`](../packages/webhook/webhook/src/types.ts)
 
 | 属性 | 存在性 | 类型 |
 |---|---|---|
