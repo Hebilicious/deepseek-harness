@@ -42,12 +42,17 @@ type Answer = RemoteResult<SessionHarnessCatalog>
 
 /** A controller over catalog reads the spec answers by hand. */
 function bench() {
+  const workspaces = {
+    list: { getSnapshot: () => ({ items: [{ workspaceId: 'ws-1', sessionIds: ['session-1'] }] }) },
+  }
   const stages: HarnessId[] = []
   const bindings: Array<[string, HarnessId]> = []
   const bindable = new Set<string>()
+  let rebinding: string | undefined
   const pending: Array<(result: Answer) => void> = []
   let reads = 0
   const ctx = {
+    get: (name: string) => (name === 'workspaces' ? workspaces : undefined),
     remote: {
       session: {
         harnessCatalog: () => {
@@ -62,7 +67,7 @@ function bench() {
       bindHarness: async (sessionId: string, harness: HarnessId) => {
         bindings.push([sessionId, harness])
         bindable.delete(sessionId)
-        return harness
+        return rebinding ?? sessionId
       },
     },
   } as unknown as Context
@@ -72,6 +77,7 @@ function bench() {
     stages,
     bindings,
     bindable,
+    rebindTo: (sessionId: string) => { rebinding = sessionId },
     reads: (): number => reads,
     /** Start a load; the caller settles it through {@link resolve} or {@link answer}. */
     start: (): Promise<void> => controller.load(),
@@ -217,6 +223,17 @@ describe('a Session the Workspace flow already published', () => {
 
     expect(b.bindings).toEqual([])
     expect(b.stages).toEqual(['codex'])
+  })
+
+  it('hands the replacement back so the shell can follow it', async () => {
+    const b = bench()
+    await b.answer({ ok: true, value: CATALOG })
+    b.bindable.add('session-1')
+    b.rebindTo('session-2')
+
+    // A pick on a Session that already records a harness moves the choice to a
+    // replacement, and the caller needs that identity to show it.
+    await expect(b.controller.apply(SessionId('session-1'), hid('codex'))).resolves.toBe('session-2')
   })
 
   it('answers whether a Session is still provisional', async () => {

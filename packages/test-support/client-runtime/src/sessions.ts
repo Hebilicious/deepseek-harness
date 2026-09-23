@@ -665,13 +665,15 @@ export class TestSessions implements ISessions {
    * @param harness - harness the surface chose.
    * @returns the accepted harness.
    */
-  bindHarness(sessionId: SessionId, harness: Parameters<ISessions['bindHarness']>[1]): Promise<Parameters<ISessions['bindHarness']>[1]> {
+  bindHarness(sessionId: SessionId, harness: Parameters<ISessions['bindHarness']>[1]): Promise<SessionId> {
     this.calls.push({ method: 'bindHarness', args: [sessionId, harness] })
     if (!this.bindableSessions.has(sessionId)) {
       return Promise.reject(new Error(`session "${sessionId}" is not provisional`))
     }
     this.bindableSessions.delete(sessionId)
-    return Promise.resolve(harness)
+    // The production manager keeps the identity when it records in place, which
+    // is the case the doubles model.
+    return Promise.resolve(sessionId)
   }
 
   /** Resolve a retained or catalog-derived address independently of a view. */

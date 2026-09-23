@@ -15,6 +15,7 @@
 import type { Context as ClientContext } from '@deepseek-ai/cordis'
 import type { HarnessId } from '@deepseek-ai/dsh-agent/types'
 import type { SessionId } from '@deepseek-ai/dsh-session/types'
+import type { WorkspaceId } from '@deepseek-ai/dsh-workspace/types'
 // Type-only: pulls the ctx.remote merge (the generated Remote namespaces).
 import type {} from '@deepseek-ai/dsh-api-remotes/client'
 // Type-only: pulls the Session Controller client service merge (ctx.sessions).
@@ -82,11 +83,16 @@ export class AgentHarnessSeatController {
    * own binding, and every other surface stages it for the next Session.
    * @param sessionId - Session identity on screen, or `undefined` for none yet.
    * @param harness - mounted harness the picker chose.
-   * @returns once a binding, when one was needed, reached the host.
+   * @returns the Session that now runs the harness, when the caller must show
+   *   another one than the Session it was looking at.
    */
-  async apply(sessionId: SessionId | undefined, harness: HarnessId): Promise<void> {
-    if (sessionId !== undefined && this.bindable(sessionId)) await this.bind(sessionId, harness)
-    else this.select(harness)
+  async apply(sessionId: SessionId | undefined, harness: HarnessId): Promise<SessionId | undefined> {
+    if (sessionId === undefined || !this.bindable(sessionId)) {
+      this.select(harness)
+      return undefined
+    }
+    const bound = await this.bind(sessionId, harness)
+    return bound === sessionId ? undefined : bound
   }
 
   /**
@@ -105,14 +111,31 @@ export class AgentHarnessSeatController {
    * way a choice reaches a Session the Workspace flow already published.
    * @param sessionId - provisional Session identity.
    * @param harness - mounted harness the picker chose.
-   * @returns once the host accepted the binding.
+   * @returns the Session the choice now lives on.
    */
-  async bind(sessionId: SessionId, harness: HarnessId): Promise<void> {
-    await this.ctx.sessions.bindHarness(sessionId, harness)
+  async bind(sessionId: SessionId, harness: HarnessId): Promise<SessionId> {
+    // A replacement has to land in the Workspace the Session belonged to, or
+    // the shell would show it ungrouped with a composer that has no Workspace.
+    const bound = await this.ctx.sessions.bindHarness(sessionId, harness, this.workspaceOwning(sessionId))
     // The pick also becomes the choice later Sessions start from: a reader who
     // switched to another harness for this Session asked for that harness.
     this.ctx.sessions.stageHarness(harness)
     this.store.set({ ...this.store.getSnapshot(), current: harness })
+    return bound
+  }
+
+  /**
+   * The Workspace that accounts for a Session, read from the Workspace
+   * Controller's own list. A replacement Session has to be published into it,
+   * and the list is the only place the browser records that membership.
+   * @param sessionId - Session whose Workspace is required.
+   * @returns the owning Workspace id, or `undefined` while none accounts for it.
+   */
+  private workspaceOwning(sessionId: SessionId): WorkspaceId | undefined {
+    const workspaces: { list: { getSnapshot(): { items: readonly { workspaceId: WorkspaceId; sessionIds: readonly SessionId[] }[] } } }
+      | undefined = this.ctx.get('workspaces')
+    return workspaces?.list.getSnapshot().items
+      .find(item => item.sessionIds.includes(sessionId))?.workspaceId
   }
 
   /**

@@ -55,6 +55,9 @@ async function bench(catalog: SessionHarnessCatalog = CATALOG) {
   const bindable = new Set<string>()
   const bindings: Array<[string, HarnessId]> = []
   let refuseBinding = false
+  ctx.provide('workspaces', {
+    list: { getSnapshot: () => ({ items: [] }) },
+  } as never)
   ctx.provide('sessions', {
     stageHarness: (harness: HarnessId) => { stages.push(harness) },
     harnessProvisional: (sessionId: string) => bindable.has(sessionId),

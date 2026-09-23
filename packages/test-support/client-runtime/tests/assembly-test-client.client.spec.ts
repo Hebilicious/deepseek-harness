@@ -261,7 +261,8 @@ describe('the harness face of the Session double', () => {
     expect(runtime.sessions.harnessProvisional(sessionId)).toBe(true)
 
     const harness = 'codex' as Parameters<TestSessions['bindHarness']>[1]
-    await expect(runtime.sessions.bindHarness(sessionId, harness)).resolves.toBe('codex')
+    // A binding recorded in place keeps the identity the caller showed.
+    await expect(runtime.sessions.bindHarness(sessionId, harness)).resolves.toBe(sessionId)
     // The binding closes the window and stays observable for the spec's assertion.
     expect(runtime.sessions.harnessProvisional(sessionId)).toBe(false)
     expect(runtime.sessions.calls).toContainEqual({ method: 'bindHarness', args: [sessionId, 'codex'] })

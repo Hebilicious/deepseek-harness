@@ -132,11 +132,13 @@ export interface ISessions {
    * the choice later Sessions start from.
    * @param sessionId - provisional Session identity.
    * @param harness - mounted harness that should own the Session.
-   * @returns the accepted harness.
-   * @throws {SessionCreateError} when the Session records another harness, has
-   * begun its turn, or the host refuses the binding.
+   * @param workspaceId - Workspace a replacement Session belongs to, so it
+   *   stays grouped where the Session it replaces was.
+   * @returns the Session the choice now lives on: the same identity when it was
+   *   recorded in place, or a replacement the caller should show instead.
+   * @throws {SessionCreateError} when the host refuses the binding.
    */
-  bindHarness(sessionId: SessionId, harness: HarnessId): Promise<HarnessId>
+  bindHarness(sessionId: SessionId, harness: HarnessId, workspaceId?: WorkspaceId): Promise<SessionId>
   /**
    * Resolve an already discovered direct-parent address without opening it.
    * @param id - possible addressed child id.

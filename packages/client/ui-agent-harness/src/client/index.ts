@@ -21,6 +21,7 @@ import type {} from '@deepseek-ai/dsh-client-ui-conversation/client'
 // Type-only: pulls the slot registry's Context merge (ctx.slots).
 import type {} from '@deepseek-ai/dsh-client-ui-renderer/client'
 import type { Context as ClientContext } from '@deepseek-ai/cordis'
+import type { SessionId } from '@deepseek-ai/dsh-session/types'
 import { AgentHarnessSeat } from './AgentHarnessSeat.tsx'
 import { HarnessBadgeSeat } from './HarnessBadgeSeat.tsx'
 import type { HarnessBadgeSeatInjected } from './HarnessBadgeSeat.tsx'
@@ -49,8 +50,21 @@ export const inject = ['slots', 'sessions', 'locale', 'remote', 'remote.session'
  * Mount the new-session harness chip.
  * @param ctx - the browser plugin context.
  */
+/** The navigation capability a pick follows, typed locally: ui-workspace owns it. */
+interface SessionNavigator {
+  /** Select a Session and show its Conversation. */
+  openSession(sessionId: SessionId): void
+}
+
 export function apply(ctx: ClientContext): void {
   const controller = new AgentHarnessSeatController(ctx)
+  // A pick that moves the choice to a replacement Session has to put that
+  // Session on screen. Navigation belongs to the Workspace capability, and this
+  // plugin reads it as the optional service it is: a deployment without it
+  // keeps the chip and simply leaves the reader to open the row.
+  const showSession = (sessionId: SessionId): void => {
+    ;(ctx.get('uiWorkspace') as SessionNavigator | undefined)?.openSession(sessionId)
+  }
   // A wire call that rejects leaves the seat on the catalog it already had.
   const refresh = (): void => {
     void controller.load().catch(() => { /* the seat keeps its previous snapshot */ })
@@ -75,7 +89,9 @@ export function apply(ctx: ClientContext): void {
       // The pick may need to reach the host, so the seat does not wait on it:
       // a failed binding leaves the chip on the harness it already showed.
       select: (sessionId, harness) => {
-        void controller.apply(sessionId, harness).catch(() => { /* the chip keeps its state */ })
+        void controller.apply(sessionId, harness)
+          .then((replacement) => { if (replacement !== undefined) showSession(replacement) })
+          .catch(() => { /* the chip keeps its state */ })
       },
     }),
   }, AgentHarnessSeat))

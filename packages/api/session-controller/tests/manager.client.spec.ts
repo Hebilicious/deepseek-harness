@@ -1179,7 +1179,8 @@ describe('binding a provisional Session', () => {
     manager.get(S1)
 
     expect(manager.harnessBindable(S1)).toBe(true)
-    expect(await manager.bindHarness(S1, CODEX)).toBe(CODEX)
+    // A Session that records none is bound in place, so the identity stands.
+    expect(await manager.bindHarness(S1, CODEX)).toBe(S1)
     expect(remote.session.bindHarness).toHaveBeenLastCalledWith({ sessionId: S1, harness: CODEX })
     // The pick sticks: a Session started afterwards runs the harness the reader
     // chose for this one.
@@ -1232,7 +1233,8 @@ describe('rebinding a provisional Session that already records one', () => {
     manager.get(S1)
 
     expect(manager.harnessBindable(S1)).toBe(false)
-    expect(await manager.bindHarness(S1, CODEX)).toBe(CODEX)
+    const replacement = await manager.bindHarness(S1, CODEX)
+    expect(replacement).not.toBe(S1)
 
     // The run of this Session is already built for `dsh`, so the choice moves to
     // a Session created under the requested harness in the same directory.

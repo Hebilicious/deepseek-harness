@@ -486,11 +486,12 @@ export class ClientSessions implements ISessions {
    * Record the harness that owns one provisional Session.
    * @param sessionId - provisional Session identity.
    * @param harness - mounted harness that should own the Session.
-   * @returns the accepted harness.
+   * @returns the Session the choice now lives on: the same identity when it was
+   *   recorded in place, or a replacement the caller should show instead.
    * @throws {SessionCreateError} when the host refuses the binding.
    */
-  bindHarness(sessionId: SessionId, harness: HarnessId): Promise<HarnessId> {
-    return this.manager.bindHarness(sessionId, harness)
+  bindHarness(sessionId: SessionId, harness: HarnessId, workspaceId?: WorkspaceId): Promise<SessionId> {
+    return this.manager.bindHarness(sessionId, harness, workspaceId)
   }
 
   /**

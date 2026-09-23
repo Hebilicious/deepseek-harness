@@ -593,7 +593,7 @@ export class SessionManager {
    * @returns the accepted harness.
    * @throws {SessionCreateError} when the host refuses the binding.
    */
-  async bindHarness(sessionId: SessionId, harness: HarnessId): Promise<HarnessId> {
+  async bindHarness(sessionId: SessionId, harness: HarnessId, workspaceId?: WorkspaceId): Promise<SessionId> {
     const summary = this.summaries.find(candidate => candidate.sessionId === sessionId)
     const recorded = this.projectionValues(sessionId)?.['agentHarness']
       ?? summary?.projections?.values['agentHarness']
@@ -602,22 +602,27 @@ export class SessionManager {
       if (!result.ok) throw new SessionCreateError(result.error, sessionId)
       this.stageHarness(harness)
       // The host published the record as part of accepting this call, so its own
-      // frame carries the projection.
-      return result.value.harness
+      // frame carries the projection and this Session stays the one on screen.
+      return sessionId
     }
-    // This provisional Session already names a harness, and the agent was
-    // built for it, so the choice moves to a replacement rather than rewriting
-    // a record the running agent would then contradict. The abandoned Session
-    // is blank: it holds no content and no turn.
+    // This provisional Session already names a harness, and the agent was built
+    // for it, so the choice moves to a replacement rather than rewriting a
+    // record the running agent would then contradict. The abandoned Session is
+    // blank: it holds no content and no turn, so a replacement is invisible to
+    // the reader once the shell follows it.
     const replacement = SessionId(`session-${randomUUID()}`)
     const created = await this.create({
-      ...summary.cwd === undefined ? {} : { cwd: summary.cwd },
+      // The Workspace keeps the replacement grouped exactly as the Session it
+      // replaces was; without that membership the shell shows it ungrouped.
+      ...workspaceId !== undefined
+        ? { workspaceId }
+        : { ...summary.cwd === undefined ? {} : { cwd: summary.cwd } },
       sessionId: replacement,
       harness,
     })
     if (!created.ok) throw new SessionCreateError(created.error, replacement)
     this.stageHarness(harness)
-    return harness
+    return replacement
   }
 
   /**
