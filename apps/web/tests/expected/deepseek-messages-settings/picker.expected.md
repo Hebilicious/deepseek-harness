@@ -1,6 +1,8 @@
 - menu "模型与推理等级":
   - img
   - searchbox "搜索模型"
+  - button "刷新模型列表":
+    - img
   - group "DeepSeek":
     - text: DeepSeek
     - menuitemradio "Messages Flash" [checked]:

@@ -14,6 +14,7 @@
 
 import { builtinProviders, getBuiltinModels, getBuiltinProviders } from '@earendil-works/pi-ai/providers/all'
 import type { BuiltinProvider } from '@earendil-works/pi-ai/providers/all'
+import { overlayCatalog } from './catalog-overlay.ts'
 import type {
   AnthropicMessagesCompat,
   Api,
@@ -632,6 +633,13 @@ export interface RouteCatalogRequest {
   modelOverrides?: Readonly<Record<string, PiAiModelOverride>>
   /** Route-level wire-compatibility switches, landing on each model whose protocol declares them; entries override per field. */
   compat?: PiAiCompatProfile
+  /**
+   * Models this route's directory supplies and the installed catalog does not
+   * describe. They take a catalog model's place for their own id, so an entry
+   * here is overridable, listable, and requestable exactly like an installed
+   * one; an id the installed catalog also describes keeps the installed entry.
+   */
+  overlay?: readonly Model<Api>[]
   /** Context capacity for a model neither the entry nor the catalog sizes. */
   defaultContextWindow: number
   /** Output capability for a model neither the entry nor the catalog sizes. */
@@ -820,7 +828,8 @@ export interface RouteCatalog {
  * Materialize one route's catalog by merging the installed catalog defaults
  * under the configured entries. A route with no configured `models` serves the
  * installed catalog unchanged, which is what keeps an existing
- * `providers: { deepseek: { apiKeyEnv: … } }` profile working untouched.
+ * `providers: { deepseek: { apiKeyEnv: … } }` profile working untouched, plus
+ * whatever the route's overlay adds to the installed entries.
  * @param request - the route-level catalog facts.
  * @param validation - strict writes reject every error; deferred reads retain model diagnostics.
  * @returns the materialized models and the explicitly configured request caps.
@@ -830,7 +839,7 @@ export function resolveRouteModels(
   validation: 'strict' | 'deferred' = 'strict',
 ): RouteCatalog {
   const { provider } = request
-  const defaults = catalogModels(provider)
+  const defaults = overlayCatalog(catalogModels(provider), request.overlay)
   const providerBaseUrl = catalogProvider(provider)?.baseUrl
   // An absent `models` key and an empty one are the same request: the config
   // schema materializes `[]` for the absent case, and an empty catalog could

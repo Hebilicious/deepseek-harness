@@ -195,6 +195,9 @@ export function apply(ctx: ClientContext): void {
           load: () => {
             if (available) directory.load().catch(() => { /* surfaced on the store */ })
           },
+          refresh: () => available
+            ? directory.refresh().then(() => undefined)
+            : Promise.resolve(),
           select: (selection: ModelSelection) => available
             ? directory.select(selection)
             : Promise.resolve(undefined),

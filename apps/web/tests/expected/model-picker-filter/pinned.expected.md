@@ -1,6 +1,8 @@
 - menu "模型与推理等级":
   - img
   - searchbox "搜索模型"
+  - button "刷新模型列表":
+    - img
   - group "已固定":
     - text: 已固定
     - menuitemradio "Acme Think Pro，提供方 Acme Gateway": Acme Think Pro Acme Gateway

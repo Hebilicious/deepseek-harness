@@ -112,6 +112,20 @@ describe.skipIf(MODE === 'record')('web e2e: the composer model list filters and
     expect(await page.evaluate(() => localStorage.getItem('dsh.model-pins')))
       .toBe('{"pinned":["acme-gateway/acme-think-pro"]}')
     expect(tripwire.pageErrors).toEqual([])
+
+    // The refresh row must not cost the list: a self-disabling button drops
+    // focus to the page body in a real browser, and the seat closes on blur.
+    await page.getByRole('button', { name: '刷新模型列表' }).click()
+    await expect.poll(async () => page.getByRole('menu', { name: '模型与推理等级' }).isVisible(), { timeout: 5_000 })
+      .toBe(true)
+    await expect.poll(async () => rows.count(), { timeout: 10_000 }).toBe(ALL_MODELS.length + 1)
+    // React drops the attribute once the refresh settles, so the assertion is
+    // that the row is no longer marked busy, not that a literal remains.
+    await expect.poll(
+      () => page.getByRole('button', { name: '刷新模型列表' }).getAttribute('aria-disabled'),
+      { timeout: 10_000 },
+    ).not.toBe('true')
+    expect(tripwire.pageErrors).toEqual([])
   }, 60_000)
 
   it('keeps its snapshot inventory closed', async () => {

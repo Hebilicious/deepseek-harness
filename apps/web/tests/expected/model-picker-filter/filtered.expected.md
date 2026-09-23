@@ -1,6 +1,8 @@
 - menu "模型与推理等级":
   - img
   - searchbox "搜索模型": think
+  - button "刷新模型列表":
+    - img
   - group "Acme Gateway":
     - text: Acme Gateway
     - menuitemradio "Acme Think" [checked]:

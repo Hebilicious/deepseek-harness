@@ -32,6 +32,8 @@ import {
   THINKING_LEVELS,
   THINKING_TOKEN_BUDGET_FIELDS,
 } from './catalog.ts'
+import type { CatalogModel } from './catalog-overlay.ts'
+import type { CatalogOverlaySource } from './catalog-sync.ts'
 import type {
   PiAiCompatProfile,
   PiAiModality,
@@ -65,6 +67,12 @@ export const DEFAULT_CONTEXT_WINDOW = 262_144
 
 /** Output capability assumed for a model neither configuration nor the catalog sizes. */
 export const DEFAULT_MAX_TOKENS = 32_768
+
+/** The published model directory a catalog overlay reads unless a deployment names another. */
+export const DEFAULT_CATALOG_URL = 'https://models.dev/api.json'
+
+/** Hours a cached catalog snapshot stays current before the next start refetches it. */
+export const DEFAULT_CATALOG_REFRESH_HOURS = 12
 
 /**
  * Modalities assumed for a model neither configuration nor the catalog
@@ -217,6 +225,28 @@ export interface ResolvedPiAiProviderProfile
   configuredMaxTokens: ReadonlyMap<string, number>
 }
 
+/**
+ * Model-directory overlay of the installed catalog: the entries this section
+ * fetches are the models a route serves that the installed pi-ai catalog does
+ * not describe yet.
+ *
+ * Absence and `false` disable the overlay entirely, which keeps a deployment's
+ * routes exactly as the installed catalog describes them. `true` uses this
+ * build's published directory and snapshot age; an object overrides either.
+ * The switch is a union rather than a bare object because schemastery
+ * materializes an absent object as `{}`, which would make every deployment
+ * fetch the directory whether or not anyone asked for it.
+ *
+ * Nothing runs on a schedule: the directory is read at each start, and a
+ * selector's explicit refresh fetches it again on demand.
+ */
+export type PiAiCatalogOverlayConfig = boolean | {
+  /** Directory document URL; defaults to the published models.dev catalog. */
+  url?: string
+  /** Hours a cached snapshot stays current before the next start refetches it; 0 refetches at every start. */
+  refreshHours?: number
+}
+
 /** Plugin configuration: the provider routes this instance owns. */
 export interface Config {
   /**
@@ -225,6 +255,12 @@ export interface Config {
    * and registers them the moment a settings section supplies profiles.
    */
   providers?: Record<string, PiAiProviderProfile>
+  /**
+   * Opt-in overlay of models the installed pi-ai catalog does not describe,
+   * read from a published model directory. Its entries extend a route the
+   * installed catalog ships and never declare an endpoint of their own.
+   */
+  catalogOverlay?: PiAiCatalogOverlayConfig
 }
 
 const thinkingBudgets = z.object({
@@ -347,12 +383,45 @@ const profile = z.object({
 /** Runtime schema for {@link Config}. */
 export const Config: z<Config> = z.object({
   providers: z.dict(profile).default({}),
+  catalogOverlay: z.union([
+    z.const(false),
+    z.const(true),
+    z.object({
+      url: z.string(),
+      refreshHours: z.number(),
+    }),
+  ]),
 })
 
 /**
- * Reject new or changed provider profiles that cannot be served. Unchanged
- * stored profiles may need repair after a catalog upgrade and do not block
- * edits to another provider. Removed profiles require no catalog validation.
+ * The catalog overlay a configuration section asks for, with this build's
+ * defaults materialized.
+ * @param config - the resolved section to read.
+ * @returns the source to fetch from, or `undefined` when the overlay is off.
+ * @throws Error naming the field when the section states an unusable source.
+ */
+export function catalogOverlaySource(config: Config): CatalogOverlaySource | undefined {
+  const overlay = config.catalogOverlay
+  if (overlay === undefined || overlay === false) return undefined
+  const stated = overlay === true ? {} : overlay
+  const url = stated.url ?? DEFAULT_CATALOG_URL
+  if (url.length === 0) {
+    throw new Error('llm-pi-ai: catalogOverlay.url is empty; name a catalog URL or turn the section off')
+  }
+  const refreshHours = stated.refreshHours ?? DEFAULT_CATALOG_REFRESH_HOURS
+  if (!Number.isFinite(refreshHours) || refreshHours < 0) {
+    throw new Error(
+      `llm-pi-ai: catalogOverlay.refreshHours must be a non-negative number of hours, not ${String(refreshHours)}`,
+    )
+  }
+  return { url, refreshHours }
+}
+
+/**
+ * Reject new or changed provider profiles, and a changed overlay section, that
+ * cannot be served. Unchanged stored profiles may need repair after a catalog
+ * upgrade and do not block edits to another provider. Removed profiles require
+ * no catalog validation.
  * @param config - the resolved section to check.
  * @param previous - current resolved section; omission checks every provider.
  * @throws Error naming the route and configuration entry that cannot be served.
@@ -361,6 +430,7 @@ export function assertServiceable(config: Config, previous?: Config): void {
   const changed = Object.fromEntries(Object.entries(config.providers ?? {}).filter(([provider, profile]) =>
     !deepEqualJson(profile, previous?.providers?.[provider])))
   resolveProfiles(changed)
+  if (!deepEqualJson(config.catalogOverlay, previous?.catalogOverlay)) catalogOverlaySource(config)
 }
 
 /** Reject removed pre-release profile fields and name their replacements. */
@@ -401,11 +471,13 @@ function assertValidHeaders(provider: string, headers: Readonly<Record<string, s
  * routes. An omitted dict resolves to the empty, dormant route set.
  * @param providers - configured provider profiles keyed by route.
  * @param validation - writes require a complete catalog; stored reads retain catalog diagnostics.
+ * @param overlayFor - the route's catalog overlay, when the directory supplied one.
  * @returns validated profiles in configuration order.
  */
 export function resolveProfiles(
   providers: Readonly<Record<string, PiAiProviderProfile>> | undefined,
   validation: 'strict' | 'deferred' = 'strict',
+  overlayFor?: (provider: string) => readonly CatalogModel[] | undefined,
 ): Map<string, ResolvedPiAiProviderProfile> {
   if (Array.isArray(providers)) {
     throw new Error('llm-pi-ai: providers is now a dict keyed by provider route, not an array of profiles')
@@ -458,6 +530,7 @@ export function resolveProfiles(
     let catalog: RouteCatalog | undefined
     let piProvider: Provider | undefined
     let catalogError: string | undefined
+    const overlay = overlayFor?.(provider)
     try {
       catalog = resolveRouteModels({
         provider,
@@ -466,6 +539,7 @@ export function resolveProfiles(
         ...source.models === undefined ? {} : { models: source.models },
         ...source.modelOverrides === undefined ? {} : { modelOverrides: source.modelOverrides },
         ...source.compat === undefined ? {} : { compat: source.compat },
+        ...overlay === undefined ? {} : { overlay },
         defaultInput,
         defaultContextWindow: source.defaultContextWindow ?? DEFAULT_CONTEXT_WINDOW,
         defaultMaxTokens: source.defaultMaxTokens ?? DEFAULT_MAX_TOKENS,

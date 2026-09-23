@@ -82,6 +82,37 @@ export class ModelCatalogDirectory {
     void this.load().catch(() => { /* the selector exposes the shared error */ })
   }
 
+  /**
+   * Ask the Host to fetch its model sources again and adopt the rebuilt
+   * catalog. This is the explicit refresh a selector offers; {@link refresh}
+   * only re-reads what the Host already holds.
+   * @returns the rebuilt global catalog.
+   * @throws Error when the Host refresh fails; the store carries the message too.
+   */
+  async refreshSources(): Promise<ModelCatalog> {
+    const generation = this.generation
+    this.store.update((draft) => {
+      draft.status = 'loading'
+      draft.error = null
+    })
+    try {
+      const response = await this.ctx.remote.session.refreshModelCatalog()
+      if (!response.ok) throw new Error(`${response.error.code}: ${response.error.message}`)
+      if (generation === this.generation) {
+        this.store.set({ value: response.value, status: 'ready', error: null })
+      }
+      return response.value
+    } catch (error: unknown) {
+      if (generation === this.generation) {
+        this.store.update((draft) => {
+          draft.status = 'error'
+          draft.error = error instanceof Error ? error.message : String(error)
+        })
+      }
+      throw error
+    }
+  }
+
   /** Clear Host-specific values and load the replacement Host generation. */
   resetGeneration(): void {
     this.invalidate(true)

@@ -34,7 +34,7 @@ import clsx from 'clsx'
 import type { ModelReasoningEffort, ModelSelection } from '@deepseek-ai/dsh-api-remotes/client'
 import {
   IconCheckOutline16, IconChevronDownOutline14, IconChevronRightOutline14, IconDataOutline16,
-  IconSearchOutline16, IconStarFill16, IconStarOutline16, IconWarningOutline16, Toast,
+  IconRefreshOutline14, IconSearchOutline16, IconStarFill16, IconStarOutline16, IconWarningOutline16, Toast,
 } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { InjectFace, PropsLocale } from '@deepseek-ai/dsh-client-ui-slots'
 import type { ModelDirectoryState } from './directory.ts'
@@ -91,7 +91,7 @@ function matchesQuery(
  * @returns the trigger and, while open, the two-level menu.
  */
 export function ModelSelect(
-  { locked, available, directory, load, select, togglePin, useModelPins, t }: ModelSelectProps,
+  { locked, available, directory, load, refresh, select, togglePin, useModelPins, t }: ModelSelectProps,
 ) {
   const state = useSyncExternalStore(
     fn => directory.subscribe(fn),
@@ -174,10 +174,22 @@ export function ModelSelect(
       })),
     ], [reasoning, t])
   const busy = state.status === 'selecting'
+  const [refreshing, setRefreshing] = useState(false)
 
   const reload = (): void => {
     lastActionRef.current = 'load'
     load()
+  }
+
+  // The explicit refresh asks the Host to fetch its model sources again, so a
+  // model published since this process started appears without a restart. The
+  // button stays focusable while it runs: disabling it would drop focus to the
+  // page body, and the seat closes on that blur.
+  const refreshList = (): void => {
+    if (refreshing) return
+    lastActionRef.current = 'load'
+    setRefreshing(true)
+    void refresh().catch(() => { /* surfaced on the store */ }).finally(() => { setRefreshing(false) })
   }
 
   useEffect(() => {
@@ -506,7 +518,7 @@ export function ModelSelect(
           style={menuPos ?? MEASURE_STYLE}
           role="menu"
           aria-label={t('menu.aria')}
-          aria-busy={state.status === 'loading' || busy}
+          aria-busy={state.status === 'loading' || busy || refreshing}
         >
           {pane === 'root' && (
             <>
@@ -540,6 +552,16 @@ export function ModelSelect(
                   value={query}
                   onChange={(event) => { setQuery(event.currentTarget.value) }}
                 />
+                <button
+                  type="button"
+                  className={clsx(css.searchRefresh, refreshing && css.searchRefreshBusy)}
+                  aria-label={t('search.refresh')}
+                  title={t('search.refresh')}
+                  aria-disabled={refreshing}
+                  onClick={refreshList}
+                >
+                  <IconRefreshOutline14 size={14} />
+                </button>
               </div>
               {state.status === 'loading' && (
                 <div className={css.status}>{t('status.loading')}</div>

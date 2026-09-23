@@ -80,6 +80,19 @@ export class ModelDirectory {
   }
 
   /**
+   * Ask the Host to fetch its model sources again, then publish the rebuilt
+   * catalog to both entries. This is the explicit refresh a selector offers.
+   * @returns the fresh directory value.
+   * @throws Error when the Host refresh fails; the store carries the message too.
+   */
+  async refresh(): Promise<ModelDirectoryState> {
+    this.assertAvailable()
+    await this.catalog.refreshSources()
+    this.syncInputs()
+    return this.store.getSnapshot()
+  }
+
+  /**
    * Select the complete provider/model/reasoning selection. The durable
    * projection frame updates the shared current; failures surface on the store
    * and return with the operation so each entry can present its own failure.

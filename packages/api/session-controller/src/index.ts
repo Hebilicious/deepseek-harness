@@ -266,6 +266,19 @@ export class SessionController extends TypertRemoteService {
   }
 
   /**
+   * Fetch every adapter's model catalog again, then describe the result. This is
+   * the explicit refresh a selector offers for models published since this
+   * process started; an adapter whose catalog has no external source answers
+   * without a fetch.
+   * @returns the rebuilt provider-grouped catalog.
+   */
+  @Remote('refreshModelCatalog')
+  async refreshModelCatalog(): Promise<ModelCatalog> {
+    await this.ctx.llm.refreshModelCatalogs()
+    return buildModelCatalog(this.ctx)
+  }
+
+  /**
    * Report whether this deployment can hand a Session workspace path to a native desktop.
    * @returns true when the matching open operation is available.
    */

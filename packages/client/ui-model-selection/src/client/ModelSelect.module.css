@@ -235,6 +235,33 @@
   color: var(--dsw-alias-label-caption);
 }
 
+.searchRefresh {
+  position: absolute;
+  right: 6px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  color: var(--dsw-alias-label-caption);
+  background: transparent;
+  cursor: pointer;
+}
+
+.searchRefresh:hover:not([aria-disabled='true']) {
+  color: var(--dsw-alias-label-primary);
+  background: var(--dsw-alias-bg-layer-2);
+}
+
+/* A refresh in flight: dimmed, but still focusable so the card keeps focus. */
+.searchRefreshBusy {
+  cursor: default;
+  opacity: 0.5;
+}
+
 .group + .group {
   margin-top: 4px;
 }

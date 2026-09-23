@@ -1280,6 +1280,12 @@ export interface Config {
    * and registers them the moment a settings section supplies profiles.
    */
   providers?: Record<string, PiAiProviderProfile>
+  /**
+   * Opt-in overlay of models the installed pi-ai catalog does not describe,
+   * read from a published model directory. Its entries extend a route the
+   * installed catalog ships and never declare an endpoint of their own.
+   */
+  catalogOverlay?: PiAiCatalogOverlayConfig
 }
 
 /** Configuration for one pi-ai provider route; the `providers` dict key IS the route. */
@@ -1374,6 +1380,28 @@ export interface PiAiProviderProfile {
   requestImageMaxBytes?: number
   /** Provider-owned model-request retry policy; omission uses normal mode with five retries. */
   retryPolicy?: RetryPolicyConfig
+}
+
+/**
+ * Model-directory overlay of the installed catalog: the entries this section
+ * fetches are the models a route serves that the installed pi-ai catalog does
+ * not describe yet.
+ *
+ * Absence and `false` disable the overlay entirely, which keeps a deployment's
+ * routes exactly as the installed catalog describes them. `true` uses this
+ * build's published directory and snapshot age; an object overrides either.
+ * The switch is a union rather than a bare object because schemastery
+ * materializes an absent object as `{}`, which would make every deployment
+ * fetch the directory whether or not anyone asked for it.
+ *
+ * Nothing runs on a schedule: the directory is read at each start, and a
+ * selector's explicit refresh fetches it again on demand.
+ */
+export type PiAiCatalogOverlayConfig = boolean | {
+  /** Directory document URL; defaults to the published models.dev catalog. */
+  url?: string
+  /** Hours a cached snapshot stays current before the next start refetches it; 0 refetches at every start. */
+  refreshHours?: number
 }
 
 /** One configured model entry: an id plus the catalog fields it overrides. */
@@ -1538,7 +1566,7 @@ export type PiAiThinkingTokenBudgetField = NonNullable<OpenAICompletionsCompat['
 
 Depends on: `Api` (`@earendil-works/pi-ai`) · `CacheRetention` (`@earendil-works/pi-ai`) · `Model` (`@earendil-works/pi-ai`) · `ModelThinkingLevel` (`@earendil-works/pi-ai`) · `OpenAICompletionsCompat` (`@earendil-works/pi-ai`) · [`RetryPolicyConfig`](../packages/llm/llm/src/index.ts) · `ThinkingBudgets` (`@earendil-works/pi-ai`) · `Transport` (`@earendil-works/pi-ai`)
 
-Source: [`packages/llm/llm-pi-ai/src/config.ts:221`](../packages/llm/llm-pi-ai/src/config.ts)
+Source: [`packages/llm/llm-pi-ai/src/config.ts:251`](../packages/llm/llm-pi-ai/src/config.ts)
 
 <a id="deepseek-aidsh-llm-replay"></a>
 

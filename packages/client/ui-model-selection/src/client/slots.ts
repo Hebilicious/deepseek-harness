@@ -23,6 +23,13 @@ export interface ModelSelectInjected {
   /** Ensure the shared advisory catalog is loaded (errors land on the store). */
   load: () => void
   /**
+   * Ask the Host to fetch its model sources again and publish the result, so a
+   * model published since this process started becomes selectable (errors land
+   * on the store).
+   * @returns a promise settling once the refresh has published or failed.
+   */
+  refresh: () => Promise<void>
+  /**
    * Select a complete provider/model/reasoning selection.
    * @param selection - model selection and optional adapter-owned effort.
    * @returns the Host outcome, or undefined when this Session cannot select a model.

@@ -737,4 +737,35 @@ describe('Web session model selection', () => {
     })
     await ctx.fiber.dispose()
   })
+
+  it('refreshes adapter catalogs before rebuilding the model directory', async () => {
+    const { ctx } = await harness()
+    let listed: readonly LlmModelInfo[] = [{ provider: 'late', id: 'before', name: 'Before' }]
+    const adapter = new class extends CatalogAdapter {
+      override listModels(): Promise<readonly LlmModelInfo[]> {
+        return Promise.resolve(listed)
+      }
+
+      override refreshModels(): Promise<void> {
+        listed = [{ provider: 'late', id: 'after', name: 'After' }]
+        return Promise.resolve()
+      }
+    }('Late Provider', [])
+    ctx.llm.registerAdapter(['late'], adapter)
+    const remote = createSessionTestRemote(ctx, {
+      defaultModelSelection: () => ({ provider: 'late', model: 'after' }),
+      cwd: '/tmp',
+    })
+
+    const before = expectValue(await remote.modelCatalog())
+    expect(before.groups.flatMap(group => group.models.map(model => model.id))).toContain('before')
+
+    // The explicit refresh is what a selector's button calls: the adapter
+    // fetches first, and the rebuilt catalog carries what it published.
+    const after = expectValue(await remote.refreshModelCatalog())
+    const ids = after.groups.flatMap(group => group.models.map(model => model.id))
+    expect(ids).toContain('after')
+    expect(ids).not.toContain('before')
+    await ctx.fiber.dispose()
+  })
 })

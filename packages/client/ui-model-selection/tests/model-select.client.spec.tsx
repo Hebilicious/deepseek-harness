@@ -88,6 +88,7 @@ function seatProps(
     available: true,
     directory: createSnapshotStore<ModelDirectoryState>(state()),
     load: vi.fn(),
+    refresh: vi.fn().mockResolvedValue(undefined),
     select: vi.fn().mockResolvedValue({ ok: true, value: undefined }),
     togglePin: vi.fn(),
     useModelPins: bindSnapshotSelector(createSnapshotStore<ModelPinsState>({ pinned: [] })),
@@ -573,5 +574,47 @@ describe('ModelSelect keyboard walk', () => {
     expect(rows.every(row => row.getAttribute('aria-checked') === 'false')).toBe(true)
     fireEvent.keyDown(screen.getByRole('searchbox', { name: '搜索模型' }), { key: 'ArrowDown' })
     expect(document.activeElement).toBe(rows[0])
+  })
+})
+
+describe('ModelSelect catalog refresh', () => {
+  it('asks the Host to fetch its model sources again and keeps the list open', async () => {
+    const deferred = Promise.withResolvers<undefined>()
+    const refresh = vi.fn().mockReturnValue(deferred.promise)
+    render(<ModelSelect {...seatProps({ refresh })} />)
+    openModels()
+
+    const button = screen.getByRole('button', { name: '刷新模型列表' })
+    fireEvent.click(button)
+
+    await waitFor(() => { expect(refresh).toHaveBeenCalledTimes(1) })
+    // In flight: the row must not queue a second fetch, and the card must stay
+    // open — a self-disabling button would drop focus to the page body, where
+    // the seat's blur handler closes the whole menu.
+    const running = screen.getByRole('button', { name: '刷新模型列表' })
+    expect(running.hasAttribute('disabled')).toBe(false)
+    expect(running.getAttribute('aria-disabled')).toBe('true')
+    expect(screen.getByRole('menu', { name: '模型与推理等级' })).toBeTruthy()
+
+    deferred.resolve(undefined)
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: '刷新模型列表' }).getAttribute('aria-disabled')).not.toBe('true')
+    })
+  })
+
+  it('keeps the list usable after a failed refresh', async () => {
+    // The Host reports the failure on the shared store; the row must stay
+    // usable so the user can try again without reopening the menu.
+    const refresh = vi.fn().mockRejectedValue(new Error('model directory unreachable'))
+    render(<ModelSelect {...seatProps({ refresh })} />)
+    openModels()
+
+    fireEvent.click(screen.getByRole('button', { name: '刷新模型列表' }))
+
+    await waitFor(() => { expect(refresh).toHaveBeenCalledTimes(1) })
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: '刷新模型列表' }).getAttribute('aria-disabled')).not.toBe('true')
+    })
+    expect(screen.getByRole('menu', { name: '模型与推理等级' })).toBeTruthy()
   })
 })

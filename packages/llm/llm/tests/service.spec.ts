@@ -635,6 +635,38 @@ describe('LlmRuntime', () => {
     await expect(ctx.llm.resolveModelInfo('missing', 'm')).rejects.toMatchObject({ code: 'NO_ADAPTER' })
   })
 
+  it('asks every adapter once to refresh its model catalog', async () => {
+    const ctx = new Context()
+    await ctx.plugin(LlmRuntime)
+    let refreshes = 0
+    const refreshing = new class extends ScriptedAdapter {
+      override refreshModels(): Promise<void> {
+        refreshes += 1
+        return Promise.resolve()
+      }
+    }(SCRIPT)
+    // Two routes on one adapter: the source they share is fetched once.
+    ctx.llm.registerAdapter(['catalog', 'catalog-secondary'], refreshing)
+    // An adapter that leaves the default alone answers without doing anything.
+    ctx.llm.registerAdapter(['plain'], new ScriptedAdapter(SCRIPT))
+
+    await ctx.llm.refreshModelCatalogs()
+    expect(refreshes).toBe(1)
+  })
+
+  it('reports an adapter that cannot refresh its catalog', async () => {
+    const ctx = new Context()
+    await ctx.plugin(LlmRuntime)
+    const failing = new class extends ScriptedAdapter {
+      override refreshModels(): Promise<void> {
+        return Promise.reject(new Error('directory unreachable'))
+      }
+    }(SCRIPT)
+    ctx.llm.registerAdapter(['catalog'], failing)
+
+    await expect(ctx.llm.refreshModelCatalogs()).rejects.toThrow('directory unreachable')
+  })
+
   it.each([
     [{ provider: 1, id: 'model', name: 'Model' }, 'non-string provider'],
     [{ provider: 'other', id: 'model', name: 'Model' }, 'mismatched provider'],

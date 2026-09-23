@@ -1,5 +1,12 @@
 import { describe, expect, it } from 'vitest'
-import { assertServiceable, Config, resolveProfiles } from '../src/config.ts'
+import {
+  assertServiceable,
+  catalogOverlaySource,
+  Config,
+  DEFAULT_CATALOG_REFRESH_HOURS,
+  DEFAULT_CATALOG_URL,
+  resolveProfiles,
+} from '../src/config.ts'
 
 /** Validate one hand-declared route, with the caller's fields layered onto it. */
 const routeWith = (profile: Record<string, unknown>): (() => unknown) =>
@@ -105,5 +112,43 @@ describe('request image policy bounds', () => {
     expect(() => {
       assertServiceable(programmatic)
     }).toThrow(message)
+  })
+})
+
+describe('catalog overlay configuration', () => {
+  it('leaves an absent section off instead of defaulting it on', () => {
+    // schemastery materializes an absent object as `{}`, which is why the
+    // switch is a union: an unconfigured deployment must not fetch a directory.
+    expect(Config({})).not.toHaveProperty('catalogOverlay')
+    expect(Config({ catalogOverlay: false }).catalogOverlay).toBe(false)
+    expect(Config({ catalogOverlay: true }).catalogOverlay).toBe(true)
+  })
+
+  it('materializes the published directory and the refresh interval', () => {
+    expect(catalogOverlaySource({})).toBeUndefined()
+    expect(catalogOverlaySource({ catalogOverlay: false })).toBeUndefined()
+    expect(catalogOverlaySource({ catalogOverlay: true }))
+      .toEqual({ url: DEFAULT_CATALOG_URL, refreshHours: DEFAULT_CATALOG_REFRESH_HOURS })
+    expect(catalogOverlaySource({ catalogOverlay: {} }))
+      .toEqual({ url: DEFAULT_CATALOG_URL, refreshHours: DEFAULT_CATALOG_REFRESH_HOURS })
+    expect(catalogOverlaySource({ catalogOverlay: { url: 'https://mirror.test/api.json', refreshHours: 0 } }))
+      .toEqual({ url: 'https://mirror.test/api.json', refreshHours: 0 })
+  })
+
+  it('refuses a source it cannot fetch on a schedule', () => {
+    expect(() => catalogOverlaySource({ catalogOverlay: { url: '' } })).toThrow(/catalogOverlay\.url is empty/)
+    expect(() => catalogOverlaySource({ catalogOverlay: { refreshHours: -1 } }))
+      .toThrow(/refreshHours must be a non-negative number/)
+    expect(() => catalogOverlaySource({ catalogOverlay: { refreshHours: Number.NaN } }))
+      .toThrow(/refreshHours must be a non-negative number/)
+  })
+
+  it('checks the overlay section only when a write changes it', () => {
+    expect(() => { assertServiceable({ catalogOverlay: { url: '' } }) }).toThrow(/catalogOverlay\.url is empty/)
+    // An unchanged section is the one already in force: a stored value this
+    // build cannot serve must not block edits to a provider beside it.
+    expect(() => {
+      assertServiceable({ catalogOverlay: { url: '' } }, { catalogOverlay: { url: '' } })
+    }).not.toThrow()
   })
 })

@@ -9,7 +9,7 @@ kind: "package-reference"
 
 ## 概述
 
-`@deepseek-ai/dsh-llm-pi-ai` 通过一份配置把模型请求路由到多个 pi-ai 提供方、OpenAI 兼容网关或自托管服务器。已安装的 pi-ai 提供方会提供端点、协议和模型目录默认值；自定义路由可以直接声明这些值，无需修改代码。profile 与凭据按请求解析，因此设置变更会在下一个请求生效，无需重启。受支持的提供方可以使用已存储的 OAuth 或交互式密钥登录，并通过跨进程锁刷新凭据。本包可以在没有路由时启动，并在用户设置添加路由后将其激活。
+`@deepseek-ai/dsh-llm-pi-ai` 通过一份配置把模型请求路由到多个 pi-ai 提供方、OpenAI 兼容网关或自托管服务器。已安装的 pi-ai 提供方会提供端点、协议和模型目录默认值；自定义路由可以直接声明这些值，无需修改代码，可选叠加层还能从公开目录补齐已安装目录尚未收录的模型。profile 与凭据按请求解析，因此设置变更会在下一个请求生效，无需重启。受支持的提供方可以使用已存储的 OAuth 或交互式密钥登录，并通过跨进程锁刷新凭据。本包可以在没有路由时启动，并在用户设置添加路由后将其激活。
 
 ## 目录
 
@@ -96,6 +96,24 @@ pi-ai 提供登录的提供方可以通过 harness 授权 seam 登录：流程�
 
 profile 的 `models` 列表会替换而非扩展路由的已安装目录；每个条目从同 id 已安装模型取未设置字段的默认值，因此把路由收窄到两个模型、修正一个容量或添加比已安装目录更新的模型都是一行编辑。`modelOverrides` 无需该代价即可重塑个别已安装目录模型——修正一个模型，保留其余三十七个——当它与 `models` 列表并存、位于手工声明路由上、或点名目录未描述的模型时会被拒绝，因为静默不变的模型会成为别人日后寻找的拼写错误。
 
+### 从模型目录扩展目录
+
+路由只提供已安装 pi-ai 目录为它记录的模型，因此提供方在该 pi-ai 构建之后发布的模型，要等更新的构建才能请求。`catalogOverlay` 用一份公开模型目录补上这段差距，无需为每个模型写一条路由 profile：
+
+```yaml
+- name: '@deepseek-ai/dsh-llm-pi-ai'
+  config:
+    catalogOverlay: true            # published models.dev directory, refetched every 12 hours
+    # catalogOverlay: false         # off, which is also the state without the key
+    # catalogOverlay:
+    #   url: https://models.dev/api.json
+    #   refreshHours: 6             # 0 fetches once per start
+```
+
+叠加层把目录中已安装目录未描述的条目加到 pi-ai 自带的提供方路由上。协议取自目录的 npm 包约定；提供方只提供一种协议时回退到该协议；对发布该约定的 OpenCode 网关，则采用「不带包的条目即 Chat Completions」的约定。端点、协议兼容开关、推理等级映射与标头取自同一提供方与协议的已安装模型；模型自身的事实（名称、模态、上限、成本、推理）取自目录。已安装目录已描述的 id 保留其已安装条目；提供方与协议没有对应已安装模型的条目会被跳过而不是猜测，非工具能力或标记为废弃的条目同样如此；每次刷新都会报告这些计数。`models` 与 `modelOverrides` 对叠加层模型的处理与已安装模型完全一致。
+
+快照缓存在 `$DSH_HOME/cache/llm-pi-ai/models-dev.json`，并在下次启动时先于任何抓取重新发布，因此目录不可达时启动仍会提供上次抓取的快照；刷新失败只报告一次并继续使用该快照。不按任何计划抓取：启动时仅在快照缺失或早于 `refreshHours` 时读取目录；模型选择器搜索框旁的刷新按钮会按需让 Host 再次抓取，因此本进程启动后发布的模型无需重启即可选择。分节本身发生变化时会重新开始同一个读取流程。缓存记录其来源目录，因此把 `url` 指向别处会抓取新目录，而不是继续提供上一个目录的模型。关闭或移除该分节会停止刷新并丢弃叠加层，让每条路由回到已安装目录。
+
 ### 带推理（reasoning）与协议兼容运行
 
 `reasoningEfforts` 声明模型可选择的 thinking 等级：每个键都是选择器提供的等级，其值是分派时在协议中发送的拼写，因此 `max: ultra` 可以为拥有自有词汇的网关重命名等级。省略该字段时保留已安装目录条目的能力；`false` 声明非推理模型。对于 pi-ai 无法识别的端点，`compat` 开关重塑请求——哪个角色携带系统提示词、哪个字段限制输出、thinking 等级如何传递——可逐路由、逐模型配置。条目与已安装目录都没有尺寸的模型，会采用路由的 `defaultContextWindow` 与 `defaultMaxTokens` 回退值。
@@ -115,6 +133,8 @@ profile 通过可选 settings seam 每次操作重新读取：base 与用户的 
 pi-ai 不提供的路由需要 `api`、`baseURL` 与非空 `models` 列表；无法服务的 profile 会在写入处被拒绝，并点名路由与模型。失败携带稳定 code：无法使用的凭据以 `INVALID_CREDENTIAL` 失败并点名路由与引用，`apiKeyEnv` 引用解析为空的路由以 `MISSING_CREDENTIAL` 失败，未配置模型以 `UNKNOWN_MODEL` 失败，终止性提供方失败则区分 `QUOTA` 与暂时性 `RATE_LIMIT`。`GenerateOptions.stop` 以 `UNSUPPORTED_OPTION` 被拒绝，因为 pi-ai 的通用流式 UI 无法跨提供方保证它。
 
 Settings 写入会在合并组合层与用户层后严格校验每个新增或修改的提供方。命名空间注册时，已存储配置的目录解析错误会保留命名空间与提供方行，并通过 `LlmConfigurableProvider.error` 优先返回首个模型诊断，无模型诊断时返回路由错误；未修改的错误提供方不会阻止其他编辑。可解析的模型仍可选择，无法解析的模型保留在可编辑配置中，直接请求时会在网络 I/O 前以 `INVALID_CONFIG` 失败。修复或删除错误配置会清除诊断。Schema 与 profile 自身的约束错误仍会拒绝加载。后续外部文件编辑会校验变化的提供方，失败时保留最后一次接受的分节。
+
+目录叠加层在写入处校验：URL 为空或刷新间隔为负的分节会被拒绝，而已经在生效的分节保持原样，因此不会阻止无关的提供方编辑。无法读取或抓取目录的刷新只报告一次并继续使用当前快照；应用快照只会损失叠加层，绝不影响已在服务的路由。
 
 只修改 `displayName`、`apiKeyEnv` 或 `baseURL` 而未解决提供方的模型配置错误时，保存仍会被拒绝。例如，OpenRouter 路由的模型 `111` 缺少 `api` 时，不能单独保存路由名称的修改：需要在同一份编辑草稿中修复或删除该模型，再保存完整的提供方配置。中间修复状态保留在草稿中，直到整条提供方配置通过校验；其他提供方可以独立保存。
 
@@ -141,6 +161,9 @@ Settings 写入会在合并组合层与用户层后严格校验每个新增或�
 | [`src/login.ts`](src/login.ts) | 面向提供登录的已安装提供方的授权流程 |
 | [`src/config.ts`](src/config.ts) | Profile schema、解析与可服务性校验 |
 | [`src/catalog.ts`](src/catalog.ts) | 已安装目录集成与漂移门禁 |
+| [`src/catalog-overlay.ts`](src/catalog-overlay.ts) | 把目录条目映射到已安装端点事实并合并到目录之下 |
+| [`src/catalog-sync.ts`](src/catalog-sync.ts) | 快照缓存、有界抓取与刷新调度 |
+| [`src/bounded-body.ts`](src/bounded-body.ts) | 列表与目录抓取共用的有界响应体读取 |
 | [`src/models.ts`](src/models.ts) | 基于 pi-ai 窄入口的 model collection、静态 provider 与 reasoning level |
 | [`src/provider.ts`](src/provider.ts) | 受支持协议表与提供方构建 |
 | [`src/context.ts`](src/context.ts) | Harness 到 pi-ai 的上下文转换、图片处理、回放恢复 |
@@ -218,7 +241,9 @@ pi-ai 事件变成 harness 的推理、文本、工具调用、用量与 finish 
 - **设置可以新增或覆盖路由，不能移除组合路由**——用户层覆盖组合 base，因此删除 `cordis.yml` 提供的提供方属于组合变更。
 - **分层合并对字典键没有删除**——base 声明的 `reasoningEfforts` 等级、`modelOverrides` 条目或 `compat` 字段可以被用户层覆盖，但不能被移除。
 - **`headers` 可以携带 redactor 永远看不到的凭据**——profile 解析会拒绝 Fetch 无法表示的名称与值，但该字典仍是纯字符串；以 `apiKeyEnv` 引用存储凭据。
-- **路由目录不会自行刷新**——目录就是 `settings.yaml` 的内容；这里没有任何机制向提供方查询它提供的模型。
+- **已安装目录不会自行刷新**——路由提供已安装 pi-ai 构建为它记录的模型，再加上 `catalogOverlay` 添加的内容；这里没有任何机制在请求时向提供方询问它提供的模型。
+- **叠加层条目需要同提供方、同协议的已安装模型**——没有对应已安装模型的提供方与协议不会产生端点事实，因此该条目会被跳过而不是猜测；已安装目录未记录的网关怪癖则用 `modelOverrides` 修正。
+- **叠加层快照经 harness home 共享**——`$DSH_HOME/cache` 下的缓存对使用同一 home 的每个部署都是同一个文件；既无缓存又无法访问目录时启动，不提供任何叠加层。
 - **Anthropic 模型发现最多读取 1,000 个模型**——请求使用 API 的最大页大小，但不会遍历 `has_more`；第一页之外的条目需要手工添加。
 - **每条路由一种协议格式**——混合协议目录路由无法承载另一协议格式的模型；把提供方拆到两个路由键是变通办法。
 - **模态声明不受校验**——声明 `image` 而其网关不支持的模型会在提示词准入后被提供方拒绝。持久图片仍留在历史中，同一误声明模型可能再次失败；切换到纯文本模型仍然可行，因为共享 LLM 运行时会针对该请求把图片引用投影为稳定文本。

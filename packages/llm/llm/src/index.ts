@@ -244,6 +244,23 @@ export abstract class LlmAdapter {
   }
 
   /**
+   * Fetch fresh model metadata for every route this adapter owns, when its
+   * catalog has a source outside the process. An adapter serving a fixed
+   * catalog resolves immediately, which is the default; one that reads a
+   * published directory fetches it and publishes the result through
+   * {@link listModels}.
+   *
+   * The call refreshes the adapter's whole catalog rather than one route's,
+   * because a source shared by several routes is fetched once. It settles when
+   * the fetch has published or failed; a rejection reaches the surface that
+   * asked, which owns its own retry.
+   * @returns a promise settling after the adapter's catalog reflects the fetch.
+   */
+  refreshModels(): Promise<void> {
+    return Promise.resolve()
+  }
+
+  /**
    * Resolve all metadata available for one exact model. This query is
    * independent of the advisory catalog and does not validate request routing.
    * @param provider - one provider route owned by this adapter.
@@ -684,6 +701,17 @@ export class LlmRuntime extends TypertRemoteService {
   /** Detach typed adapter-owned modality metadata. */
   private detachedModalities(modalities: readonly ModelModality[] | undefined): ModelModality[] | undefined {
     return modalities === undefined ? undefined : [...modalities]
+  }
+
+  /**
+   * Ask every registered adapter to fetch its model catalog again, so a surface
+   * can show models published since this process started. Each adapter is asked
+   * exactly once per registration set, however many routes it owns.
+   * @returns a promise settling after every adapter has answered.
+   */
+  async refreshModelCatalogs(): Promise<void> {
+    const adapters = new Set([...this.adapters.values()].map(registration => registration.adapter))
+    await Promise.all([...adapters].map(async adapter => adapter.refreshModels()))
   }
 
   /**
