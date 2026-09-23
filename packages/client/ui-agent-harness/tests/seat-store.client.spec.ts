@@ -8,6 +8,7 @@ import type { Context } from '@deepseek-ai/cordis'
 import { describe, expect, it } from 'vitest'
 import type { HarnessId } from '@deepseek-ai/dsh-agent/types'
 import { RemoteError } from '@deepseek-ai/dsh-client-test-runtime'
+import { SessionId } from '@deepseek-ai/dsh-session/types'
 import type { RemoteResult } from '@deepseek-ai/dsh-typert-protocol'
 import type {
   SessionHarnessCatalog,
@@ -42,6 +43,8 @@ type Answer = RemoteResult<SessionHarnessCatalog>
 /** A controller over catalog reads the spec answers by hand. */
 function bench() {
   const stages: HarnessId[] = []
+  const bindings: Array<[string, HarnessId]> = []
+  const bindable = new Set<string>()
   const pending: Array<(result: Answer) => void> = []
   let reads = 0
   const ctx = {
@@ -53,12 +56,22 @@ function bench() {
         },
       },
     },
-    sessions: { stageHarness: (harness: HarnessId) => { stages.push(harness) } },
+    sessions: {
+      stageHarness: (harness: HarnessId) => { stages.push(harness) },
+      harnessProvisional: (sessionId: string) => bindable.has(sessionId),
+      bindHarness: async (sessionId: string, harness: HarnessId) => {
+        bindings.push([sessionId, harness])
+        bindable.delete(sessionId)
+        return harness
+      },
+    },
   } as unknown as Context
   const controller = new AgentHarnessSeatController(ctx)
   return {
     controller,
     stages,
+    bindings,
+    bindable,
     reads: (): number => reads,
     /** Start a load; the caller settles it through {@link resolve} or {@link answer}. */
     start: (): Promise<void> => controller.load(),
@@ -176,5 +189,42 @@ describe('the staged choice', () => {
     // The earlier stage no longer names a mounted harness, so it is cleared
     // rather than left for the next create to be refused.
     expect(b.stages).toEqual([undefined])
+  })
+})
+
+describe('a Session the Workspace flow already published', () => {
+  it('binds the pick to the provisional Session instead of staging it', async () => {
+    const b = bench()
+    await b.answer({ ok: true, value: CATALOG })
+    b.stages.length = 0
+    b.bindable.add('session-1')
+
+    await b.controller.apply(SessionId('session-1'), hid('codex'))
+
+    // The Session records the choice, so the create that follows carries it and
+    // the stage is not what the binding rides on.
+    expect(b.bindings).toEqual([['session-1', 'codex']])
+    expect(b.stages).toEqual(['codex'])
+    expect(b.controller.store.getSnapshot().current).toBe('codex')
+  })
+
+  it('stages the pick for the next Session once the window has closed', async () => {
+    const b = bench()
+    await b.answer({ ok: true, value: CATALOG })
+    b.stages.length = 0
+
+    await b.controller.apply(SessionId('session-1'), hid('codex'))
+
+    expect(b.bindings).toEqual([])
+    expect(b.stages).toEqual(['codex'])
+  })
+
+  it('answers whether a Session is still provisional', async () => {
+    const b = bench()
+    b.bindable.add('session-1')
+
+    expect(b.controller.bindable(SessionId('session-1'))).toBe(true)
+    expect(b.controller.bindable(SessionId('session-2'))).toBe(false)
+    expect(b.controller.bindable(undefined)).toBe(false)
   })
 })

@@ -299,6 +299,28 @@ export interface SessionHarnessCatalog {
   readonly harnesses: readonly SessionHarnessOption[]
 }
 
+/**
+ * Bind one still-provisional Session to an agent harness.
+ *
+ * A Session created before its owner picks a harness records none, and the
+ * picker that would record it exists only while the Session is provisional:
+ * the first message ends that window, because a conversation is never handed
+ * to a second harness. The request is the adoption `session.create` already
+ * performs, named for the case it exists for.
+ */
+export interface SessionBindHarnessRequest {
+  /** Provisional Session whose harness the caller is choosing. */
+  readonly sessionId: SessionId
+  /** Mounted harness that should own the Session. */
+  readonly harness: HarnessId
+}
+
+/** Accepted harness binding. */
+export interface SessionBindHarnessValue {
+  /** The harness now recorded as the Session owner. */
+  readonly harness: HarnessId
+}
+
 /** Session creation response value. */
 export interface SessionCreateValue {
   readonly sessionId: SessionId

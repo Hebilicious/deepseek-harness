@@ -31,11 +31,13 @@ kind: "package-reference"
 
 ### 选择 harness
 
-chip 显示下一个会话将运行的 harness，并打开一个列出全部已挂载 harness 的菜单，每行带各自的名称与描述。第一个已挂载的 harness 是初始选择，选择后立即替换。该选择暂存在 Session Controller 上，因此工作区流程发出的创建请求会带上它：菜单在没有会话时提供，而挂载多个 harness 的部署会拒绝未指名 harness 的创建。
+chip 显示当前界面上这个会话将运行的 harness，并打开一个列出全部已挂载 harness 的菜单，每行带各自的名称与描述。第一个已挂载的 harness 是初始选择，选择后立即替换。
+
+在尚无会话时，该选择暂存在 Session Controller 上，因此工作区流程发出的创建请求会带上它。该流程会先发布会话、再由用户选择 harness，因此这个会话仍处于待定状态：chip 在此继续提供菜单，选择会通过 `sessions.bindHarness` 记录 harness，而不是依赖一个已经发出的创建请求。两种情况下，该选择同时成为下一个新会话的初始选择。
 
 ### 会话存在之后
 
-会话在创建时即确定其 harness，宿主拒绝把该会话交给第二个 harness。因此为某个会话渲染的 chip 显示该会话记录的 harness，处于禁用状态，并以该 harness 自己的描述作为工具提示；日志中未记录 harness 的会话不渲染任何内容。该记录通过 `agentHarness` 会话投影到达浏览器，由 [`dsh-agent`](../../core/agent/README.zh.md) 以只读方式发布。
+会话会记录其 harness，宿主拒绝把该会话交给第二个 harness。因此对于已经开始轮次的会话，chip 显示该会话记录的 harness，处于禁用状态，并以该 harness 自己的描述作为工具提示；日志中未记录 harness 且已无法再接受选择时会话不渲染任何内容。该记录通过 `agentHarness` 会话投影到达浏览器，由 [`dsh-agent`](../../core/agent/README.zh.md) 以只读方式发布。
 
 -----
 

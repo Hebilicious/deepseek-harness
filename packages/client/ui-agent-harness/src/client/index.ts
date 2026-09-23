@@ -71,7 +71,12 @@ export function apply(ctx: ClientContext): void {
     inject: (): AgentHarnessSeatInjected => ({
       hooks: { agentHarnessSeat: controller.store },
       load: () => controller.load(),
-      select: (harness) => { controller.select(harness) },
+      bindable: sessionId => controller.bindable(sessionId),
+      // The pick may need to reach the host, so the seat does not wait on it:
+      // a failed binding leaves the chip on the harness it already showed.
+      select: (sessionId, harness) => {
+        void controller.apply(sessionId, harness).catch(() => { /* the chip keeps its state */ })
+      },
     }),
   }, AgentHarnessSeat))
 

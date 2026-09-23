@@ -31,11 +31,13 @@ Mount this plugin alongside the conversation package; the new-session screen rec
 
 Beside the Session title, the same plugin contributes the harness mark: a `HarnessBadge` showing which harness owns the open session, rendered for every session that records one, whether the deployment mounts one harness or several. It carries no control, because the harness is fixed at creation.
 
-The chip names the harness the next session will run and opens a menu of every mounted harness with its own name and description. The first mounted harness is the opening choice, and a pick replaces it at once. The choice is staged on the Session Controller, so the create request the Workspace flow sends carries it: the menu is offered while no session exists, and a deployment that mounts several harnesses refuses a create that names none.
+The chip names the harness the session on screen will run and opens a menu of every mounted harness with its own name and description. The first mounted harness is the opening choice, and a pick replaces it at once.
+
+While no session exists, the pick is staged on the Session Controller, so the create request the Workspace flow sends carries it. That flow publishes the Session before its owner chooses, which leaves the Session provisional: the chip keeps offering the menu there, and a pick records the harness through `sessions.bindHarness` instead of a request that has already happened. Either way the choice also becomes what the next new Session starts from.
 
 ### After the session exists
 
-A session is created with its harness, and the host refuses to hand the conversation to a second harness. A chip rendered for a session therefore shows the harness that session records, disabled, with the harness's own description as its tooltip; a session whose log records no harness renders nothing. That record reaches the browser through the `agentHarness` session projection, which [`dsh-agent`](../../core/agent/README.md) publishes read-only.
+A session records its harness, and the host refuses to hand the conversation to a second harness. A chip rendered for a session that has begun its turn therefore shows the harness the session records, disabled, with the harness's own description as its tooltip; a session whose log records no harness, and which can no longer take one, renders nothing. That record reaches the browser through the `agentHarness` session projection, which [`dsh-agent`](../../core/agent/README.md) publishes read-only.
 
 -----
 

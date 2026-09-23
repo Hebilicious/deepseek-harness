@@ -10,6 +10,8 @@ import { RemoteMock, ok, openStream } from '@deepseek-ai/dsh-remote-mock'
 import { describe, expect, it, onTestFinished, vi } from 'vitest'
 import type { AssemblyPlan, ClientPluginModule, TestClientOptions } from '../src/assembly/index.ts'
 import { ClientRoster, TestClient, remoteDefaultResponses, webApp } from '../src/assembly/index.ts'
+import { SlotTestRuntime, TestSessions } from '../src/index.ts'
+import type { SessionId } from '@deepseek-ai/dsh-session/types'
 
 /** The Gateway client and what it injects: the Typert registry and the Connection. */
 const API_ROSTER = webApp.closure(['@deepseek-ai/dsh-api-gateway'])
@@ -242,5 +244,27 @@ describe('TestClient (jsdom)', () => {
     await expect(TestClient.start({ roster }, mock, { connectTimeoutMs: 300 }))
       .rejects.toThrow(/connection state is \S+ after 300ms; unmatched: \[unary workspace\/follow\]; streams: \[.*\$events \(open\).*\]/)
     expect(globals.EventSource).toBeUndefined()
+  })
+})
+
+describe('the harness face of the Session double', () => {
+  it('answers the provisional reads and records a binding', async () => {
+    const runtime = await SlotTestRuntime.create()
+    const sessionId = 's-bind' as SessionId
+
+    // Nothing is a candidate until a spec marks the Session provisional.
+    expect(runtime.sessions.harnessBindable(sessionId)).toBe(false)
+    expect(runtime.sessions.harnessProvisional(sessionId)).toBe(false)
+
+    runtime.sessions.stubHarnessBindable(sessionId)
+    expect(runtime.sessions.harnessBindable(sessionId)).toBe(true)
+    expect(runtime.sessions.harnessProvisional(sessionId)).toBe(true)
+
+    const harness = 'codex' as Parameters<TestSessions['bindHarness']>[1]
+    await expect(runtime.sessions.bindHarness(sessionId, harness)).resolves.toBe('codex')
+    // The binding closes the window and stays observable for the spec's assertion.
+    expect(runtime.sessions.harnessProvisional(sessionId)).toBe(false)
+    expect(runtime.sessions.calls).toContainEqual({ method: 'bindHarness', args: [sessionId, 'codex'] })
+    await expect(runtime.sessions.bindHarness(sessionId, harness)).rejects.toThrow('is not provisional')
   })
 })

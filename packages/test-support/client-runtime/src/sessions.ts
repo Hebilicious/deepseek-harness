@@ -307,11 +307,13 @@ export class TestSessions implements ISessions {
   private readonly addresses = new Map<SessionId, SubagentAddress>()
   private readonly retentionStores = new Map<SessionId, SnapshotStore<SessionRetainInfo>>()
   private readonly pendingDrops = new Set<Promise<void>>()
+  /** Provisional Sessions this double treats as still open to a harness. */
+  private readonly bindableSessions = new Set<SessionId>()
   private closed = false
 
   /** Calls observed on the service-level face, newest last. */
   readonly calls: {
-    method: 'create' | 'stageHarness' | 'setSubagentCatalogOpen' | 'refreshSubagents' | 'refresh' | 'search' | 'fork'
+    method: 'create' | 'stageHarness' | 'bindHarness' | 'setSubagentCatalogOpen' | 'refreshSubagents' | 'refresh' | 'search' | 'fork'
     args: unknown[]
   }[] = []
 
@@ -631,6 +633,45 @@ export class TestSessions implements ISessions {
    */
   stageHarness(harness: Parameters<ISessions['stageHarness']>[0]): void {
     this.calls.push({ method: 'stageHarness', args: [harness] })
+  }
+
+  /**
+   * Answer whether a Session is still provisional. No fixture binds one: a spec
+   * drives the answer through {@link stubHarnessBinding} to exercise the chip.
+   */
+  harnessBindable(id: SessionId): boolean {
+    return this.bindableSessions.has(id)
+  }
+
+  /**
+   * Answer whether a Session is still provisional. The double treats every
+   * stub-marked Session as provisional so a spec drives the chip's picker.
+   */
+  harnessProvisional(id: SessionId): boolean {
+    return this.bindableSessions.has(id)
+  }
+
+  /**
+   * Treat one Session as provisional, so the harness chip offers its picker.
+   * @param id - Session identity the fixture materializes as open to a binding.
+   */
+  stubHarnessBindable(id: SessionId): void {
+    this.bindableSessions.add(id)
+  }
+
+  /**
+   * Record the harness a surface bound to a provisional Session.
+   * @param sessionId - provisional Session identity.
+   * @param harness - harness the surface chose.
+   * @returns the accepted harness.
+   */
+  bindHarness(sessionId: SessionId, harness: Parameters<ISessions['bindHarness']>[1]): Promise<Parameters<ISessions['bindHarness']>[1]> {
+    this.calls.push({ method: 'bindHarness', args: [sessionId, harness] })
+    if (!this.bindableSessions.has(sessionId)) {
+      return Promise.reject(new Error(`session "${sessionId}" is not provisional`))
+    }
+    this.bindableSessions.delete(sessionId)
+    return Promise.resolve(harness)
   }
 
   /** Resolve a retained or catalog-derived address independently of a view. */

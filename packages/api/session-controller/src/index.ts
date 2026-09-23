@@ -21,7 +21,7 @@ import { SessionHistoryController } from './history.ts'
 import { SessionFileReferences } from './file-references.ts'
 import { ApiSessionList } from './list.ts'
 import { buildModelCatalog } from './catalog.ts'
-import type { SessionHarnessCatalog } from './types.ts'
+import type { SessionBindHarnessRequest, SessionBindHarnessValue, SessionHarnessCatalog } from './types.ts'
 import { installModelSelectionProjection } from './model-selection-projection.ts'
 import { SessionSkillCatalog } from './skill-catalog.ts'
 import { SessionMediaReferences } from './media-references.ts'
@@ -273,6 +273,21 @@ export class SessionController extends TypertRemoteService {
   @Remote('harnessCatalog')
   harnessCatalog(): SessionHarnessCatalog {
     return { harnesses: this.ctx.agents.harnesses().map(entry => ({ ...entry })) }
+  }
+
+  /**
+   * Record the harness that owns one still-provisional Session.
+   *
+   * The workspace flow publishes a Session before its owner chooses a harness,
+   * so the choice arrives as an adoption rather than a create. A Session whose
+   * log already names another harness is never rebound: the refusal names
+   * both, and the browser shows the recorded one read-only.
+   * @param request - provisional Session identity and the requested harness.
+   * @returns the harness now recorded as the Session owner.
+   */
+  @Remote('bindHarness')
+  async bindHarness(request: SessionBindHarnessRequest): Promise<SessionBindHarnessValue> {
+    return this.commands.bindHarness(request)
   }
 
   /**

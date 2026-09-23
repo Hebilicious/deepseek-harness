@@ -475,3 +475,115 @@ describe('Session harness selection', () => {
     expect(recordedHarness(child.session.snapshotEvents())).toBe(CODEX)
   })
 })
+
+describe('binding a provisional Session', () => {
+  it('accepts the harness the Session already records', async () => {
+    const w = await world()
+    w.mount(CODEX, 'Codex')
+    w.mount(DSH, 'DeepSeek Harness')
+    const created = await w.remote.create({ cwd: tempDir(), harness: CODEX })
+    if (!created.ok) throw created.error
+
+    const response = await w.remote.bindHarness({ sessionId: created.value.sessionId, harness: CODEX })
+
+    if (!response.ok) throw response.error
+    expect(response.value).toEqual({ harness: CODEX })
+    const live = w.ctx.agents.get(created.value.sessionId)
+    expect(recordedHarness(live?.session.snapshotEvents() ?? [])).toBe(CODEX)
+  })
+
+  it('records the harness a live Session needs', async () => {
+    const w = await world()
+    const header = sessionHeader('bind-live-unrecorded')
+    // A raw mount stands in for a Session created before the record existed:
+    // its factory never appends the event, and it is already live when the
+    // picker asks for one.
+    w.mount(DSH, 'DeepSeek Harness', undefined, false)
+    w.mount(CODEX, 'Codex')
+    const handle = await w.ctx.agents.create({ sessionId: header.id, harness: DSH, meta: { cwd: CWD } })
+    expect(recordedHarness(handle.agent.session.snapshotEvents())).toBeUndefined()
+
+    const response = await w.remote.bindHarness({ sessionId: header.id, harness: CODEX })
+
+    if (!response.ok) throw response.error
+    expect(response.value).toEqual({ harness: CODEX })
+    expect(recordedHarness(handle.agent.session.snapshotEvents())).toBe(CODEX)
+    await handle.dispose()
+  })
+
+  it('refuses a harness the deployment does not mount', async () => {
+    const w = await world()
+    w.mount(DSH, 'DeepSeek Harness')
+    w.mount(CODEX, 'Codex')
+    const created = await w.remote.create({ cwd: tempDir(), harness: CODEX })
+    if (!created.ok) throw created.error
+
+    const response = await w.remote.bindHarness({
+      sessionId: created.value.sessionId,
+      harness: HarnessId('grok'),
+    })
+
+    expect(response).toMatchObject({
+      ok: false,
+      error: {
+        code: 'session/harness-unavailable',
+        details: { harness: 'grok', available: [DSH, CODEX] },
+      },
+    })
+  })
+
+  it('refuses to rebind a Session that recorded another harness', async () => {
+    const w = await world()
+    w.mount(CODEX, 'Codex')
+    w.mount(DSH, 'DeepSeek Harness')
+    const created = await w.remote.create({ cwd: tempDir(), harness: CODEX })
+    if (!created.ok) throw created.error
+
+    const response = await w.remote.bindHarness({ sessionId: created.value.sessionId, harness: DSH })
+
+    expect(response).toMatchObject({
+      ok: false,
+      error: {
+        code: 'session/harness-conflict',
+        message: `session "${created.value.sessionId}" runs agent harness "codex", not "dsh"`,
+      },
+    })
+  })
+
+})
+
+describe('binding without a harness to bind to', () => {
+  it('names the empty mount list when nothing is mounted', async () => {
+    const w = await world()
+
+    const response = await w.remote.bindHarness({
+      sessionId: SessionId('bind-unmounted'),
+      harness: HarnessId('codex'),
+    })
+
+    expect(response).toMatchObject({
+      ok: false,
+      error: {
+        code: 'session/harness-unavailable',
+        message: 'agent harness "codex" is not mounted (available: none)',
+        details: { harness: 'codex', available: [] },
+      },
+    })
+  })
+
+})
+
+describe('binding a Session that cannot be resolved', () => {
+  it('reports the resolution failure instead of a bind result', async () => {
+    const w = await world()
+    w.mount(DSH, 'DeepSeek Harness')
+    w.mount(CODEX, 'Codex')
+
+    const response = await w.remote.bindHarness({
+      sessionId: SessionId('bind-absent'),
+      harness: CODEX,
+    })
+
+    expect(response).toMatchObject({ ok: false, error: { code: 'session/not-found' } })
+  })
+})

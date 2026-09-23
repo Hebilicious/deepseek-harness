@@ -11,6 +11,7 @@ import { LocaleRuntime } from '@deepseek-ai/dsh-client-locale/client'
 import { SlotRegistry } from '@deepseek-ai/dsh-client-ui-renderer/client'
 import { RemoteError, TestRemote } from '@deepseek-ai/dsh-client-test-runtime'
 import type { HarnessId } from '@deepseek-ai/dsh-agent/types'
+import { SessionId } from '@deepseek-ai/dsh-session/types'
 import type { RemoteResult } from '@deepseek-ai/dsh-typert-protocol'
 import type { SessionHarnessCatalog } from '@deepseek-ai/dsh-api-session-controller/types'
 import { AgentHarnessSeat } from '../src/client/AgentHarnessSeat.tsx'
@@ -51,8 +52,18 @@ async function bench(catalog: SessionHarnessCatalog = CATALOG) {
   let reads = 0
   let answer: RemoteResult<SessionHarnessCatalog> = { ok: true, value: catalog }
   let rejects = false
+  const bindable = new Set<string>()
+  const bindings: Array<[string, HarnessId]> = []
+  let refuseBinding = false
   ctx.provide('sessions', {
     stageHarness: (harness: HarnessId) => { stages.push(harness) },
+    harnessProvisional: (sessionId: string) => bindable.has(sessionId),
+    bindHarness: async (sessionId: string, harness: HarnessId) => {
+      bindings.push([sessionId, harness])
+      bindable.delete(sessionId)
+      if (refuseBinding) throw new Error('host refused the binding')
+      return harness
+    },
   } as never)
   new TestRemote(ctx, {
     session: {
@@ -71,6 +82,9 @@ async function bench(catalog: SessionHarnessCatalog = CATALOG) {
     ctx,
     slots,
     stages,
+    bindable,
+    bindings,
+    refuseBinding: () => { refuseBinding = true },
     reads: (): number => reads,
     setCatalog: (value: SessionHarnessCatalog) => { answer = { ok: true, value } },
     failCatalog: () => {
@@ -157,7 +171,7 @@ describe('ui-agent-harness apply', () => {
 
     const face = seatFace(b.slots)
     expect(face.hooks.agentHarnessSeat.getSnapshot().harnesses).toHaveLength(2)
-    face.select(hid('codex'))
+    face.select(undefined, hid('codex'))
 
     expect(b.stages).toEqual(['dsh', 'codex'])
     expect(face.hooks.agentHarnessSeat.getSnapshot().current).toBe('codex')
@@ -222,5 +236,39 @@ describe('ui-agent-harness apply', () => {
     // The second harness turns the deployment into a choice, so the first
     // mounted harness is staged.
     expect(b.stages).toEqual([undefined, 'dsh'])
+  })
+})
+
+describe('the chip inject face', () => {
+  it('reads the binding window and applies a pick through the controller', async () => {
+    const b = await bench()
+    declareConversation(b.slots)
+    await vi.waitFor(() => { expect(b.reads()).toBe(1) })
+    b.bindable.add('session-1')
+
+    const face = seatFace(b.slots)
+    // The seat asks whether the Session on screen can still take a harness.
+    expect(face.bindable(SessionId('session-1'))).toBe(true)
+    expect(face.bindable(undefined)).toBe(false)
+
+    face.select(SessionId('session-1'), hid('codex'))
+    await vi.waitFor(() => { expect(b.bindings).toEqual([['session-1', 'codex']]) })
+    expect(face.hooks.agentHarnessSeat.getSnapshot().current).toBe('codex')
+  })
+
+  it('keeps the chip on its state when the host refuses the binding', async () => {
+    const b = await bench()
+    declareConversation(b.slots)
+    await vi.waitFor(() => { expect(b.reads()).toBe(1) })
+    b.bindable.add('session-1')
+    b.refuseBinding()
+
+    const face = seatFace(b.slots)
+    face.select(SessionId('session-1'), hid('codex'))
+
+    // The rejection is caught by the inject face, so the chip keeps the state
+    // it showed instead of failing the render.
+    await vi.waitFor(() => { expect(b.bindings).toEqual([['session-1', 'codex']]) })
+    expect(face.hooks.agentHarnessSeat.getSnapshot().current).not.toBe('codex')
   })
 })

@@ -109,6 +109,35 @@ export interface ISessions {
    */
   stageHarness(harness: HarnessId | undefined): void
   /**
+   * Whether this Session records no harness yet.
+   *
+   * The workspace flow publishes a Session before its owner picks one, so a
+   * request that names an explicit identity sends a harness only for a Session
+   * this answers true for: a resumed log already names its owner, and naming
+   * another would refuse a resume that works.
+   * @param id - Session identity to read.
+   * @returns true while the Session records no owning harness.
+   */
+  harnessBindable(id: SessionId): boolean
+  /**
+   * Whether this Session's harness can still be chosen at all: a provisional
+   * Session is blank and idle, and {@link bindHarness} serves it either by
+   * recording the choice or by publishing a replacement under it.
+   * @param id - Session identity to read.
+   * @returns true while the picker should offer the mounted harnesses.
+   */
+  harnessProvisional(id: SessionId): boolean
+  /**
+   * Record the harness that owns one still-provisional Session, and stage it as
+   * the choice later Sessions start from.
+   * @param sessionId - provisional Session identity.
+   * @param harness - mounted harness that should own the Session.
+   * @returns the accepted harness.
+   * @throws {SessionCreateError} when the Session records another harness, has
+   * begun its turn, or the host refuses the binding.
+   */
+  bindHarness(sessionId: SessionId, harness: HarnessId): Promise<HarnessId>
+  /**
    * Resolve an already discovered direct-parent address without opening it.
    * @param id - possible addressed child id.
    * @returns the retained address, when present.

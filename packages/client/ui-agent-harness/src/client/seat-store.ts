@@ -14,6 +14,7 @@
 
 import type { Context as ClientContext } from '@deepseek-ai/cordis'
 import type { HarnessId } from '@deepseek-ai/dsh-agent/types'
+import type { SessionId } from '@deepseek-ai/dsh-session/types'
 // Type-only: pulls the ctx.remote merge (the generated Remote namespaces).
 import type {} from '@deepseek-ai/dsh-api-remotes/client'
 // Type-only: pulls the Session Controller client service merge (ctx.sessions).
@@ -74,6 +75,44 @@ export class AgentHarnessSeatController {
   select(harness: HarnessId): void {
     this.store.set({ ...this.store.getSnapshot(), current: harness })
     this.ctx.sessions.stageHarness(harness)
+  }
+
+  /**
+   * Apply one pick: a provisional Session on screen takes the harness as its
+   * own binding, and every other surface stages it for the next Session.
+   * @param sessionId - Session identity on screen, or `undefined` for none yet.
+   * @param harness - mounted harness the picker chose.
+   * @returns once a binding, when one was needed, reached the host.
+   */
+  async apply(sessionId: SessionId | undefined, harness: HarnessId): Promise<void> {
+    if (sessionId !== undefined && this.bindable(sessionId)) await this.bind(sessionId, harness)
+    else this.select(harness)
+  }
+
+  /**
+   * Whether the Session on screen is still provisional: the Workspace flow
+   * publishes it before its owner picks a harness, and the first message ends
+   * the window. Read on demand because the chip does not observe that edge.
+   * @param sessionId - Session identity on screen, or `undefined` for none yet.
+   * @returns true while the chip should offer the mounted harnesses.
+   */
+  bindable(sessionId: SessionId | undefined): boolean {
+    return sessionId !== undefined && this.ctx.sessions.harnessProvisional(sessionId)
+  }
+
+  /**
+   * Record one harness on the provisional Session on screen, which is the only
+   * way a choice reaches a Session the Workspace flow already published.
+   * @param sessionId - provisional Session identity.
+   * @param harness - mounted harness the picker chose.
+   * @returns once the host accepted the binding.
+   */
+  async bind(sessionId: SessionId, harness: HarnessId): Promise<void> {
+    await this.ctx.sessions.bindHarness(sessionId, harness)
+    // The pick also becomes the choice later Sessions start from: a reader who
+    // switched to another harness for this Session asked for that harness.
+    this.ctx.sessions.stageHarness(harness)
+    this.store.set({ ...this.store.getSnapshot(), current: harness })
   }
 
   /**

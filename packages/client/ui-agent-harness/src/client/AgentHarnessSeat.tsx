@@ -14,6 +14,7 @@
 import { useEffect, useState } from 'react'
 import type { SnapshotStore } from '@deepseek-ai/dsh-client-store'
 import type { HarnessId } from '@deepseek-ai/dsh-agent/types'
+import type { SessionId } from '@deepseek-ai/dsh-session/types'
 import type { InjectFace, PropsLocale, PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
 import { IconChevronDownOutline14, Menu } from '@deepseek-ai/dsh-client-ui-primitives'
 // Type-only: pulls the ui-conversation SlotMap merge (the hero seat).
@@ -29,8 +30,13 @@ export interface AgentHarnessSeatInjected {
   }
   /** Read the mounted harnesses when the chip first renders. */
   load: () => Promise<void>
-  /** Stage one harness for the next session. */
-  select: (harness: HarnessId) => void
+  /**
+   * Whether the Session on screen is still provisional, so its harness is
+   * chosen here rather than in a create request that already happened.
+   */
+  bindable: (sessionId: SessionId | undefined) => boolean
+  /** Apply one pick to the Session on screen, or stage it for the next one. */
+  select: (sessionId: SessionId | undefined, harness: HarnessId) => void
 }
 
 /** Full component props. */
@@ -46,7 +52,7 @@ export type AgentHarnessSeatProps =
  *   deployment mounts fewer than two harnesses.
  */
 export function AgentHarnessSeat({
-  sessionId, useProjection, load, select, useAgentHarnessSeat, t,
+  sessionId, useProjection, load, bindable, select, useAgentHarnessSeat, t,
 }: AgentHarnessSeatProps) {
   const state = useAgentHarnessSeat(snapshot => snapshot)
   const recorded = useProjection('agentHarness')
@@ -65,10 +71,15 @@ export function AgentHarnessSeat({
   const mounted = (id: string | null | undefined): AgentHarnessSeatState['harnesses'][number] | undefined =>
     id === null || id === undefined ? undefined : state.harnesses.find(harness => harness.id === id)
 
-  if (sessionId !== undefined) {
-    // A session that records no harness is one this deployment cannot run, or
-    // one created before the record existed; a label with no fact would only
-    // report the chip's own guess.
+  // A Session the Workspace flow already published is still provisional until
+  // its first message, so its harness is chosen here rather than in a create
+  // request that has already happened.
+  const provisional = sessionId !== undefined && bindable(sessionId)
+
+  if (sessionId !== undefined && !provisional) {
+    // A session that records no harness, and can no longer take one, is one
+    // this deployment cannot run or one whose first message already landed; a
+    // label with no fact would only report the chip's own guess.
     if (recorded === null || recorded === undefined) return null
     const entry = mounted(recorded)
     return (
@@ -83,7 +94,10 @@ export function AgentHarnessSeat({
     )
   }
 
-  const chosen = mounted(state.current)
+  // What the next message runs: what the Session already records, else the
+  // choice staged for it, else the catalog's own opening choice.
+  const current = recorded ?? state.current
+  const chosen = mounted(current)
   // The label is empty while the catalog is between reads, so the trigger
   // always carries an accessible name; once a harness is staged that name
   // starts with the visible label, which voice control matches on.
@@ -103,12 +117,12 @@ export function AgentHarnessSeat({
           </span>
         ),
       }))}
-      {...state.current === null ? {} : { selectedId: state.current }}
+      {...current === null ? {} : { selectedId: current }}
       onSelect={(id) => {
         setOpen(false)
         const picked = mounted(id)
         /* v8 ignore next -- the menu's rows ARE the catalog, so an emitted id always resolves */
-        if (picked !== undefined) select(picked.id)
+        if (picked !== undefined) select(sessionId, picked.id)
       }}
       align="start"
       portal
@@ -123,7 +137,7 @@ export function AgentHarnessSeat({
           title={t('seatHint')}
           onClick={() => { setOpen(value => !value) }}
         >
-          <span className={css.seatLabel}>{chosen?.name ?? state.current ?? ''}</span>
+          <span className={css.seatLabel}>{chosen?.name ?? current ?? ''}</span>
           <IconChevronDownOutline14 className={css.chevron} />
         </button>
       )}

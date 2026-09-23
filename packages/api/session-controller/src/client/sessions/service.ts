@@ -458,10 +458,39 @@ export class ClientSessions implements ISessions {
 
   /**
    * Stage the agent harness the next created Session runs.
-   * @param harness - mounted harness id.
+   * @param harness - mounted harness id, or `undefined` to clear the stage.
    */
-  stageHarness(harness: HarnessId): void {
+  stageHarness(harness: HarnessId | undefined): void {
     this.manager.stageHarness(harness)
+  }
+
+  /**
+   * Whether this Session's harness can still be chosen.
+   * @param id - Session identity to read.
+   * @returns true while {@link bindHarness} can record a choice.
+   */
+  harnessBindable(id: SessionId): boolean {
+    return this.manager.harnessBindable(id)
+  }
+
+  /**
+   * Whether this Session's harness can still be chosen at all.
+   * @param id - Session identity to read.
+   * @returns true while the picker should offer the mounted harnesses.
+   */
+  harnessProvisional(id: SessionId): boolean {
+    return this.manager.harnessProvisional(id)
+  }
+
+  /**
+   * Record the harness that owns one provisional Session.
+   * @param sessionId - provisional Session identity.
+   * @param harness - mounted harness that should own the Session.
+   * @returns the accepted harness.
+   * @throws {SessionCreateError} when the host refuses the binding.
+   */
+  bindHarness(sessionId: SessionId, harness: HarnessId): Promise<HarnessId> {
+    return this.manager.bindHarness(sessionId, harness)
   }
 
   /**

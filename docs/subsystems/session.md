@@ -828,6 +828,18 @@ inspect( sessionId: SessionId, signal?: AbortSignal, ): Promise<SessionInspectio
 @Remote('harnessCatalog') harnessCatalog(): SessionHarnessCatalog
 
 /**
+ * Record the harness that owns one still-provisional Session.
+ *
+ * The workspace flow publishes a Session before its owner chooses a harness,
+ * so the choice arrives as an adoption rather than a create. A Session whose
+ * log already names another harness is never rebound: the refusal names
+ * both, and the browser shows the recorded one read-only.
+ * @param request - provisional Session identity and the requested harness.
+ * @returns the harness now recorded as the Session owner.
+ */
+@Remote('bindHarness') async bindHarness(request: SessionBindHarnessRequest): Promise<SessionBindHarnessValue>
+
+/**
  * Fetch every adapter's model catalog again, then describe the result. This is
  * the explicit refresh a selector offers for models published since this
  * process started; an adapter whose catalog has no external source answers

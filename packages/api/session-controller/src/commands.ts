@@ -37,6 +37,8 @@ import {
 import type {
   SessionAttachmentRequest,
   SessionAttachmentValue,
+  SessionBindHarnessRequest,
+  SessionBindHarnessValue,
   SessionCancelRequest,
   SessionCancelValue,
   SessionCreateRequest,
@@ -126,6 +128,51 @@ export class SessionCommandController {
     }
     const agentPreset = this.agents.presetForSession(adopted.session)
     return { sessionId, ...(agentPreset === undefined ? {} : { agentPreset }) }
+  }
+
+  /**
+   * Record the harness that owns one still-provisional Session.
+   *
+   * The Web workspace flow publishes a Session before its owner chooses a
+   * harness, so the choice arrives after publication and no factory will record
+   * it. The window closes with the first message: a Session whose log already
+   * names a harness is never rebound, and one that has begun a turn is refused
+   * rather than relabelled mid-conversation.
+   * @param request - provisional Session identity and the requested harness.
+   * @returns the harness now recorded as the Session owner.
+   * @throws {RemoteError} `session/harness-unavailable` when the deployment
+   * mounts no such harness, or `session/harness-conflict` when the log already
+   * names another one.
+   */
+  async bindHarness(request: SessionBindHarnessRequest): Promise<SessionBindHarnessValue> {
+    const mounted = this.ctx.agents.harnesses().some(entry => entry.id === request.harness)
+    if (!mounted) {
+      const available = this.ctx.agents.harnesses().map(entry => entry.id)
+      throw new RemoteError(
+        'session/harness-unavailable',
+        `agent harness "${request.harness}" is not mounted (available: ${available.join(', ') || 'none'})`,
+        { harness: request.harness, available },
+      )
+    }
+    const resolved = await this.agents.resolveAgent(request.sessionId)
+    if ('error' in resolved) throw resolved.error
+    const session = resolved.agent.session
+    // oxlint-disable-next-line typescript/no-deprecated -- Existing Session history read; migration deferred.
+    const events = session.snapshotEvents()
+    const recorded = recordedHarness(events)
+    if (recorded !== undefined && recorded !== request.harness) {
+      throw new RemoteError(
+        'session/harness-conflict',
+        `session "${request.sessionId}" runs agent harness "${recorded}", not "${request.harness}"`,
+        { sessionId: request.sessionId, requestedHarness: request.harness, recordedHarness: recorded },
+      )
+    }
+    // Resolving the Session is what records the harness of a Session no factory
+    // named, so a Session that records none here belongs to a driver that keeps
+    // no record at all: naming it now is the only way its log ever says which
+    // harness owns it.
+    if (recorded === undefined) session.append('agent/harness', { harness: request.harness })
+    return { harness: request.harness }
   }
 
   /**

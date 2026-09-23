@@ -1164,3 +1164,81 @@ describe('background-job mirror', () => {
     expect(seen).toHaveBeenCalled()
   })
 })
+
+describe('binding a provisional Session', () => {
+  it('binds through the host and stages the same choice for the next Session', async ({ mock, remote }) => {
+    remote.session.list.mockResolvedValue(ok({
+      items: [{
+        ...summary(S1, { blank: true }),
+        projections: { asOfSeq: 0, values: { agentHarness: null } },
+      }] as never[],
+    }))
+    remote.session.bindHarness.mockResolvedValue(ok({ harness: CODEX }))
+    const manager = makeManager(mock, remote)
+    await manager.refreshList()
+    manager.get(S1)
+
+    expect(manager.harnessBindable(S1)).toBe(true)
+    expect(await manager.bindHarness(S1, CODEX)).toBe(CODEX)
+    expect(remote.session.bindHarness).toHaveBeenLastCalledWith({ sessionId: S1, harness: CODEX })
+    // The pick sticks: a Session started afterwards runs the harness the reader
+    // chose for this one.
+    remote.session.create.mockResolvedValue(ok({ sessionId: S2 }))
+    await manager.create({ cwd: '/tmp/w' })
+    expect(remote.session.create).toHaveBeenLastCalledWith({ cwd: '/tmp/w', harness: CODEX })
+  })
+
+  it('refuses to bind a Session that is running or was never opened', async ({ mock, remote }) => {
+    remote.session.list.mockResolvedValue(ok({
+      items: [{
+        ...summary(S1, { blank: true, running: true }),
+        projections: { asOfSeq: 0, values: { agentHarness: null } },
+      }] as never[],
+    }))
+    const manager = makeManager(mock, remote)
+    await manager.refreshList()
+    manager.get(S1)
+
+    expect(manager.harnessBindable(S1)).toBe(false)
+    expect(manager.harnessBindable(S2)).toBe(false)
+  })
+
+  it('reports the host refusal for a Session it may not rebind', async ({ mock, remote }) => {
+    remote.session.list.mockResolvedValue(ok({ items: [summary(S1, { blank: true })] as never[] }))
+    remote.session.bindHarness.mockResolvedValue(err(new RemoteError('session/harness-conflict', 'records another harness', {
+      sessionId: S1,
+      requestedHarness: CODEX,
+      recordedHarness: DSH,
+    })))
+    const manager = makeManager(mock, remote)
+    await manager.refreshList()
+    manager.get(S1)
+
+    await expect(manager.bindHarness(S1, CODEX)).rejects.toThrow('records another harness')
+  })
+})
+
+describe('rebinding a provisional Session that already records one', () => {
+  it('creates a replacement instead of rewriting a record the agent contradicts', async ({ mock, remote }) => {
+    remote.session.list.mockResolvedValue(ok({
+      items: [{
+        ...summary(S1, { blank: true, cwd: '/tmp/w' }),
+        projections: { asOfSeq: 1, values: { agentHarness: DSH } },
+      }] as never[],
+    }))
+    remote.session.create.mockResolvedValue(ok({ sessionId: S2 }))
+    const manager = makeManager(mock, remote)
+    await manager.refreshList()
+    manager.get(S1)
+
+    expect(manager.harnessBindable(S1)).toBe(false)
+    expect(await manager.bindHarness(S1, CODEX)).toBe(CODEX)
+
+    // The run of this Session is already built for `dsh`, so the choice moves to
+    // a Session created under the requested harness in the same directory.
+    expect(remote.session.bindHarness).not.toHaveBeenCalled()
+    const payload = remote.session.create.mock.calls.at(-1)?.[0] as { cwd?: string; harness?: string; sessionId?: string }
+    expect(payload).toMatchObject({ cwd: '/tmp/w', harness: CODEX })
+    expect(payload.sessionId).not.toBe(S1)
+  })
+})

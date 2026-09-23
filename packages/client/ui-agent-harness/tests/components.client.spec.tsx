@@ -44,9 +44,15 @@ function renderSeat(options: {
   session?: string
   recorded?: string | null | undefined
   load?: () => Promise<void>
+  /** Session identity the chip still offers its picker for. */
+  provisional?: string
 } = {}) {
   const store = createSnapshotStore<AgentHarnessSeatState>({ ...READY, ...options.state })
-  const actions = { load: vi.fn(options.load ?? (() => Promise.resolve())), select: vi.fn() }
+  const actions = {
+    load: vi.fn(options.load ?? (() => Promise.resolve())),
+    select: vi.fn(),
+    bindable: vi.fn((id: string | undefined) => id !== undefined && id === options.provisional),
+  }
   render(<AgentHarnessSeat {...({
     ...actions,
     sessionId: options.session === undefined ? undefined : SessionId(options.session),
@@ -88,7 +94,8 @@ describe('the new-session picker', () => {
 
     fireEvent.click(screen.getByText('DeepSeek Harness'))
 
-    expect(actions.select).toHaveBeenCalledWith('dsh')
+    // No Session exists yet, so the pick is staged for the one that follows.
+    expect(actions.select).toHaveBeenCalledWith(undefined, 'dsh')
     expect(screen.getByRole('button').getAttribute('aria-expanded')).toBe('false')
   })
 
@@ -232,5 +239,34 @@ describe('the Session header harness mark', () => {
     // blank it; the id stands in for the name the catalog would have supplied.
     await waitFor(() => { expect(failure.load).toHaveBeenCalledTimes(1) })
     expect(screen.getByRole('img', { name: 'codex' }).getAttribute('data-harness')).toBe('codex')
+  })
+})
+
+describe('a Session the Workspace flow already published', () => {
+  it('offers the picker while the Session records no harness', () => {
+    const { actions } = renderSeat({ session: 's1', recorded: null, provisional: 's1' })
+
+    const trigger = screen.getByRole('button')
+    expect(trigger.getAttribute('aria-haspopup')).toBe('menu')
+    fireEvent.click(trigger)
+    fireEvent.click(screen.getByText('DeepSeek Harness'))
+
+    // The pick reaches the host rather than a stage: this Session's id is the
+    // binding the create request would otherwise have carried.
+    expect(actions.select).toHaveBeenCalledWith('s1', 'dsh')
+  })
+
+  it('opens on the harness the Session already records', () => {
+    renderSeat({ session: 's1', recorded: 'codex', provisional: 's1' })
+
+    expect(screen.getByRole('button').textContent).toContain('Codex')
+  })
+
+  it('shows the recorded harness read-only once the window has closed', () => {
+    renderSeat({ session: 's1', recorded: 'codex' })
+
+    const label = screen.getByRole('button')
+    expect(label).toHaveProperty('disabled', true)
+    expect(label.getAttribute('aria-haspopup')).toBeNull()
   })
 })

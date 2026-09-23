@@ -57,6 +57,9 @@ import type {
   SessionSearchValue,
   SessionSelectModelRequest,
   SessionSelectModelValue,
+  SessionBindHarnessRequest,
+  SessionBindHarnessValue,
+  SessionHarnessCatalog,
   SessionUpdateQueueRequest,
   SessionUpdateQueueValue,
 } from '../src/types.ts'
@@ -69,6 +72,8 @@ export interface TestSessionRemote {
   create(request: SessionCreateRequest): Promise<RemoteResult<SessionCreateValue>>
   selectModel(request: SessionSelectModelRequest): Promise<RemoteResult<SessionSelectModelValue>>
   modelCatalog(): Promise<RemoteResult<ModelCatalog>>
+  harnessCatalog(): SessionHarnessCatalog
+  bindHarness(request: SessionBindHarnessRequest): Promise<RemoteResult<SessionBindHarnessValue>>
   refreshModelCatalog(): Promise<RemoteResult<ModelCatalog>>
   rename(request: SessionRenameRequest): Promise<RemoteResult<SessionRenameValue>>
   fork(request: SessionForkRequest): Promise<RemoteResult<SessionForkValue>>
@@ -344,6 +349,8 @@ export function createSessionTestRemote(
     create: request => remoteResult(() => direct.create(request)),
     selectModel: request => remoteResult(() => direct.selectModel(request)),
     modelCatalog: () => remoteResult(() => direct.modelCatalog()),
+    harnessCatalog: () => direct.harnessCatalog(),
+    bindHarness: request => remoteResult(() => direct.bindHarness(request)),
     refreshModelCatalog: () => remoteResult(() => direct.refreshModelCatalog()),
     rename: request => remoteResult(() => direct.rename(request)),
     fork: request => remoteResult(() => direct.fork(request)),

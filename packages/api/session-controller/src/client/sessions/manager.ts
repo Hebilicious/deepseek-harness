@@ -2,7 +2,7 @@
 
 import type { SubagentAddress, SubagentCatalog } from '@deepseek-ai/dsh-subagent/client'
 import type { HarnessId } from '@deepseek-ai/dsh-agent/types'
-import { SessionSeq, type SessionId, type SessionSeqCursor } from '@deepseek-ai/dsh-session/types'
+import { SessionId, SessionSeq, type SessionSeqCursor } from '@deepseek-ai/dsh-session/types'
 import type { SessionProjectionMap } from '@deepseek-ai/dsh-session-projection/types'
 import type { WorkspaceId } from '@deepseek-ai/dsh-workspace/types'
 import type {
@@ -23,6 +23,8 @@ import type {} from '@deepseek-ai/dsh-session-title/client'
 import { Notifier } from './notifier.ts'
 import { ProjectionValueStore } from './projection-store.ts'
 import { Session } from './session.ts'
+import { randomUUID } from '@deepseek-ai/dsh-util-crypto'
+import { SessionCreateError } from './service.ts'
 import type { SessionRemotes } from './remotes.ts'
 import type { SessionTarget } from '../contract/sessions.ts'
 
@@ -497,13 +499,17 @@ export class SessionManager {
     } = {},
   ): Promise<RemoteResult<{ sessionId: SessionId }>> {
     const shared = opts.sessionId === undefined ? {} : { sessionId: opts.sessionId }
-    // A new Session takes the staged choice. A preallocated identity takes it
-    // only when the client knows that Session is unbound — one created before
-    // this feature reports the projection as null — because the host refuses an
-    // unnamed create once several harnesses are mounted and the record is what
-    // it would otherwise route by. A bound or unknown identity keeps today's
-    // request: the host routes by its record or refuses with a message naming
-    // the harness it needs.
+    // A new Session takes the staged choice: the Workspace flow publishes the
+    // Session when its owner picks a Workspace, and a deployment that mounts
+    // several harnesses refuses a create that names none, so the chip's current
+    // choice has to ride this request.
+    //
+    // A preallocated identity takes it only when the client knows that Session
+    // is unbound — one created before this feature reports the projection as
+    // null — because the host refuses an unnamed create once several harnesses
+    // are mounted and the record is what it would otherwise route by. A bound
+    // or unknown identity keeps today's request: the host routes by its record
+    // or refuses with a message naming the harness it needs.
     const takesStage = opts.sessionId === undefined || this.unboundHarness(opts.sessionId) === true
     const harness = opts.harness ?? (takesStage ? this.stagedHarness : undefined)
     const payload = {
@@ -549,6 +555,69 @@ export class SessionManager {
    */
   stageHarness(harness: HarnessId | undefined): void {
     this.stagedHarness = harness
+  }
+
+  /**
+   * Whether this Session records no harness yet, which is the only case where
+   * an explicit-identity request may send a staged one. A Session this client
+   * never materialized answers false.
+   * @param id - Session identity to read.
+   * @returns true while the Session records no owning harness.
+   */
+  harnessBindable(id: SessionId): boolean {
+    const materialized = this.sessions.get(id)
+    if (materialized === undefined) return false
+    if (!materialized.getSnapshot().blank || materialized.getSnapshot().running) return false
+    return this.unboundHarness(id) === true
+  }
+
+  /**
+   * Whether this Session's harness can still be chosen at all: provisional means
+   * blank and idle, which {@link bindHarness} serves either by recording the
+   * choice or by publishing a replacement under it.
+   * @param id - Session identity to read.
+   * @returns true while the picker should offer the mounted harnesses.
+   */
+  harnessProvisional(id: SessionId): boolean {
+    const materialized = this.sessions.get(id)
+    if (materialized === undefined) return false
+    const snapshot = materialized.getSnapshot()
+    return snapshot.blank && !snapshot.running
+  }
+
+  /**
+   * Record the harness that owns one provisional Session and stage it for the
+   * Sessions that follow.
+   * @param sessionId - provisional Session identity.
+   * @param harness - mounted harness that should own the Session.
+   * @returns the accepted harness.
+   * @throws {SessionCreateError} when the host refuses the binding.
+   */
+  async bindHarness(sessionId: SessionId, harness: HarnessId): Promise<HarnessId> {
+    const summary = this.summaries.find(candidate => candidate.sessionId === sessionId)
+    const recorded = this.projectionValues(sessionId)?.['agentHarness']
+      ?? summary?.projections?.values['agentHarness']
+    if (summary === undefined || recorded === undefined || recorded === null) {
+      const result = await this.remote.session.bindHarness({ sessionId, harness })
+      if (!result.ok) throw new SessionCreateError(result.error, sessionId)
+      this.stageHarness(harness)
+      // The host published the record as part of accepting this call, so its own
+      // frame carries the projection.
+      return result.value.harness
+    }
+    // This provisional Session already names a harness, and the agent was
+    // built for it, so the choice moves to a replacement rather than rewriting
+    // a record the running agent would then contradict. The abandoned Session
+    // is blank: it holds no content and no turn.
+    const replacement = SessionId(`session-${randomUUID()}`)
+    const created = await this.create({
+      ...summary.cwd === undefined ? {} : { cwd: summary.cwd },
+      sessionId: replacement,
+      harness,
+    })
+    if (!created.ok) throw new SessionCreateError(created.error, replacement)
+    this.stageHarness(harness)
+    return harness
   }
 
   /**

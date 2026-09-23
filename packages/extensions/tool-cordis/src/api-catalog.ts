@@ -1807,6 +1807,12 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
         returns: 'the mounted harnesses, in registration order.',
       },
       {
+        signature: '@Remote(\'bindHarness\') async bindHarness(request: SessionBindHarnessRequest): Promise<SessionBindHarnessValue>',
+        description: 'Record the harness that owns one still-provisional Session.\n\nThe workspace flow publishes a Session before its owner chooses a harness, so the choice arrives as an adoption rather than a create. A Session whose log already names another harness is never rebound: the refusal names both, and the browser shows the recorded one read-only.',
+        parameters: [{ name: 'request', description: 'provisional Session identity and the requested harness.' }],
+        returns: 'the harness now recorded as the Session owner.',
+      },
+      {
         signature: '@Remote(\'refreshModelCatalog\') async refreshModelCatalog(): Promise<ModelCatalog>',
         description: 'Fetch every adapter\'s model catalog again, then describe the result. This is the explicit refresh a selector offers for models published since this process started; an adapter whose catalog has no external source answers without a fetch.',
         parameters: [],
@@ -5849,6 +5855,14 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   {
     name: 'SessionAvailability',
     declaration: 'export type SessionAvailability = \'live\' | \'persisted\';',
+  },
+  {
+    name: 'SessionBindHarnessRequest',
+    declaration: 'export interface SessionBindHarnessRequest {\n    readonly sessionId: SessionId;\n    readonly harness: HarnessId;\n}',
+  },
+  {
+    name: 'SessionBindHarnessValue',
+    declaration: 'export interface SessionBindHarnessValue {\n    readonly harness: HarnessId;\n}',
   },
   {
     name: 'SessionCancelRequest',
