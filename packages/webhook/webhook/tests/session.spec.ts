@@ -120,9 +120,9 @@ function harness(options: HarnessOptions = {}): SessionHarness {
       },
     },
     agents: {
-      async create(createOptions: { setup?: (ctx: unknown, agent: unknown) => Promise<void> }) {
+      async create(createOptions: Record<string, unknown> & { setup?: (ctx: unknown, agent: unknown) => Promise<void> }) {
         calls.push('agent-create')
-        createInput = createOptions as unknown as Record<string, unknown>
+        createInput = createOptions
         if (options.failAt === 'agent') throw new Error('agent failed')
         await createOptions.setup?.({
           on(event: string, listener: unknown) {
