@@ -7,7 +7,11 @@ import type { ModelSelection } from '@deepseek-ai/dsh-api-remotes/client'
 import { bindSnapshotSelector } from '@deepseek-ai/dsh-client-test-runtime'
 import { createSnapshotStore } from '@deepseek-ai/dsh-client-store'
 import type { ComponentProps } from 'react'
+import type { ModelProviderGroup } from '@deepseek-ai/dsh-api-session-controller/types'
 import type { ModelDirectoryState } from '../src/client/directory.ts'
+
+/** The in-process loop, the harness every fixture provider serves. */
+const LOOP = ['dsh'] as unknown as ModelProviderGroup['harnesses']
 import { ModelSelect } from '../src/client/ModelSelect.tsx'
 import { modelPinKey, toggleModelPin, type ModelPinsState } from '../src/client/pins.ts'
 import { zh } from '../src/client/locales.ts'
@@ -40,6 +44,7 @@ function state(overrides: Partial<ModelDirectoryState> = {}): ModelDirectoryStat
     groups: [{
       id: 'deepseek-official',
       name: 'DeepSeek',
+      harnesses: LOOP,
       models: [{
         id: 'deepseek-v4-flash',
         name: 'DeepSeek-V4-Flash',
@@ -59,6 +64,7 @@ const groups = [
   {
     id: 'deepseek-official',
     name: 'DeepSeek',
+    harnesses: LOOP,
     models: [
       { id: 'deepseek-v4-flash', name: 'DeepSeek-V4-Flash', reasoning },
       { id: 'deepseek-v4-pro', name: 'DeepSeek-V4-Pro' },
@@ -67,6 +73,7 @@ const groups = [
   {
     id: 'opencode-go',
     name: 'opencode-go',
+    harnesses: LOOP,
     models: [
       { id: 'qwen3.8-flash', name: 'Qwen3.8 Flash' },
       { id: 'minimax-m3', name: 'MiniMax-M3' },
@@ -139,6 +146,7 @@ describe('ModelSelect reasoning effort', () => {
       groups: [{
         id: 'provider',
         name: 'Provider',
+        harnesses: LOOP,
         models: [{
           id: 'model',
           name: 'Model',
@@ -197,6 +205,7 @@ describe('ModelSelect reasoning effort', () => {
     const groups = [{
       id: 'deepseek-official',
       name: 'DeepSeek',
+      harnesses: LOOP,
       models: [
         { id: 'deepseek-v4-flash', name: 'DeepSeek-V4-Flash', reasoning },
         { id: 'deepseek-v4-pro', name: 'DeepSeek-V4-Pro' },

@@ -26,6 +26,7 @@ const sid = (k: string): SessionId => k as SessionId
 const GROUPS = [{
   id: 'deepseek-official',
   name: 'DeepSeek',
+  harnesses: ['dsh'],
   models: [
     {
       id: 'deepseek-v4-flash',
@@ -57,6 +58,7 @@ const GROUPS = [{
 }, {
   id: 'external',
   name: 'External Provider',
+  harnesses: ['dsh'],
   models: [{
     id: 'deepseek-v4-flash',
     name: 'External Flash',
@@ -65,7 +67,13 @@ const GROUPS = [{
 }]
 
 /** Boot the plugin over fake faces + a stateful fake host (current moves on selectModel). */
-async function bench(locale: 'zh' | 'en' = 'zh') {
+/** One catalog failure row, as the Host annotates it. */
+interface FailureRow { id: string; name: string; message: string; harnesses: string[] }
+
+async function bench(
+  locale: 'zh' | 'en' = 'zh',
+  catalog: { groups: readonly (typeof GROUPS)[number][]; failures: readonly FailureRow[] } = { groups: GROUPS, failures: [] },
+) {
   const ctx = new Context()
   let defaultSelection: ModelSelection = { provider: 'deepseek-official', model: 'deepseek-v4-flash' }
   let selected = defaultSelection
@@ -75,6 +83,8 @@ async function bench(locale: 'zh' | 'en' = 'zh') {
   // block follows this, never catalog membership.
   let routable = true
   let selectionFailure: RemoteError<'session/writer-held'> | undefined
+  const { groups, failures } = catalog
+  const harnesses = new Map<SessionId, SnapshotStore<string | null>>()
   const sessionRemote = {
     modelCatalog: () => {
       calls.models += 1
@@ -83,8 +93,8 @@ async function bench(locale: 'zh' | 'en' = 'zh') {
         value: {
           default: defaultSelection,
           routableProviders: routable ? ['deepseek-official'] : [],
-          groups: GROUPS,
-          failures: [],
+          groups,
+          failures,
         },
       })
     },
@@ -136,7 +146,7 @@ async function bench(locale: 'zh' | 'en' = 'zh') {
   const scopes = new Map<SessionId, Context>()
   const bindings = new Map<SessionId, {
     sessionId: SessionId
-    session: { sessionId: SessionId; projections: { faceOf: () => SnapshotStore<ModelSelectionProjection | undefined> } }
+    session: { sessionId: SessionId; projections: { faceOf: (key: string) => SnapshotStore<unknown> } }
     ctx: Context
   }>()
   const addressed = new Set<SessionId>()
@@ -159,9 +169,16 @@ async function bench(locale: 'zh' | 'en' = 'zh') {
       next: null,
     })
     projections.set(id, projection)
+    const harness = createSnapshotStore<string | null>(null)
+    harnesses.set(id, harness)
     const binding = {
       sessionId: id,
-      session: { sessionId: id, projections: { faceOf: () => projection } },
+      session: {
+        sessionId: id,
+        projections: {
+          faceOf: (key: string): SnapshotStore<unknown> => key === 'agentHarness' ? harness : projection,
+        },
+      },
       ctx: handle.ctx,
     }
     bindings.set(id, binding)
@@ -187,6 +204,7 @@ async function bench(locale: 'zh' | 'en' = 'zh') {
     setProjected: (id: SessionId, value: ModelSelectionProjection) => { projections.get(id)?.set(value) },
     address: (id: SessionId) => { addressed.add(id) },
     setRoutable: (next: boolean) => { routable = next },
+    setHarness: (id: SessionId, harness: string) => { harnesses.get(id)?.set(harness) },
     blockOf: (key: string) => blocks.get(sid(key)),
   }
 }
@@ -204,6 +222,38 @@ describe('ui-model-selection dual entry', () => {
     expect(b.ctx.modelDirectories.directoryFor(sid('owned')).store.getSnapshot()).toMatchObject({
       status: 'error', error: 'session/writer-held: writer held',
     })
+  })
+
+  it('lists only the providers the Session harness drives and reports no default it cannot run', async () => {
+    const b = await bench('en', {
+      groups: [...GROUPS, {
+        id: 'codex', name: 'Codex', harnesses: ['codex'], models: [{ id: 'gpt-6-astra', name: 'GPT-6-Astra' }],
+      } as unknown as (typeof GROUPS)[number]],
+      failures: [{ id: 'claude', name: 'Claude Code', message: 'offline', harnesses: ['claude'] }],
+    })
+    b.mint('loop')
+    b.mint('codex')
+    const loop = b.ctx.modelDirectories.directoryFor(sid('loop'))
+    const codex = b.ctx.modelDirectories.directoryFor(sid('codex'))
+    await loop.load()
+    // Before the Session records a harness, nothing is hidden.
+    expect(loop.store.getSnapshot().groups.map(group => group.id)).toEqual(['deepseek-official', 'external', 'codex'])
+
+    b.setHarness(sid('loop'), 'dsh')
+    b.setHarness(sid('codex'), 'codex')
+    expect(loop.store.getSnapshot()).toMatchObject({
+      current: { provider: 'deepseek-official', model: 'deepseek-v4-flash' },
+      failures: [],
+    })
+    expect(loop.store.getSnapshot().groups.map(group => group.id)).toEqual(['deepseek-official', 'external'])
+    expect(codex.store.getSnapshot()).toMatchObject({ current: null, routable: null, failures: [] })
+    expect(codex.store.getSnapshot().groups.map(group => group.id)).toEqual(['codex'])
+
+    b.setProjected(sid('codex'), { lastUsed: null, next: { provider: 'codex', model: 'gpt-6-astra' } })
+    expect(codex.store.getSnapshot().current).toEqual({ provider: 'codex', model: 'gpt-6-astra' })
+    // A route the catalog does not list at all is passed through unjudged.
+    b.setProjected(sid('codex'), { lastUsed: null, next: { provider: 'gone', model: 'm' } })
+    expect(codex.store.getSnapshot().current).toEqual({ provider: 'gone', model: 'm' })
   })
 
   it('registers the /model contribution and the composer model seat', async () => {

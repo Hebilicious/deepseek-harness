@@ -165,7 +165,7 @@ Codex 拥有请求前缀，因此 dsh 既无法保证也无法度量复用。在
 
 #### 模型看到什么
 
-每个实例 id 都是一个 `ctx.llm` 路由，其条目来自该实例的 `model/list`，包括每个模型的显示名与推理强度菜单。选择器的选择以 `turn/start` 的 `model` 与 `effort` 成员到达轮次，持久的 `request/header` 记录实际运行的内容。
+每个实例 id 都是一个 `ctx.llm` 路由，其条目来自该实例的 `model/list`，包括每个模型的显示名与推理强度菜单。选择器的选择以 `turn/start` 的 `model` 与 `effort` 成员到达轮次，持久的 `request/header` 记录实际运行的内容。harness 把实例 id 注册为自己的 `modelProvider`，因此选择器只为该实例运行的 Session 列出这一路由，`session.selectModel` 也会拒绝这些 Session 选择其他路由。
 
 #### token 影响
 

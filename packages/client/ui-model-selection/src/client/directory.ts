@@ -25,9 +25,12 @@ export interface ModelDirectoryState {
    * from the groups yet perfectly usable.
    */
   routable: boolean | null
-  /** Successfully loaded provider groups (last good load). */
+  /**
+   * Successfully loaded provider groups the Session's harness can drive (last
+   * good load); every group while the Session records no harness.
+   */
   groups: readonly ModelProviderGroup[]
-  /** Provider-local failures from the last load; usable groups stay usable. */
+  /** Provider-local failures from the last load, limited like {@link groups}. */
   failures: readonly ModelCatalogFailure[]
   /** Lifecycle of the in-flight operation. */
   status: 'idle' | 'loading' | 'ready' | 'selecting' | 'error'
@@ -48,6 +51,7 @@ export class ModelDirectory {
   private resolved = false
   private readonly unsubscribeCatalog: () => void
   private readonly unsubscribeSelection: () => void
+  private readonly unsubscribeHarness: () => void
 
   /**
    * @param sessions - the session wire face (captured from the plugin's root connection).
@@ -55,6 +59,7 @@ export class ModelDirectory {
    * @param available - whether this session may use Agent-bound model RPCs.
    * @param catalog - Host-generation catalog shared by every Session.
    * @param projected - durable model selection projected from Session history.
+   * @param harness - the harness the Session records, projected from Session history.
    */
   constructor(
     private readonly sessions: Pick<TypertClientRemote['session'], 'selectModel'>,
@@ -62,9 +67,11 @@ export class ModelDirectory {
     private readonly available: () => boolean,
     private readonly catalog: ModelCatalogDirectory,
     private readonly projected: ObservableSnapshot<unknown>,
+    private readonly harness: ObservableSnapshot<unknown>,
   ) {
     this.unsubscribeCatalog = catalog.store.subscribe(() => { this.syncInputs() })
     this.unsubscribeSelection = projected.subscribe(() => { this.syncInputs() })
+    this.unsubscribeHarness = harness.subscribe(() => { this.syncInputs() })
     this.syncInputs()
   }
 
@@ -142,6 +149,7 @@ export class ModelDirectory {
   /** Scope teardown: late settlements lose write access to the store. */
   dispose(): void {
     this.disposed = true
+    this.unsubscribeHarness()
     this.unsubscribeSelection()
     this.unsubscribeCatalog()
   }
@@ -176,13 +184,23 @@ export class ModelDirectory {
       })
       return
     }
-    const current = projected.next ?? catalog.value.default
+    // A harness drives only the providers the Host lists it under: the others
+    // are neither shown nor reported as its selection. The deployment default
+    // belongs to the in-process loop, so another harness shows no model until
+    // its Session records one.
+    const harness = recordedHarness(this.harness.getSnapshot())
+    const serves = (entry: { readonly harnesses: readonly string[] }): boolean =>
+      harness === undefined || entry.harnesses.includes(harness)
+    const listed = [...catalog.value.groups, ...catalog.value.failures]
+    const selected = projected.next ?? catalog.value.default
+    const entry = listed.find(candidate => candidate.id === selected.provider)
+    const current = entry === undefined || serves(entry) ? selected : null
     this.resolved = true
     this.store.set({
       current,
-      routable: catalog.value.routableProviders.includes(current.provider),
-      groups: catalog.value.groups,
-      failures: catalog.value.failures,
+      routable: current === null ? null : catalog.value.routableProviders.includes(current.provider),
+      groups: catalog.value.groups.filter(serves),
+      failures: catalog.value.failures.filter(serves),
       status: this.store.getSnapshot().status === 'selecting'
         ? 'selecting'
         : 'ready',
@@ -193,4 +211,9 @@ export class ModelDirectory {
 
 function modelSelectionProjection(value: unknown): ModelSelectionProjection | undefined {
   return value === undefined ? undefined : value as ModelSelectionProjection
+}
+
+/** The harness id an `agentHarness` projection frame records, if any. */
+function recordedHarness(value: unknown): string | undefined {
+  return typeof value === 'string' ? value : undefined
 }

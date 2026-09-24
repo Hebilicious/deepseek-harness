@@ -434,7 +434,7 @@ describe('AgentLoopCardController', () => {
 describe('SubagentModelSelectionCardController', () => {
   it('joins stored routes with the live catalog without dropping unavailable choices', () => {
     const candidates = subagentModelCandidates(
-      [{ id: 'alpha', name: 'Alpha API', models: [{ id: 'fast', name: 'Fast' }] }],
+      [{ id: 'alpha', name: 'Alpha API', harnesses: [], models: [{ id: 'fast', name: 'Fast' }] }],
       [{ provider: 'legacy', model: 'old' }],
       new Set(['legacy\0old']),
     )

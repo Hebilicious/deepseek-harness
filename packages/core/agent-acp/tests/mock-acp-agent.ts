@@ -9,6 +9,8 @@
  *                         vs session/load, set_config_option, prompt, cancel).
  * - `MOCK_SESSION_ID`   — fixed session id from `session/new` (random otherwise).
  * - `MOCK_LOAD_SESSION` — advertise `loadSession: true` and serve `session/load`.
+ * - `MOCK_LOAD_UNKNOWN` — answer `session/load` with `resourceNotFound`, as an
+ *                         agent that stored no session for the id does.
  * - `MOCK_CLOSE`        — advertise `sessionCapabilities.close` and serve
  *                         `session/close`.
  * - `MOCK_DELETE`       — advertise `sessionCapabilities.delete` and serve
@@ -53,6 +55,7 @@
  * - `MOCK_NO_CONFIG_OPTIONS` — omit `configOptions` from session/new,
  *                         session/load, and set_config_option responses.
  * - `MOCK_SET_OPTION_EMPTY` — answer set_config_option without configOptions.
+ * - `MOCK_SET_OPTION_FAIL` — reject set_config_option for this value.
  * - `MOCK_MODELS_EXIT`  — exit the `models` subcommand with that code and no
  *                         stderr.
  * - `MOCK_MODELS_HANG`  — never answer the `models` subcommand.
@@ -104,6 +107,7 @@ import {
   methods,
   ndJsonStream,
   PROTOCOL_VERSION,
+  RequestError,
   type AgentContext,
   type CancelNotification,
   type AuthenticateRequest,
@@ -332,6 +336,7 @@ function makeAgent() {
         error.code = -32601
         return Promise.reject(error)
       }
+      if (process.env.MOCK_LOAD_UNKNOWN === '1') return Promise.reject(RequestError.resourceNotFound(params.sessionId))
       const models = sessionModels()
       return Promise.resolve({
         ...NO_CONFIG_OPTIONS ? {} : { configOptions },
@@ -350,6 +355,7 @@ function makeAgent() {
     },
     setConfigOption(params: SetSessionConfigOptionRequest): Promise<SetSessionConfigOptionResponse> {
       record('session/set_config_option', params)
+      if (params.value === process.env.MOCK_SET_OPTION_FAIL) return Promise.reject(new Error(`refused ${params.value}`))
       for (const option of configOptions) {
         if (option.id === params.configId && option.type === 'select' && typeof params.value === 'string') {
           option.currentValue = params.value

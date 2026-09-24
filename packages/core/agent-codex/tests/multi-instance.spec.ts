@@ -137,8 +137,8 @@ describe('one plugin instance, several Codex instances', () => {
     bench = await setup({ MOCK_CODEX_TEXT: 'from codex' }, { MOCK_CODEX_TEXT: 'from personal' })
 
     expect(bench.ctx.agents.harnesses()).toEqual([
-      { id: 'codex', name: 'Codex' },
-      { id: 'personal', name: 'Personal Codex', description: 'OpenAI Codex on the personal account' },
+      { id: 'codex', name: 'Codex', modelProvider: 'codex' },
+      { id: 'personal', name: 'Personal Codex', description: 'OpenAI Codex on the personal account', modelProvider: 'personal' },
     ])
 
     const primary = await bench.ctx.agents.create({

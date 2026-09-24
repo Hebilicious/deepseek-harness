@@ -3,10 +3,13 @@ import { RemoteError } from '@deepseek-ai/dsh-client-test-runtime'
 import { describe, expect, it, vi } from 'vitest'
 import { ModelCatalogDirectory } from '../src/client/catalog.ts'
 
+/** The in-process loop, the harness every fixture provider serves. */
+const LOOP = ['dsh'] as unknown as ModelCatalog['groups'][number]['harnesses']
+
 const catalog = (model: string): ModelCatalog => ({
   default: { provider: 'fixture', model },
   routableProviders: ['fixture'],
-  groups: [{ id: 'fixture', name: 'Fixture', models: [{ id: model, name: model }] }],
+  groups: [{ id: 'fixture', name: 'Fixture', harnesses: LOOP, models: [{ id: model, name: model }] }],
   failures: [],
 })
 

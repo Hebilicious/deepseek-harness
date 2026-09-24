@@ -272,7 +272,13 @@ export class SessionController extends TypertRemoteService {
    */
   @Remote('harnessCatalog')
   harnessCatalog(): SessionHarnessCatalog {
-    return { harnesses: this.ctx.agents.harnesses().map(entry => ({ ...entry })) }
+    return {
+      harnesses: this.ctx.agents.harnesses().map(entry => ({
+        id: entry.id,
+        name: entry.name,
+        ...entry.description === undefined ? {} : { description: entry.description },
+      })),
+    }
   }
 
   /**

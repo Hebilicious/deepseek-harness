@@ -3,7 +3,7 @@
 import { randomUUID } from 'node:crypto'
 import type { Context } from '@deepseek-ai/cordis'
 import { brandString } from '@deepseek-ai/dsh-brand'
-import { recordedHarness } from '@deepseek-ai/dsh-agent'
+import { agentHarnessOf, recordedHarness } from '@deepseek-ai/dsh-agent'
 import type { Agent, ModelSelection as AgentModelSelection } from '@deepseek-ai/dsh-agent'
 import { AttachmentError } from '@deepseek-ai/dsh-attachment'
 import type {
@@ -23,6 +23,7 @@ import { canonicalClientTimeZone } from '@deepseek-ai/dsh-util-time'
 import { assertNever } from '@deepseek-ai/dsh-util-values'
 import { RemoteError, remoteErrorOf } from '@deepseek-ai/dsh-typert-protocol'
 import type { Workspace } from '@deepseek-ai/dsh-workspace'
+import { harnessesServing } from './harness-models.ts'
 import {
   ApiSessionAgentController,
   ApiSessionCwdConflict,
@@ -182,6 +183,19 @@ export class SessionCommandController {
    */
   async selectModel(request: SessionSelectModelRequest): Promise<SessionSelectModelValue> {
     const agent = await this.resolveAgent(request.sessionId)
+    const harnesses = this.ctx.agents.harnesses()
+    const serving = harnessesServing(harnesses, request.provider)
+    // A harness drives only the routes it can call: a Codex Session ignores a
+    // DeepSeek route, and the loop cannot call a route that only lists a
+    // harness's models. A Session that records no harness predates the choice.
+    const harness = agentHarnessOf(this.ctx.sessionProjections, agent.session)
+    if (harness !== undefined && !serving.some(id => id === harness)) {
+      throw new RemoteError(
+        'session/model-unavailable',
+        `provider "${request.provider}" does not serve harness "${harness}"`,
+        { provider: request.provider, model: request.model },
+      )
+    }
     return this.agents.serializeImageAdmission(agent, async () => {
       try {
         const resolved = await this.ctx.llm.resolveCallConfig({
@@ -199,12 +213,17 @@ export class SessionCommandController {
             : { reasoningEffort: resolved.reasoningEffort }),
         }
         this.agents.selectForNextRequest(agent, selected)
-        try {
-          await this.ctx.agentDefaultModel.saveSelection(selected)
-        } catch (error) {
-          this.ctx.logger.warn(
-            `session-controller: model selection changed for the Session but the default was not saved: ${String(error)}`,
-          )
+        // The deployment default seeds Sessions that send requests through the
+        // LLM providers; a route one harness owns would leave those Sessions
+        // on a provider that serves no model calls.
+        if (!harnesses.some(entry => entry.modelProvider === resolved.provider)) {
+          try {
+            await this.ctx.agentDefaultModel.saveSelection(selected)
+          } catch (error) {
+            this.ctx.logger.warn(
+              `session-controller: model selection changed for the Session but the default was not saved: ${String(error)}`,
+            )
+          }
         }
         return { selected: { ...selected } }
       } catch (error) {

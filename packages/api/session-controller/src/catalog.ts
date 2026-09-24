@@ -6,6 +6,7 @@ import type {
   ModelReasoning,
   ModelSelection,
 } from './types.ts'
+import { harnessesServing } from './harness-models.ts'
 
 /**
  * Build the browser model catalog without requiring a Session.
@@ -18,6 +19,7 @@ export async function buildModelCatalog(
   defaultSelection: ModelSelection = ctx.agentDefaultModel.currentSelection(),
 ): Promise<ModelCatalog> {
   const providers = ctx.llm.listProviders()
+  const harnesses = ctx.agents.harnesses()
   const catalog = await Promise.all(providers.map(async (provider) => {
     try {
       const models = await ctx.llm.listModels(provider.id)
@@ -44,7 +46,12 @@ export async function buildModelCatalog(
       }))
       return {
         kind: 'group' as const,
-        group: { id: provider.id, name: provider.name, models: entries },
+        group: {
+          id: provider.id,
+          name: provider.name,
+          models: entries,
+          harnesses: harnessesServing(harnesses, provider.id),
+        },
       }
     } catch (error) {
       return {
@@ -53,6 +60,7 @@ export async function buildModelCatalog(
           id: provider.id,
           name: provider.name,
           message: error instanceof Error ? error.message : String(error),
+          harnesses: harnessesServing(harnesses, provider.id),
         },
       }
     }

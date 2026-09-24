@@ -64,17 +64,17 @@
             description: opencode runs the session over the Agent Client Protocol
             executable: opencode
             args: ['acp']
-          # Claude Code has no ACP mode of its own, so this entry runs Zed's
+          # Claude Code has no ACP mode of its own, so this entry runs the ACP
           # adapter, which drives the `claude` CLI underneath. `npx` resolves
           # the adapter on first use; a machine that installs it globally can
-          # replace both fields with `executable: claude-code-acp` and no args.
+          # replace both fields with `executable: claude-agent-acp` and no args.
           # The adapter reports authorization through its ACP methods, so both
           # CLI verb lists are empty, and the `claude` binary must be on PATH.
           - id: claude
             name: Claude Code
             description: Anthropic Claude Code runs the session over the Agent Client Protocol
             executable: npx
-            args: ['-y', '@zed-industries/claude-code-acp@0.16.2']
+            args: ['-y', '@agentclientprotocol/claude-agent-acp@0.81.1']
             authStatusArgs: []
             authLogoutArgs: []
           # mimocode installs its launcher outside the usual bin directories

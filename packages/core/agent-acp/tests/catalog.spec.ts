@@ -67,6 +67,27 @@ describe('AcpCatalogAdapter', () => {
       .toMatchObject({ provider: 'devin', id: 'retired', name: 'retired' })
   }, TEST_TIMEOUT)
 
+  it('offers the session reasoning-effort option as each model\'s effort menu', async () => {
+    bench = await setup({
+      MOCK_SESSION_MODELS: JSON.stringify([{ modelId: 'opus', name: 'Opus 5.5' }, { modelId: 'haiku', name: 'Haiku 4.5' }]),
+      MOCK_CONFIG_OPTIONS: JSON.stringify([{
+        id: 'effort',
+        name: 'Effort',
+        category: 'thought_level',
+        type: 'select',
+        currentValue: 'default',
+        options: [{ value: 'default', name: 'Default' }, { value: 'max', name: 'Max' }],
+      }]),
+    })
+    await bench.ctx.agents.create({ sessionId: SessionId('c1r'), agentOptions: {} })
+
+    const reasoning = { efforts: [{ id: 'default', name: 'Default' }, { id: 'max', name: 'Max' }], defaultEffort: 'default' }
+    expect(await bench.ctx.llm.resolveModelInfo('devin', 'opus', new AbortController().signal))
+      .toMatchObject({ id: 'opus', name: 'Opus 5.5', reasoning })
+    expect(await bench.ctx.llm.resolveModelInfo('devin', 'haiku', new AbortController().signal))
+      .toMatchObject({ id: 'haiku', reasoning })
+  }, TEST_TIMEOUT)
+
   it('probes one throwaway session so a fresh deployment still lists the harness models', async () => {
     // No session of this harness has bound yet: the picker still needs real
     // entries, so the adapter reads them from a probe session.

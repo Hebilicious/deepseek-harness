@@ -98,8 +98,8 @@ describe('one plugin instance, several harnesses', () => {
     bench = await setup({ MOCK_TEXT: 'from devin' }, { harnesses: [grok.entry] })
 
     expect(bench.ctx.agents.harnesses()).toEqual([
-      { id: 'devin', name: 'Devin', description: 'Devin runs the session through devin acp' },
-      { id: 'grok', name: 'Grok Build', description: 'xAI Grok Build' },
+      { id: 'devin', name: 'Devin', description: 'Devin runs the session through devin acp', modelProvider: 'devin' },
+      { id: 'grok', name: 'Grok Build', description: 'xAI Grok Build', modelProvider: 'grok' },
     ])
 
     const created = await bench.ctx.agents.create({

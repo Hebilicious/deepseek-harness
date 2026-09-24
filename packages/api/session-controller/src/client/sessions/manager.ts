@@ -590,7 +590,8 @@ export class SessionManager {
    * Sessions that follow.
    * @param sessionId - provisional Session identity.
    * @param harness - mounted harness that should own the Session.
-   * @returns the accepted harness.
+   * @param workspaceId - Workspace a replacement Session is published into, when one accounts for `sessionId`.
+   * @returns the Session the choice now lives on: `sessionId`, or its replacement.
    * @throws {SessionCreateError} when the host refuses the binding.
    */
   async bindHarness(sessionId: SessionId, harness: HarnessId, workspaceId?: WorkspaceId): Promise<SessionId> {

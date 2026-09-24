@@ -228,6 +228,32 @@ describe('acpAdvertisedModels', () => {
   })
 })
 
+describe('acpAdvertisedModels reasoning', () => {
+  it('gives every advertised model the session reasoning-effort menu', () => {
+    const effort: SessionConfigOption = {
+      id: 'effort',
+      name: 'Effort',
+      category: 'thought_level',
+      type: 'select',
+      currentValue: 'default',
+      options: [{ value: 'default', name: 'Default' }, { value: 'high', name: 'High', description: 'More thinking' }],
+    }
+    const reasoning = {
+      efforts: [{ id: 'default', name: 'Default' }, { id: 'high', name: 'High', description: 'More thinking' }],
+      defaultEffort: 'default',
+    }
+    expect(acpAdvertisedModels({ configOptions: [selectOption('model', ['opus', 'sonnet']), effort] })).toEqual([
+      { id: 'opus', name: 'opus', reasoning },
+      { id: 'sonnet', name: 'sonnet', reasoning },
+    ])
+    // An unset current value names no default, and an option with no values is no menu.
+    expect(acpAdvertisedModels({ configOptions: [selectOption('model', ['opus']), { ...effort, currentValue: '' }] }))
+      .toEqual([{ id: 'opus', name: 'opus', reasoning: { efforts: reasoning.efforts } }])
+    expect(acpAdvertisedModels({ configOptions: [selectOption('model', ['opus']), { ...effort, options: [] }] }))
+      .toEqual([{ id: 'opus', name: 'opus' }])
+  })
+})
+
 describe('acpSelectEntries', () => {
   it('flattens flat and grouped values and skips entries that carry no value', () => {
     const grouped = {

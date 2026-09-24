@@ -83,8 +83,8 @@ describe('CodexAppServer construction', () => {
       ],
     })
     expect(ctx.agents.harnesses()).toEqual([
-      { id: 'codex', name: 'Codex', description: 'OpenAI Codex runs the session through codex app-server' },
-      { id: 'personal', name: 'Personal Codex' },
+      { id: 'codex', name: 'Codex', description: 'OpenAI Codex runs the session through codex app-server', modelProvider: 'codex' },
+      { id: 'personal', name: 'Personal Codex', modelProvider: 'personal' },
     ])
     await ctx.fiber.dispose()
   })

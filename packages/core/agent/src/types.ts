@@ -122,4 +122,12 @@ export interface AgentHarness {
   readonly name: string
   /** One sentence on what runs the session, for a harness picker. */
   readonly description?: string
+  /**
+   * The catalog-only LLM provider route that lists this harness's own models.
+   * A session under this harness selects only from that route, and no other
+   * harness selects from it. Absent for a harness that sends its requests
+   * through the deployment's LLM providers, which may use every route no
+   * harness claims.
+   */
+  readonly modelProvider?: string
 }

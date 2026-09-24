@@ -48,8 +48,8 @@ describe('AcpHarness construction', () => {
       ],
     })
     expect(ctx.agents.harnesses()).toEqual([
-      { id: 'devin', name: 'Devin' },
-      { id: 'grok', name: 'Grok Build', description: 'xAI Grok Build' },
+      { id: 'devin', name: 'Devin', modelProvider: 'devin' },
+      { id: 'grok', name: 'Grok Build', description: 'xAI Grok Build', modelProvider: 'grok' },
     ])
     await ctx.fiber.dispose()
   })

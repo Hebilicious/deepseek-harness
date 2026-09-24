@@ -391,13 +391,12 @@ describe('model selection record', () => {
 })
 
 describe('session binding projection', () => {
-  it('rejects a duplicate or malformed agent-acp/session binding', async () => {
+  it('lets a later agent-acp/session replace the binding and rejects a malformed one', async () => {
     bench = await setup()
     const { agent } = await bench.ctx.agents.create({ sessionId: SessionId('e19'), agentOptions: {} })
 
     agent.session.append('agent-acp/session', { sessionId: 'second' })
-    expect(() => acpSessionOf(bench!.ctx.sessionProjections, agent.session))
-      .toThrow('duplicate agent-acp/session binding')
+    expect(acpSessionOf(bench.ctx.sessionProjections, agent.session)).toBe('second')
 
     // A log whose first binding carries no id is corrupt; the fold rejects it
     // rather than resuming an unaddressable ACP session.

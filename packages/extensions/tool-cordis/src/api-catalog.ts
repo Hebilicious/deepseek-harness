@@ -4134,7 +4134,7 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   },
   {
     name: 'AgentHarness',
-    declaration: 'export interface AgentHarness {\n    readonly id: HarnessId;\n    readonly name: string;\n    readonly description?: string;\n}',
+    declaration: 'export interface AgentHarness {\n    readonly id: HarnessId;\n    readonly name: string;\n    readonly description?: string;\n    readonly modelProvider?: string;\n}',
   },
   {
     name: 'AgentHarnessRegistration',
@@ -5346,7 +5346,7 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   },
   {
     name: 'ModelCatalogFailure',
-    declaration: 'export interface ModelCatalogFailure {\n    readonly id: string;\n    readonly name: string;\n    readonly message: string;\n}',
+    declaration: 'export interface ModelCatalogFailure {\n    readonly id: string;\n    readonly name: string;\n    readonly message: string;\n    readonly harnesses: readonly HarnessId[];\n}',
   },
   {
     name: 'ModelCatalogModel',
@@ -5366,7 +5366,7 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   },
   {
     name: 'ModelProviderGroup',
-    declaration: 'export interface ModelProviderGroup {\n    readonly id: string;\n    readonly name: string;\n    readonly models: readonly ModelCatalogModel[];\n}',
+    declaration: 'export interface ModelProviderGroup {\n    readonly id: string;\n    readonly name: string;\n    readonly models: readonly ModelCatalogModel[];\n    readonly harnesses: readonly HarnessId[];\n}',
   },
   {
     name: 'ModelReasoning',

@@ -7,7 +7,7 @@
 
 import { describe, expect, it, vi } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'
-import AgentRegistry, { agentEvents } from '@deepseek-ai/dsh-agent'
+import AgentRegistry, { HarnessId, agentEvents } from '@deepseek-ai/dsh-agent'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import AttachmentStore from '@deepseek-ai/dsh-attachment'
 import LlmRuntime, { LlmAdapter, ReasoningEffortId } from '@deepseek-ai/dsh-llm'
@@ -98,6 +98,9 @@ async function harness(logged?: {
   await ctx.plugin(SystemPrompt, { personaPrefix: '' })
   await ctx.plugin(LlmRuntime)
   await ctx.plugin(AgentRegistry)
+  // The in-process loop sends requests through the LLM providers below; no
+  // test here creates an agent through it.
+  ctx.agents.registerHarness({ id: HarnessId('dsh'), name: 'DSH Loop', factory: {} as never })
   ctx.llm.registerAdapter(['deepseek-official'], new CatalogAdapter('DeepSeek', [
     { provider: 'deepseek-official', id: 'deepseek-chat', name: 'DeepSeek Chat' },
     { provider: 'deepseek-official', id: 'deepseek-reasoner', name: 'DeepSeek Reasoner', description: 'Reasoning model' },
@@ -364,6 +367,7 @@ describe('Web session model selection', () => {
     expect(catalog.groups).toEqual([{
       id: 'deepseek-official',
       name: 'DeepSeek',
+      harnesses: ['dsh'],
       models: [
         { id: 'deepseek-chat', name: 'DeepSeek Chat', reasoning: REASONING },
         {
@@ -375,12 +379,13 @@ describe('Web session model selection', () => {
       ],
     }])
     expect(catalog.failures).toEqual([
-      { id: 'broken', name: 'Broken Provider', message: 'catalog offline' },
-      { id: 'metadata-broken', name: 'Metadata Broken', message: 'reasoning metadata offline' },
+      { id: 'broken', name: 'Broken Provider', message: 'catalog offline', harnesses: ['dsh'] },
+      { id: 'metadata-broken', name: 'Metadata Broken', message: 'reasoning metadata offline', harnesses: ['dsh'] },
       {
         id: 'duplicate',
         name: 'Duplicate Provider',
         message: 'adapter returned invalid or duplicate model metadata for provider "duplicate"',
+        harnesses: ['dsh'],
       },
     ])
     await ctx.fiber.dispose()
@@ -409,10 +414,11 @@ describe('Web session model selection', () => {
 
     const catalog = await buildModelCatalog(ctx)
     expect(catalog.groups).toEqual(expect.arrayContaining([
-      { id: 'plain', name: 'Plain', models: [{ id: 'plain-model', name: 'Plain Model' }] },
+      { id: 'plain', name: 'Plain', harnesses: ['dsh'], models: [{ id: 'plain-model', name: 'Plain Model' }] },
       {
         id: 'described-reasoning',
         name: 'Described Reasoning',
+        harnesses: ['dsh'],
         models: [{
           id: 'reasoning-model',
           name: 'Reasoning Model',
@@ -423,8 +429,48 @@ describe('Web session model selection', () => {
       },
     ]))
     expect(catalog.failures).toContainEqual({
-      id: 'string-failure', name: 'String Failure', message: 'string catalog failure',
+      id: 'string-failure', name: 'String Failure', message: 'string catalog failure', harnesses: ['dsh'],
     })
+    await ctx.fiber.dispose()
+  })
+
+  it('lists a harness-owned route only under its harness and refuses routes the Session harness cannot drive', async () => {
+    const { ctx, agent, sessionId } = await harness()
+    ctx.llm.registerAdapter(['codex'], new CatalogAdapter('Codex', [
+      { provider: 'codex', id: 'gpt-6-astra', name: 'GPT-6-Astra' },
+    ]))
+    ctx.agents.registerHarness({ id: HarnessId('codex'), name: 'Codex', modelProvider: 'codex', factory: {} as never })
+    agent.session.append('agent/harness', { harness: 'codex' })
+    const saved: unknown[] = []
+    const remote = createSessionTestRemote(ctx, {
+      defaultModelSelection: () => ({ provider: 'deepseek-official', model: 'deepseek-chat' }),
+      saveDefaultModelSelection: (selection) => { saved.push(selection) },
+      cwd: '/tmp',
+    })
+
+    const catalog = await buildModelCatalog(ctx)
+    expect(catalog.groups.map(group => [group.id, group.harnesses])).toEqual([
+      ['deepseek-official', ['dsh']],
+      ['codex', ['codex']],
+    ])
+    expect(catalog.failures.map(failure => failure.harnesses)).toEqual([['dsh'], ['dsh'], ['dsh']])
+
+    expect(await remote.selectModel(request({
+      sessionId, provider: 'deepseek-official', model: 'deepseek-chat',
+    }))).toMatchObject({
+      ok: false,
+      error: {
+        code: 'session/model-unavailable',
+        message: 'provider "deepseek-official" does not serve harness "codex"',
+        details: { provider: 'deepseek-official', model: 'deepseek-chat' },
+      },
+    })
+    expect(expectValue(await remote.selectModel(request({
+      sessionId, provider: 'codex', model: 'gpt-6-astra',
+    }))).selected).toEqual({ provider: 'codex', model: 'gpt-6-astra' })
+    // The deployment default seeds loop Sessions, which cannot call a route
+    // that only lists Codex models.
+    expect(saved).toEqual([])
     await ctx.fiber.dispose()
   })
 

@@ -53,7 +53,7 @@ composer 的模型列表打开时焦点位于过滤输入框：输入即逐字�
 <details>
 <summary>实现细节——点击展开</summary>
 
-两个入口共用一份由 `ModelDirectoryResolver`（`ctx.modelDirectories`）持有的会话级目录：`/model` popupSelect 贡献项（经 `ctx.commandUi` 注册）与 composer 的具名 `conversation.input.model` 位都经 `session.models` 加载会话的建议目录、经 `session.selectModel` 通过同一个 `ModelDirectory` 实例提交，因此任一入口所做的切换正是另一个入口接下来显示的。目录加载与选择共享一个代次计数器，旧响应不会覆盖新结果；连接重置丢弃所有常驻投影，并在显示前重新拉取 Host 恢复的选择。目录按会话惰性解析，随会话作用域一并 dispose（资源释放）；已寻址 subagent 会话不公开任一入口。每份常驻目录都会直接在转发的 `llm/adapters-updated` 与 `settings/document-updated` owner 事件上重拉。
+两个入口共用一份由 `ModelDirectoryResolver`（`ctx.modelDirectories`）持有的会话级目录：`/model` popupSelect 贡献项（经 `ctx.commandUi` 注册）与 composer 的具名 `conversation.input.model` 位都经 `session.models` 加载会话的建议目录、经 `session.selectModel` 通过同一个 `ModelDirectory` 实例提交，因此任一入口所做的切换正是另一个入口接下来显示的。目录加载与选择共享一个代次计数器，旧响应不会覆盖新结果；连接重置丢弃所有常驻投影，并在显示前重新拉取 Host 恢复的选择。目录按会话惰性解析，随会话作用域一并 dispose（资源释放）；已寻址 subagent 会话不公开任一入口。每份常驻目录都会直接在转发的 `llm/adapters-updated` 与 `settings/document-updated` owner 事件上重拉。目录只列出 Host 报告的 `harnesses` 包含该 Session 所记录 harness 的提供方分组与失败项，且不会把所列提供方服务于其他 harness 的选择报告为当前选择；未记录 harness 的 Session 看到全部分组。
 
 composer 模型位的固定是本包唯一的浏览器级状态：`apply` 创建一个固定存储，经注入的 `hooks` 隔间交给每个会话的模型位（绑定为 `useModelPins`），并经 `togglePin` 动词写入，因此各处看到同一节内容，且经 `localStorage` 跨重新加载保留。过滤只存在于菜单的一次打开期间，不进入任何存储。`pins.ts` 拥有存储格式并在读取时校验，因为存储引擎自带的 `persist` 选项会原样装入浏览器中的任意 JSON。
 

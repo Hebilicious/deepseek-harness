@@ -69,9 +69,11 @@ export class AcpCatalogAdapter extends LlmAdapter {
     signal?: AbortSignal,
   ): Promise<LlmResolvedModelInfo> {
     const entry = (await this.catalog(signal)).find(candidate => candidate.id === model)
-    return entry === undefined
-      ? { provider, id: model, name: model }
-      : this.toModelInfo(entry)
+    if (entry === undefined) return { provider, id: model, name: model }
+    return {
+      ...this.toModelInfo(entry),
+      ...entry.reasoning === undefined ? {} : { reasoning: entry.reasoning },
+    }
   }
 
   /**

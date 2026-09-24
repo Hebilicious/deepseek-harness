@@ -165,7 +165,7 @@ Codex owns the request prefix, so dsh can neither guarantee nor measure reuse. W
 
 #### What the model sees
 
-Each instance id is a `ctx.llm` route whose entries come from that instance's `model/list`, including each model's display name and reasoning-effort menu. A picker selection reaches the turn as the `model` and `effort` members of `turn/start`, and the durable `request/header` records what ran.
+Each instance id is a `ctx.llm` route whose entries come from that instance's `model/list`, including each model's display name and reasoning-effort menu. A picker selection reaches the turn as the `model` and `effort` members of `turn/start`, and the durable `request/header` records what ran. The harness registers the instance id as its `modelProvider`, so the picker lists that route only for Sessions the instance runs, and `session.selectModel` refuses any other route for them.
 
 #### Token effect
 

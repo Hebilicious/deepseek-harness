@@ -38,6 +38,7 @@ import type {
   StopReason,
   ToolCallUpdate,
 } from '@agentclientprotocol/sdk'
+import { RequestError } from '@agentclientprotocol/sdk'
 import type { AcpClientConnection, AcpSessionPeer } from './connection.ts'
 import {
   acpAdvertisedModels,
@@ -109,6 +110,14 @@ function optionalString(value: unknown): string | undefined {
 export class AcpAgent extends ExternalAgent implements AcpSessionPeer {
   private acpSessionId: string | undefined
   private detachSession: (() => void) | undefined
+  /** Stops re-applying the session mode when a permission change lands. */
+  private stopModeSync: (() => void) | undefined
+  /**
+   * The latest mode write a permission change queued. Writes run one at a
+   * time and a turn waits for them, so each compares against the mode the
+   * harness last reported instead of sending it twice.
+   */
+  private modeSync: Promise<void> = Promise.resolve()
   private connection: AcpClientConnection | undefined
   private active: ActiveTurn | undefined
   /** The session's reported config options (model/mode mirrors). */
@@ -149,36 +158,114 @@ export class AcpAgent extends ExternalAgent implements AcpSessionPeer {
     this.closeSupported = capabilities?.sessionCapabilities?.close !== undefined
     const cwd = this.session.header.cwd ?? this.driverConfig.cwd ?? process.cwd()
     const existing = acpSessionOf(this.ctx.sessionProjections, this.session)
-    if (existing === undefined) {
-      const response = await connection.request<AcpSessionAdvert & { sessionId?: string }>(
-        'session/new',
-        { cwd, mcpServers: [] },
-        signal,
+    const sessionId = existing === undefined
+      ? await this.startSession(connection, cwd, signal)
+      : await this.loadSession(connection, existing, cwd, signal, capabilities?.loadSession === true)
+    this.acpSessionId = sessionId
+    this.detachSession = this.runtime.registerSession(sessionId, this)
+    // The harness asks for every tool call its mode does not cover, and a
+    // `never` policy rejects each ask, so a permission change made mid-turn
+    // reaches the harness now rather than at the next turn.
+    this.stopModeSync = this.ctx.on('session/event', (session, event) => {
+      const type: string = event.type
+      if (session !== this.session || (type !== 'approval/policy' && type !== 'sandbox/mode')) return
+      this.modeSync = this.modeSync.then(() => this.syncMode())
+    })
+  }
+
+  /**
+   * Apply the session mode the current permission knobs choose, when the
+   * harness advertises it and runs another one. A failure is logged: the next
+   * turn applies the mode again.
+   */
+  private async syncMode(): Promise<void> {
+    const connection = this.connection
+    const sessionId = this.acpSessionId
+    const modeOption = acpModeOption(this.configOptions)
+    const mode = this.chooseMode(modeOption)
+    if (connection === undefined || sessionId === undefined || mode === undefined || mode === modeOption?.currentValue) return
+    try {
+      const response = await connection.request<{ configOptions?: SessionConfigOption[] }>(
+        'session/set_config_option',
+        { sessionId, configId: 'mode', value: mode },
       )
-      const sessionId = response.sessionId
-      if (typeof sessionId !== 'string' || sessionId.length === 0) {
-        throw new AcpProtocolError(`${this.prefix}: session/new returned no session id`)
-      }
-      this.acpSessionId = sessionId
-      this.session.append('agent-acp/session', { sessionId })
-      this.adoptAdvert(response)
-    } else {
-      if (capabilities?.loadSession !== true) {
-        throw new AcpProtocolError(
-          `${this.prefix}: session "${existing}" cannot resume: the agent does not advertise loadSession`,
-        )
-      }
+      this.configOptions = response.configOptions ?? this.configOptions
+    } catch (error: unknown) {
+      this.ctx.logger.warn(`${this.prefix}: mode "${mode}" was not applied after a permission change: ${errorChain(error)}`)
+    }
+  }
+
+  /**
+   * Load the recorded ACP session. An agent may store a session only once it
+   * receives a prompt (Claude Code does), so a restarted harness no longer
+   * knows a session that no turn reached; nothing was delivered to it, so a
+   * fresh ACP session replaces it. A session that ran a turn keeps the failure.
+   * @param connection - the harness's shared connection.
+   * @param existing - the recorded ACP session id.
+   * @param cwd - the session working directory.
+   * @param signal - fused caller/lifecycle cancellation.
+   * @param loadable - whether the agent advertises `loadSession`.
+   * @returns the ACP session id this session is now bound to.
+   */
+  private async loadSession(
+    connection: AcpClientConnection,
+    existing: string,
+    cwd: string,
+    signal: AbortSignal,
+    loadable: boolean,
+  ): Promise<string> {
+    if (!loadable) {
+      throw new AcpProtocolError(
+        `${this.prefix}: session "${existing}" cannot resume: the agent does not advertise loadSession`,
+      )
+    }
+    let response: AcpSessionAdvert
+    try {
       // session/load replays history as session/update notifications; the peer
       // registers only after the response so replayed frames never double-commit.
-      const response = await connection.request<AcpSessionAdvert>(
+      response = await connection.request<AcpSessionAdvert>(
         'session/load',
         { sessionId: existing, cwd, mcpServers: [] },
         signal,
       )
-      this.acpSessionId = existing
-      this.adoptAdvert(response)
+    } catch (error: unknown) {
+      if (!isResourceNotFound(error) || this.ranTurn()) throw error
+      this.ctx.logger.info(`${this.prefix}: session "${existing}" ran no turn and is gone; starting a new one`)
+      return await this.startSession(connection, cwd, signal)
     }
-    this.detachSession = this.runtime.registerSession(this.acpSessionId, this)
+    this.adoptAdvert(response)
+    return existing
+  }
+
+  /**
+   * Create a fresh ACP session and record it as this session's binding.
+   * @param connection - the harness's shared connection.
+   * @param cwd - the session working directory.
+   * @param signal - fused caller/lifecycle cancellation.
+   * @returns the new ACP session id.
+   */
+  private async startSession(connection: AcpClientConnection, cwd: string, signal: AbortSignal): Promise<string> {
+    const response = await connection.request<AcpSessionAdvert & { sessionId?: string }>(
+      'session/new',
+      { cwd, mcpServers: [] },
+      signal,
+    )
+    const sessionId = response.sessionId
+    if (typeof sessionId !== 'string' || sessionId.length === 0) {
+      throw new AcpProtocolError(`${this.prefix}: session/new returned no session id`)
+    }
+    this.session.append('agent-acp/session', { sessionId })
+    this.adoptAdvert(response)
+    return sessionId
+  }
+
+  /**
+   * Whether a turn may have reached the harness, so it holds history a fresh
+   * session would lose. The host registers the turn-boundary fold; without it
+   * the answer is yes.
+   */
+  private ranTurn(): boolean {
+    return this.ctx.sessionProjections.stateOf(this.session, 'turnBoundary')?.lastTurn !== 0
   }
 
   /**
@@ -207,6 +294,8 @@ export class AcpAgent extends ExternalAgent implements AcpSessionPeer {
         this.ctx.logger.warn(`${this.prefix}: session/close for "${sessionId}" failed: ${errorChain(error)}`)
       }
     }
+    this.stopModeSync?.()
+    this.stopModeSync = undefined
     detach?.()
     this.detachSession = undefined
     this.connection = undefined
@@ -473,6 +562,7 @@ export class AcpAgent extends ExternalAgent implements AcpSessionPeer {
     chosenEffort: string | undefined,
     signal: AbortSignal,
   ): Promise<void> {
+    await this.modeSync
     const updates: { configId: string; value: string }[] = []
     const modelOption = acpModelOption(this.configOptions)
     if (chosenModel !== undefined && modelOption === undefined) {
@@ -543,7 +633,8 @@ export class AcpAgent extends ExternalAgent implements AcpSessionPeer {
    * read-only sandbox to the closest non-editing mode (`ask`), and `ask` over
    * a writable sandbox to a tool-executing mode. Real Devin advertises
    * `accept-edits`, `smart`, `ask`, `plan`, and `bypass`; opencode and
-   * mimocode advertise `build` and `plan`. The deployment config `mode`
+   * mimocode advertise `build` and `plan`; the Claude Code adapter advertises
+   * `default`, `acceptEdits`, `plan`, `auto`, and `bypassPermissions`. The deployment config `mode`
    * overrides, and a request no advertised value satisfies returns undefined
    * so {@link warnModeNotApplied} names it.
    */
@@ -555,9 +646,9 @@ export class AcpAgent extends ExternalAgent implements AcpSessionPeer {
     const pick = (candidates: readonly string[]): string | undefined =>
       candidates.find(candidate => values.has(candidate))
     const approval = this.ctx.get('approval')?.overrideOf(this.session) ?? this.driverConfig.approval
-    if (approval === 'never') return pick(['bypass', 'smart'])
+    if (approval === 'never') return pick(['bypass', 'bypassPermissions', 'smart'])
     if (this.readOnlySandbox()) return pick(['ask', 'plan'])
-    return pick(['accept-edits', 'build', 'smart'])
+    return pick(['accept-edits', 'acceptEdits', 'build', 'smart'])
   }
 
   /**
@@ -698,4 +789,12 @@ export class AcpAgent extends ExternalAgent implements AcpSessionPeer {
       return undefined
     }
   }
+}
+
+/** JSON-RPC code ACP agents answer for an unknown session (`RequestError.resourceNotFound`). */
+const RESOURCE_NOT_FOUND = -32002
+
+/** Whether a request failed because the agent does not know the requested resource. */
+function isResourceNotFound(error: unknown): boolean {
+  return error instanceof RequestError && error.code === RESOURCE_NOT_FOUND
 }

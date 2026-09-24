@@ -315,6 +315,8 @@ export class CodexAppServer extends TypertRemoteService {
         id: HarnessId(entry.id),
         name: entry.name,
         ...entry.description === undefined ? {} : { description: entry.description },
+        // The catalog adapter this plugin registers under the same id.
+        modelProvider: entry.id,
       },
       sandbox: entry.sandbox,
       approval: entry.approval,

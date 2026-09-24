@@ -14,6 +14,8 @@ import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import { SessionId } from '@deepseek-ai/dsh-session'
+import { setSandboxMode } from '@deepseek-ai/dsh-sandbox-policy'
+import { setApprovalPolicy } from '@deepseek-ai/dsh-user-approval'
 import { AcpCatalogAdapter, AcpHarness, acpSessionOf } from '../src/index.ts'
 import type { AcpRuntime } from '../src/runtime.ts'
 import {
@@ -246,6 +248,38 @@ describe('agent-acp driver', () => {
     expect((load!.params as { sessionId: string }).sessionId).toBe('acp-fixed-1')
     expect(eventsOf(resumed.agent, 'assistant/message').length).toBeGreaterThanOrEqual(2)
     await resumed.dispose()
+  }, TEST_TIMEOUT)
+
+  it('replaces an ACP session the agent no longer knows when no turn reached it', async () => {
+    bench = await setup({ MOCK_LOAD_SESSION: '1', MOCK_LOAD_UNKNOWN: '1', MOCK_TEXT: 'fresh' })
+    const first = await bench.ctx.agents.create({ sessionId: SessionId('s11b'), agentOptions: {} })
+    const recorded = acpSessionOf(bench.ctx.sessionProjections, first.agent.session)
+    await first.dispose()
+
+    const resumed = await bench.ctx.agents.resume({ resumeSessionId: SessionId('s11b') })
+    const rebound = acpSessionOf(bench.ctx.sessionProjections, resumed.agent.session)
+    expect(rebound).toBeDefined()
+    expect(rebound).not.toBe(recorded)
+    send(resumed.agent, 'first turn')
+    await resumed.agent.whenIdle()
+
+    const calls = await recordedCalls(bench.recordFile)
+    expect(calls.map(call => call.method).filter(method => method.startsWith('session/') && method !== 'session/prompt'))
+      .toEqual(['session/new', 'session/load', 'session/new'])
+    expect(calls.find(call => call.method === 'session/prompt')?.params).toMatchObject({ sessionId: rebound })
+    expect(eventsOf(resumed.agent, 'assistant/message')).toHaveLength(1)
+    await resumed.dispose()
+  }, TEST_TIMEOUT)
+
+  it('keeps the failure for an unknown ACP session that already ran a turn', async () => {
+    bench = await setup({ MOCK_LOAD_SESSION: '1', MOCK_LOAD_UNKNOWN: '1' })
+    const first = await bench.ctx.agents.create({ sessionId: SessionId('s11c'), agentOptions: {} })
+    send(first.agent, 'first turn')
+    await first.agent.whenIdle()
+    await first.dispose()
+
+    await expect(bench.ctx.agents.resume({ resumeSessionId: SessionId('s11c') }))
+      .rejects.toThrow('Resource not found')
   }, TEST_TIMEOUT)
 
   it('rejects resume when the agent does not advertise loadSession', async () => {
@@ -493,6 +527,98 @@ describe('agent-acp driver', () => {
     const sets = (await recordedCalls(bench.recordFile))
       .filter(call => call.method === 'session/set_config_option')
     expect((sets[0]!.params as { value: string }).value).toBe('bypass')
+  }, TEST_TIMEOUT)
+
+  it('maps the permission knobs onto the Claude Code adapter modes', async () => {
+    const claudeModes = JSON.stringify([{
+      id: 'mode',
+      name: 'Mode',
+      type: 'select',
+      currentValue: 'default',
+      options: ['default', 'acceptEdits', 'plan', 'auto', 'bypassPermissions'].map(value => ({ value, name: value })),
+    }])
+    bench = await setup({ MOCK_CONFIG_OPTIONS: claudeModes }, { config: { approval: 'never' } })
+    const never = await bench.ctx.agents.create({ sessionId: SessionId('s23c'), agentOptions: {} })
+    send(never.agent, 'no prompts')
+    await never.agent.whenIdle()
+    const modes = async () => (await recordedCalls(bench!.recordFile))
+      .filter(call => call.method === 'session/set_config_option')
+      .map(call => (call.params as { value: string }).value)
+    expect(await modes()).toEqual(['bypassPermissions'])
+    await teardown(bench)
+
+    bench = await setup({ MOCK_CONFIG_OPTIONS: claudeModes }, { config: { approval: 'ask' } })
+    const ask = await bench.ctx.agents.create({ sessionId: SessionId('s23d'), agentOptions: {} })
+    send(ask.agent, 'edits only')
+    await ask.agent.whenIdle()
+    expect(await modes()).toEqual(['acceptEdits'])
+  }, TEST_TIMEOUT)
+
+  it('applies a permission change to the harness mode without waiting for the next turn', async () => {
+    bench = await setup({
+      MOCK_CONFIG_OPTIONS: JSON.stringify([{
+        id: 'mode',
+        name: 'Mode',
+        type: 'select',
+        currentValue: 'default',
+        options: ['default', 'acceptEdits', 'plan', 'bypassPermissions'].map(value => ({ value, name: value })),
+      }]),
+      MOCK_SET_OPTION_FAIL: 'plan',
+    }, { approval: true, sandboxPolicy: true })
+    const warn = vi.spyOn(bench.ctx.logger, 'warn')
+    const { agent } = await bench.ctx.agents.create({ sessionId: SessionId('s23e'), agentOptions: {} })
+    const other = await bench.ctx.agents.create({ sessionId: SessionId('s23f'), agentOptions: {} })
+    send(agent, 'first')
+    await agent.whenIdle()
+    const acpSession = acpSessionOf(bench.ctx.sessionProjections, agent.session)
+    const modes = async () => (await recordedCalls(bench!.recordFile))
+      .filter(call => call.method === 'session/set_config_option'
+        && (call.params as { sessionId: string }).sessionId === acpSession)
+      .map(call => (call.params as { value: string }).value)
+    expect(await modes()).toEqual(['acceptEdits'])
+
+    // Another session's switch changes only that session's mode.
+    setApprovalPolicy(other.agent.session, 'never')
+    setApprovalPolicy(agent.session, 'never')
+    await vi.waitFor(async () => { expect(await modes()).toEqual(['acceptEdits', 'bypassPermissions']) })
+    // A sandbox change that keeps the chosen mode sends nothing, and a turn
+    // waits for the queued write before comparing modes.
+    setSandboxMode(agent.session, 'danger-full-access')
+    send(agent, 'second')
+    await agent.whenIdle()
+    expect(await modes()).toEqual(['acceptEdits', 'bypassPermissions'])
+
+    // A harness that refuses the mode is reported; the next turn tries again.
+    setApprovalPolicy(agent.session, 'ask')
+    setSandboxMode(agent.session, 'read-only')
+    await vi.waitFor(() => {
+      expect(warn.mock.calls.some(call => String(call[0]).includes('mode "plan" was not applied after a permission change'))).toBe(true)
+    })
+    // Queued writes read the knobs when they run, so both switches ask for `plan`.
+    expect(new Set((await modes()).slice(2))).toEqual(new Set(['plan']))
+    warn.mockRestore()
+  }, TEST_TIMEOUT)
+
+  it('keeps the known options when a mode write answers without them', async () => {
+    bench = await setup({
+      MOCK_CONFIG_OPTIONS: JSON.stringify([{
+        id: 'mode',
+        name: 'Mode',
+        type: 'select',
+        currentValue: 'acceptEdits',
+        options: ['acceptEdits', 'bypassPermissions'].map(value => ({ value, name: value })),
+      }]),
+      MOCK_SET_OPTION_EMPTY: '1',
+    }, { approval: true })
+    const { agent } = await bench.ctx.agents.create({ sessionId: SessionId('s23g'), agentOptions: {} })
+    setApprovalPolicy(agent.session, 'never')
+    await vi.waitFor(async () => {
+      expect((await recordedCalls(bench!.recordFile)).filter(call => call.method === 'session/set_config_option')
+        .map(call => (call.params as { value: string }).value)).toEqual(['bypassPermissions'])
+    })
+    send(agent, 'still bound')
+    await agent.whenIdle()
+    expect(eventsOf(agent, 'turn/end')).toHaveLength(1)
   }, TEST_TIMEOUT)
 
   it('closes the ACP session on dispose and warns when close fails', async () => {

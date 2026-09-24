@@ -7,6 +7,8 @@
  * @module @deepseek-ai/dsh-agent-acp/types
  */
 
+import type { ReasoningEffortId } from '@deepseek-ai/dsh-llm'
+
 declare module '@deepseek-ai/dsh-typert-protocol' {
   interface RemoteErrorDetailsMap {
     /** A harness auth status/logout read failed at the CLI or ACP endpoint. */
@@ -24,6 +26,16 @@ export interface AcpCatalogModel {
   readonly name: string
   /** Cost or capability summary, when the harness reports one. */
   readonly description?: string
+  /** Reasoning efforts the session's reasoning-effort option offers, when it advertises one. */
+  readonly reasoning?: AcpCatalogReasoning
+}
+
+/** One harness's reasoning-effort menu, as its session advertises it. */
+export interface AcpCatalogReasoning {
+  /** Selectable effort values in advert order. */
+  readonly efforts: readonly { readonly id: ReasoningEffortId; readonly name: string; readonly description?: string }[]
+  /** The value the session runs before a selection. */
+  readonly defaultEffort?: ReasoningEffortId
 }
 
 /** One advertised ACP auth method, flattened for the settings panel. */

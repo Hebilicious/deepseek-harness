@@ -59,13 +59,14 @@ describe('AgentRegistry harnesses', () => {
       id: HarnessId('codex'),
       name: 'Codex',
       description: 'OpenAI Codex CLI',
+      modelProvider: 'codex',
       factory: codex.factory,
     })
 
     const mounted = ctx.agents.harnesses()
     expect(mounted).toEqual([
       { id: HarnessId('dsh'), name: 'DeepSeek Harness' },
-      { id: HarnessId('codex'), name: 'Codex', description: 'OpenAI Codex CLI' },
+      { id: HarnessId('codex'), name: 'Codex', description: 'OpenAI Codex CLI', modelProvider: 'codex' },
     ])
     expect(ctx.agents.harnesses()[0]).toBe(mounted[0])
 

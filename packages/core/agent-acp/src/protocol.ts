@@ -18,9 +18,10 @@ import type {
   ToolCallContent,
 } from '@agentclientprotocol/sdk'
 import type { ApprovalOutcome } from '@deepseek-ai/dsh-user-approval'
-import type { ContentBlock } from '@deepseek-ai/dsh-llm'
+import type { ContentBlock, ReasoningEffortId } from '@deepseek-ai/dsh-llm'
+import { brandString } from '@deepseek-ai/dsh-brand'
 import type { TurnEndReason } from '@deepseek-ai/dsh-session'
-import type { AcpCatalogModel } from './types.ts'
+import type { AcpCatalogModel, AcpCatalogReasoning } from './types.ts'
 
 /** Diagnostic prefix for every error this driver raises. */
 export const ACP_PREFIX = 'agent-acp'
@@ -256,18 +257,40 @@ export function acpSelectEntries(option: AcpSelectOption | undefined): AcpSelect
  * Read the model catalog one session advertised. The newer
  * `models.availableModels` list wins when the agent sends one; otherwise the
  * `model` config option's selectable values are the catalog. Both arrive as
- * unvalidated response data.
+ * unvalidated response data. The session's reasoning-effort option, when it
+ * offers values, becomes every model's reasoning menu.
  * @param advert - the `session/new` or `session/load` response fields.
  * @returns catalog entries in advert order.
  */
 export function acpAdvertisedModels(advert: AcpSessionAdvert): AcpCatalogModel[] {
   const listed = advertisedModelList(advert.models)
-  if (listed.length > 0) return listed
-  return acpSelectEntries(acpModelOption(advert.configOptions)).map(entry => ({
-    id: entry.value,
+  const models = listed.length > 0
+    ? listed
+    : acpSelectEntries(acpModelOption(advert.configOptions)).map(entry => ({
+      id: entry.value,
+      name: entry.name,
+      ...entry.description === undefined ? {} : { description: entry.description },
+    }))
+  // ACP advertises one reasoning-effort option per session rather than per
+  // model, so every advertised model carries that menu.
+  const reasoning = advertisedReasoning(advert.configOptions)
+  return reasoning === undefined ? models : models.map(model => ({ ...model, reasoning }))
+}
+
+/** The session's reasoning-effort menu, when it advertises one with values. */
+function advertisedReasoning(options: readonly SessionConfigOption[] | null | undefined): AcpCatalogReasoning | undefined {
+  const option = acpReasoningOption(options)
+  const efforts = acpSelectEntries(option).map(entry => ({
+    id: brandString<ReasoningEffortId>(entry.value),
     name: entry.name,
     ...entry.description === undefined ? {} : { description: entry.description },
   }))
+  if (option === undefined || efforts.length === 0) return undefined
+  const current: unknown = option.currentValue
+  return {
+    efforts,
+    ...typeof current === 'string' && current !== '' ? { defaultEffort: brandString<ReasoningEffortId>(current) } : {},
+  }
 }
 
 /** Find one advertised select option by predicate. */

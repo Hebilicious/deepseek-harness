@@ -132,6 +132,8 @@ export interface ModelProviderGroup {
   readonly id: string
   readonly name: string
   readonly models: readonly ModelCatalogModel[]
+  /** Mounted harnesses whose Sessions may select from this provider. */
+  readonly harnesses: readonly HarnessId[]
 }
 
 /** One provider whose model catalog lookup failed. */
@@ -139,6 +141,8 @@ export interface ModelCatalogFailure {
   readonly id: string
   readonly name: string
   readonly message: string
+  /** Mounted harnesses whose Sessions would select from this provider. */
+  readonly harnesses: readonly HarnessId[]
 }
 
 /** Host-generation model catalog and the default used by unconfigured Sessions. */

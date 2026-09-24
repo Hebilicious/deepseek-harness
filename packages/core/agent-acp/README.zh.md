@@ -97,7 +97,7 @@ kind: "package-reference"
 
 ### 会话绑定
 
-`bind()` 加入所属 harness 的共享连接，并在 dsh 会话发布之前创建 ACP 会话（`session/new`）或加载已记录的那个（`session/load`）。新会话追加带 agent 所发 id 的 `agent-acp/session`；恢复要求 agent 声明 `loadSession`，否则驱动器以 `session "<id>" cannot resume: the agent does not advertise loadSession` 明确失败。peer 只在加载响应之后注册，因此重放的历史绝不会重复提交。会话声明还会重新发布该 harness 的模型目录。
+`bind()` 加入所属 harness 的共享连接，并在 dsh 会话发布之前创建 ACP 会话（`session/new`）或加载已记录的那个（`session/load`）。新会话追加带 agent 所发 id 的 `agent-acp/session`；恢复要求 agent 声明 `loadSession`，否则驱动器以 `session "<id>" cannot resume: the agent does not advertise loadSession` 明确失败。peer 只在加载响应之后注册，因此重放的历史绝不会重复提交。部分 agent 只在会话收到提示后才保存它（Claude Code 即如此），因此 harness 重启后，对从未运行过轮次的会话执行 `session/load` 会得到 `Resource not found`；此时驱动器创建新的 ACP 会话并追加一条替换用的 `agent-acp/session`，因为 agent 并未为它保存任何历史。已运行过轮次的会话仍保留该失败。会话声明还会重新发布该 harness 的模型目录。
 
 ### 轮次驱动
 
@@ -105,11 +105,11 @@ kind: "package-reference"
 
 ### 模型目录
 
-每个 harness id 同时也是一个 `ctx.llm` 提供方路由，由为该 id 注册的 `AcpCatalogAdapter` 服务。目录就是该 harness 自己的会话声明：agent 发送 `models.availableModels` 时用它，否则用 `model` 配置选项的可选值。已绑定会话最近一次非空声明胜出，因此选择器反映正在运行的 harness。在任何会话绑定之前，条目按以下顺序读取目录：先运行配置好的 `catalogArgs` CLI 列表命令，然后在 `probeCatalog` 保持默认值时开启一个一次性会话，发布其声明，并在 agent 声明 `close` 或 `delete` 时关闭该会话，关闭失败时只记录日志并把该会话留给进程生命周期，而不会让读取失败。两者都不声明的 agent 会让该探测会话保留到进程退出，因为不关闭就断开连接会让 harness 认为该会话仍然存活；若不愿为读取目录而启动 harness，可设置 `probeCatalog: false`，此时该路由在真实会话绑定前不列出任何模型。一次读取服务所有调用方，其结果（包括空结果）在 `catalogCacheMs` 内被复用，因此轮询的选择器不会为每个请求启动 harness CLI 或探测会话；会话绑定后会用自身声明取代缓存结果。读取失败会在 `catalogFailureCacheMs` 内被记住，并在该窗口内向每个调用方重新抛出同一失败，因此持续失败的 harness（例如 `PATH` 中缺失的可执行文件）不会被每次轮询重新启动；窗口之后的下一次读取会重试，而会话声明仍然优先于被记住的失败。探测的每一步都受 `cliTimeoutMs` 截止时间约束，因为一次读取是单飞的：某个 harness 启动了却从不回答 `session/new`，否则会让该路由一直挂起到进程结束。被该截止时间终止的读取会在下一次读取时重试，而不会被记住；来自其他调用方的取消同样如此，因为两者都不是对该 harness 的判定。该路由不提供 stream，流请求会明确失败。
+每个 harness id 同时也是一个 `ctx.llm` 提供方路由，由为该 id 注册的 `AcpCatalogAdapter` 服务。目录就是该 harness 自己的会话声明：agent 发送 `models.availableModels` 时用它，否则用 `model` 配置选项的可选值。已声明的推理强度选项（例如 Claude Code 适配器的 `effort`）会成为每个所列模型的强度菜单，并以其当前值作为默认值，因为 ACP 按会话而非按模型声明该选项。已绑定会话最近一次非空声明胜出，因此选择器反映正在运行的 harness。在任何会话绑定之前，条目按以下顺序读取目录：先运行配置好的 `catalogArgs` CLI 列表命令，然后在 `probeCatalog` 保持默认值时开启一个一次性会话，发布其声明，并在 agent 声明 `close` 或 `delete` 时关闭该会话，关闭失败时只记录日志并把该会话留给进程生命周期，而不会让读取失败。两者都不声明的 agent 会让该探测会话保留到进程退出，因为不关闭就断开连接会让 harness 认为该会话仍然存活；若不愿为读取目录而启动 harness，可设置 `probeCatalog: false`，此时该路由在真实会话绑定前不列出任何模型。一次读取服务所有调用方，其结果（包括空结果）在 `catalogCacheMs` 内被复用，因此轮询的选择器不会为每个请求启动 harness CLI 或探测会话；会话绑定后会用自身声明取代缓存结果。读取失败会在 `catalogFailureCacheMs` 内被记住，并在该窗口内向每个调用方重新抛出同一失败，因此持续失败的 harness（例如 `PATH` 中缺失的可执行文件）不会被每次轮询重新启动；窗口之后的下一次读取会重试，而会话声明仍然优先于被记住的失败。探测的每一步都受 `cliTimeoutMs` 截止时间约束，因为一次读取是单飞的：某个 harness 启动了却从不回答 `session/new`，否则会让该路由一直挂起到进程结束。被该截止时间终止的读取会在下一次读取时重试，而不会被记住；来自其他调用方的取消同样如此，因为两者都不是对该 harness 的判定。该路由不提供 stream，流请求会明确失败。每个 harness 把自己的 id 注册为 `modelProvider`，因此选择器只为该 harness 运行的 Session 列出这一路由，`session.selectModel` 也会拒绝这些 Session 选择其他路由。
 
 ### 权限、模式与推理强度
 
-`session/request_permission` 路由进 `ctx.approval`；`form` 模式的 `elicitation/create` 在其 schema 是字符串与枚举字段的扁平对象时路由进 `ctx.userQuestions`。没有审批服务、没有活动轮次或 schema 更复杂时，驱动器选择拒绝或取消而不是猜测。每次提示词之前，驱动器用 `session/set_config_option` 应用会话的选择，且仅限会话声明过的选项：`model` 携带持久选择或部署默认值，已声明的推理强度选项（Devin 的 `thought_level`、Grok Build 的 `reasoning_effort`，或任何属于 ACP `thought_level` 分类的选项）携带会话强度或部署默认值，`mode` 携带 DSH 沙箱与审批旋钮。harness 未声明的请求值会被记录一次日志，并附上实际会运行的值，绝不静默丢弃。
+`session/request_permission` 路由进 `ctx.approval`；`form` 模式的 `elicitation/create` 在其 schema 是字符串与枚举字段的扁平对象时路由进 `ctx.userQuestions`。没有审批服务、没有活动轮次或 schema 更复杂时，驱动器选择拒绝或取消而不是猜测。每次提示词之前，驱动器用 `session/set_config_option` 应用会话的选择，且仅限会话声明过的选项：`model` 携带持久选择或部署默认值，已声明的推理强度选项（Devin 的 `thought_level`、Grok Build 的 `reasoning_effort`，或任何属于 ACP `thought_level` 分类的选项）携带会话强度或部署默认值，`mode` 携带 DSH 沙箱与审批旋钮。harness 未声明的请求值会被记录一次日志，并附上实际会运行的值，绝不静默丢弃。`never` 审批策略选择 harness 的自动批准模式（Devin 上为 `bypass`，Claude Code 适配器上为 `bypassPermissions`），因为 harness 会为其模式未覆盖的每次工具调用请求许可，而 `never` 会拒绝每一次请求；可写的 `ask` 会话选择接受编辑的模式（`accept-edits`、`acceptEdits` 或 `build`）。`approval/policy` 或 `sandbox/mode` 变更会立即重新应用 `mode`，而不是等到下一次提示词，且每次只执行一个写入；写入失败会记录日志，并由下一次提示词重试。
 
 ### 认证操作
 

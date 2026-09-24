@@ -386,7 +386,7 @@ export class AgentRegistry extends Service {
    *   yield it directly — exact identity nests the teardown in order.
    */
   registerHarness(registration: AgentHarnessRegistration): () => void {
-    const { id, name, description, factory } = registration
+    const { id, name, description, modelProvider, factory } = registration
     if (id === '') throw new Error('agent harness id must be a non-empty string')
     const dispose = this.ctx.effect(() => {
       if (this.factories.has(id)) throw new Error(`agent harness "${id}" is already registered`)
@@ -396,7 +396,12 @@ export class AgentRegistry extends Service {
       const target = (factory as AgentFactory & { [symbols.original]?: AgentFactory })[symbols.original] ?? factory
       this.factories.set(id, {
         target,
-        harness: { id, name, ...description === undefined ? {} : { description } },
+        harness: {
+          id,
+          name,
+          ...description === undefined ? {} : { description },
+          ...modelProvider === undefined ? {} : { modelProvider },
+        },
       })
       // Deleting by key cannot remove a later registration: a second
       // registration under this id throws while the slot is present, and this
