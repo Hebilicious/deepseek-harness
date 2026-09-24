@@ -157,17 +157,23 @@ function callingAgent(agent: Agent | undefined, toolName: string): Agent {
 
 /** Register the complete Team tool set in one exact Agent scope. */
 function install(agent: Agent, ctx: Context, config: Required<Config>): () => void {
-  const scoped = agent.ctx
+  // An external harness (Codex, ACP) mints its Agent scope under a factory that
+  // injects neither service, so the scope's property proxy refuses them; `get`
+  // resolves the same services traced to the Agent scope for every harness.
+  const systemPrompt = agent.ctx.get('systemPrompt')
+  const tools = agent.ctx.get('tools')
+  /* v8 ignore next 2 -- this plugin injects both services, so they are active while it runs. */
+  if (systemPrompt === undefined || tools === undefined) throw new Error('Team tools require the systemPrompt and tools services')
   const disposers: Array<() => unknown> = []
   const register = (disposer: () => unknown): void => { disposers.push(disposer) }
   try {
-    register(scoped.systemPrompt.section({
+    register(systemPrompt.section({
       name: 'team:policy',
-      order: scoped.systemPrompt.getSectionOrder('TEAM_POLICY'),
+      order: systemPrompt.getSectionOrder('TEAM_POLICY'),
       text: POLICY,
     }))
 
-    register(scoped.tools.register(defineTool({
+    register(tools.register(defineTool({
       name: 'spawn_teammate',
       description: 'Create one named, durable teammate. Only the Team Lead may call this tool.',
       parameters: {
@@ -198,7 +204,7 @@ function install(agent: Agent, ctx: Context, config: Required<Config>): () => vo
       },
     })))
 
-    register(scoped.tools.register(defineTool({
+    register(tools.register(defineTool({
       name: 'send_message',
       description: 'Send one durable message to another Team member. A running target receives it at the nearest step boundary; an idle target starts a turn; an inactive teammate cold-resumes.',
       parameters: {
@@ -215,7 +221,7 @@ function install(agent: Agent, ctx: Context, config: Required<Config>): () => vo
       },
     })))
 
-    register(scoped.tools.register(defineTool({
+    register(tools.register(defineTool({
       name: 'list_agents',
       description: 'List the Lead and every durable teammate with current runtime status.',
       parameters: {},
@@ -225,7 +231,7 @@ function install(agent: Agent, ctx: Context, config: Required<Config>): () => vo
       },
     })))
 
-    register(scoped.tools.register(defineTool({
+    register(tools.register(defineTool({
       name: 'wait_agent',
       description: 'Wait for the next teammate status, mailbox, or shared-task change after this call starts. This never wakes inactive members and returns noProgress immediately when no other member is running or provisioning. Re-list after wakeup or timeout instead of polling.',
       parameters: {
@@ -260,7 +266,7 @@ function install(agent: Agent, ctx: Context, config: Required<Config>): () => vo
       },
     })))
 
-    register(scoped.tools.register(defineTool({
+    register(tools.register(defineTool({
       name: 'interrupt_agent',
       description: 'Interrupt one teammate\'s current turn while preserving its pending inbox. Team Lead only.',
       parameters: {
@@ -275,7 +281,7 @@ function install(agent: Agent, ctx: Context, config: Required<Config>): () => vo
       },
     })))
 
-    register(scoped.tools.register(defineTool({
+    register(tools.register(defineTool({
       name: 'team_task_create',
       description: 'Create one unowned pending task on the shared Team task board.',
       parameters: {
@@ -299,7 +305,7 @@ function install(agent: Agent, ctx: Context, config: Required<Config>): () => vo
       },
     })))
 
-    register(scoped.tools.register(defineTool({
+    register(tools.register(defineTool({
       name: 'team_task_list',
       description: 'List shared tasks, including readiness, owner, revision, blockers, and write-scope warnings.',
       parameters: {
@@ -331,7 +337,7 @@ function install(agent: Agent, ctx: Context, config: Required<Config>): () => vo
       },
     })))
 
-    register(scoped.tools.register(defineTool({
+    register(tools.register(defineTool({
       name: 'team_task_get',
       description: 'Read the complete latest value of one shared task before changing or executing it.',
       parameters: {
@@ -346,7 +352,7 @@ function install(agent: Agent, ctx: Context, config: Required<Config>): () => vo
       },
     })))
 
-    register(scoped.tools.register(defineTool({
+    register(tools.register(defineTool({
       name: 'team_task_update',
       description: 'Compare-and-set a shared task action using the latest revision from team_task_get or team_task_list.',
       parameters: {

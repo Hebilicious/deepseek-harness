@@ -100,7 +100,7 @@ One `team:policy` section on the member scope states the shared coordination rul
 
 ### Scoped registration and teardown
 
-`maybeInstall` runs for every live Agent and subscribes to `agent/created`; it skips Agents without Team membership. Disposal of an Agent runs the installed disposer, and plugin HMR disposes every installed scope before reinstall. Each disposer unwinds registrations in reverse order, so a failed install cannot leave a partial scope.
+`maybeInstall` runs for every live Agent and subscribes to `agent/created`; it skips Agents without Team membership. Disposal of an Agent runs the installed disposer, and plugin HMR disposes every installed scope before reinstall. Each disposer unwinds registrations in reverse order, so a failed install cannot leave a partial scope. An external harness factory (Codex, ACP) mints Agent scopes that inject neither `systemPrompt` nor `tools`, so installation resolves both with `agent.ctx.get` instead of the scope's property proxy, which would refuse them and fail Session creation.
 
 </details>
 

@@ -5,10 +5,10 @@ import { join } from 'node:path'
 import { Context } from '@deepseek-ai/cordis'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import AgentLoop from '@deepseek-ai/dsh-agent-loop'
-import { mountAgentLoopTestDependencies } from '@deepseek-ai/dsh-agent-loop-testkit'
+import { mountAgentLoopTestDependencies, unsupportedInbox } from '@deepseek-ai/dsh-agent-loop-testkit'
 import { ToolCallId, createUserMessage } from '@deepseek-ai/dsh-llm'
-import { scopeOf } from '@deepseek-ai/dsh-scope'
-import { SessionId, SessionLogOffset } from '@deepseek-ai/dsh-session'
+import { createScope, scopeOf } from '@deepseek-ai/dsh-scope'
+import { Session, SessionId, SessionLogOffset } from '@deepseek-ai/dsh-session'
 import JsonlSessionPersistence from '@deepseek-ai/dsh-session-persistence-jsonl'
 import SessionQueryEngine from '@deepseek-ai/dsh-session-query'
 import SubagentService from '@deepseek-ai/dsh-subagent'
@@ -619,6 +619,26 @@ describe('dsh-tool-team', () => {
       && event.data.source.kind === 'user')).toHaveLength(1)
     await execute(ctx, lead, 'interrupt_agent', { target: 'cold-worker' })
     await vi.waitFor(() => { expect(ctx.agents.get(childId)).toBeUndefined() }, { timeout: 5_000 })
+  })
+
+  it('installs Team tools in an Agent scope minted under a factory that injects neither service', async () => {
+    const { ctx } = await setup([])
+    // An external harness factory (Codex, ACP) mints its Agent scope this way.
+    const factory = await ctx.plugin(() => {})
+    const session = Session.create(SessionId('tool-team-external-lead'))
+    const agent = {
+      id: session.id, session, options: {}, status: 'idle',
+      inbox: unsupportedInbox(), send() {}, followup() {}, inject() {}, cancel() {},
+      steer: () => ({ outcome: Promise.resolve({ status: 'rejected' as const }) }),
+      runMaintenance: task => task(new AbortController().signal),
+      whenIdle: () => Promise.resolve(undefined),
+    } as Omit<Agent, 'ctx'> as Agent
+    Object.assign(agent, { ctx: createScope(factory.ctx, agent).ctx })
+    expect(() => agent.ctx.systemPrompt).toThrow(/without inject/u)
+
+    await ctx.agents.register(agent)
+    expect((await assembly(ctx, agent)).tools.map(schema => schema.name).filter(name => TOOL_NAMES.includes(name)).sort())
+      .toEqual(TOOL_NAMES)
   })
 
   it('fails safely without a calling Agent and has the function-plugin export shape', async () => {
