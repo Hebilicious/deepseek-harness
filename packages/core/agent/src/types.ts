@@ -4,6 +4,7 @@
  * @module @deepseek-ai/dsh-agent/types
  */
 
+import type { ReasoningEffortId } from '@deepseek-ai/dsh-llm/brand'
 import type { UserMessage } from '@deepseek-ai/dsh-llm/types'
 import type { OptionalSessionSeq, SessionId, SessionSeq } from '@deepseek-ai/dsh-session/types'
 import type { TypertContext, TypertLookup } from '@deepseek-ai/dsh-typert-protocol'
@@ -14,6 +15,18 @@ import type { JsonValue } from '@deepseek-ai/dsh-util-values'
 export interface Agent {
   /** Session-backed Agent identity. */
   readonly id: SessionId
+}
+
+/** Merge-extensible agent creation options. Persona belongs to system-prompt sections. */
+export interface AgentOptions {
+  /** Provider route (must have a registered adapter at call time). */
+  provider?: string
+  /** Model id interpreted by the selected provider adapter. */
+  model?: string
+  /** Adapter-owned reasoning effort for the selected provider/model route. */
+  reasoningEffort?: ReasoningEffortId
+  /** Maximum output tokens for each conversation-model request. */
+  maxTokens?: number
 }
 
 declare module '@deepseek-ai/dsh-typert-protocol' {

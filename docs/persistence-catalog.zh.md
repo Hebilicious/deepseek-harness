@@ -25,6 +25,7 @@
 | `event:agent-acp/session` | event | `f00b255540ce6368d8eabf9ef1f7b683a3e16d11af63b89c60542ca8251c708e` | [`event:agent-acp/session`](#persistence-type-eventagent-acpsession) |
 | `event:agent-codex/thread` | event | `2fc23180e2c3b84732b2f63a11ad05f457b45371ffe49e1e4b01bb2f6639713c` | [`event:agent-codex/thread`](#persistence-type-eventagent-codexthread) |
 | `event:agent-preset/selected` | event | `a10c17474eaf2ddab7095a099e0fe3d046fc18e56c3e344fc8894c05ff9ef97b` | [`event:agent-preset/selected`](#persistence-type-eventagent-presetselected) |
+| `event:agent-tool-bridge/exposed` | event | `287f7b8c75a974e229b803985696279da5ed8c202564ff8686ef4b1dab68b8aa` | [`event:agent-tool-bridge/exposed`](#persistence-type-eventagent-tool-bridgeexposed) |
 | `event:agent/harness` | event | `297cac9c86389e3507f2163d2ba3b29717b893c0735df5ef3a2940fcc45f20ae` | [`event:agent/harness`](#persistence-type-eventagentharness) |
 | `event:agent/inbox/spliced` | event | `646c2f1d243d3a78c5bc9305786fb340f5209c48a97e65f2a186cc5195491f3f` | [`event:agent/inbox/spliced`](#persistence-type-eventagentinboxspliced) |
 | `event:approval/asked` | event | `3bfeb47b58606f4661904bc723da612782214c463d01e6d61cd6d6193d7374e1` | [`event:approval/asked`](#persistence-type-eventapprovalasked) |
@@ -177,7 +178,7 @@ export type SessionEvent<T extends SessionEventType = SessionEventType> = {
 'agent/harness': { harness: string }
 ```
 
-来源：[`packages/core/agent/src/harness.ts:29`](../packages/core/agent/src/harness.ts)
+来源：[`packages/core/agent/src/harness.ts:55`](../packages/core/agent/src/harness.ts)
 
 <a id="agentinboxspliced--log-only"></a>
 
@@ -208,10 +209,12 @@ export type SessionEvent<T extends SessionEventType = SessionEventType> = {
 
 ```ts persistence-catalog
 /**
- * The ACP session this session is bound to. Appended once by the driver
- * after `session/new`, inside the pre-publication suffix; resume reads
- * the fold to call `session/load` on the same identity. Log-only: the
- * foreign session id is not model-visible content.
+ * The ACP session this session is bound to. Appended by the driver after
+ * `session/new`, inside the pre-publication suffix; resume reads the fold
+ * to call `session/load` on the same identity. A later record replaces
+ * the binding: resume appends one when the agent no longer knows a
+ * session that no turn reached. Log-only: the foreign session id is not
+ * model-visible content.
  */
 'agent-acp/session': {
   /** Opaque agent-issued ACP session id returned by `session/new`. */
@@ -219,7 +222,7 @@ export type SessionEvent<T extends SessionEventType = SessionEventType> = {
 }
 ```
 
-来源：[`packages/core/agent-acp/src/session-state.ts:22`](../packages/core/agent-acp/src/session-state.ts)
+来源：[`packages/core/agent-acp/src/session-state.ts:24`](../packages/core/agent-acp/src/session-state.ts)
 
 ### `agent-codex/*`
 
@@ -260,6 +263,31 @@ export type SessionEvent<T extends SessionEventType = SessionEventType> = {
 ```
 
 来源：[`packages/preset/agent-presets/src/session.ts:28`](../packages/preset/agent-presets/src/session.ts)
+
+### `agent-tool-bridge/*`
+
+<a id="agent-tool-bridgeexposed--log-only"></a>
+
+#### `agent-tool-bridge/exposed` — log-only
+
+```ts persistence-catalog
+/**
+ * The tool names one `agentToolBridge` endpoint exposed to an external
+ * harness. Appended when the endpoint's credential is committed; the list
+ * is the agent's bridged view at that moment and later `tools/list`
+ * answers may differ as registrations change. A bind that rolls back
+ * after the credential was committed still records the event — a live
+ * credential existed, so the audit record does — and presence does not
+ * imply the harness received the URL. Log-only: the bridge adds no
+ * model-visible surface content of its own.
+ */
+'agent-tool-bridge/exposed': {
+  /** The exposed tool names, in catalog order. */
+  tools: string[]
+}
+```
+
+来源：[`packages/core/agent-tool-bridge/src/index.ts:91`](../packages/core/agent-tool-bridge/src/index.ts)
 
 ### `approval/*`
 
@@ -1015,7 +1043,7 @@ export type SessionEvent<T extends SessionEventType = SessionEventType> = {
 
 类型：[TeamId](subsystems/agent-team.zh.md) · [TeamMemberSnapshot](subsystems/agent-team.zh.md)
 
-来源：[`packages/experimental/agent-team/src/types.ts:221`](../packages/experimental/agent-team/src/types.ts)
+来源：[`packages/experimental/agent-team/src/types.ts:235`](../packages/experimental/agent-team/src/types.ts)
 
 <a id="teammessagedelivered--log-only"></a>
 
@@ -1033,7 +1061,7 @@ export type SessionEvent<T extends SessionEventType = SessionEventType> = {
 
 类型：[TeamId](subsystems/agent-team.zh.md) · [TeamMessageId](subsystems/agent-team.zh.md)
 
-来源：[`packages/experimental/agent-team/src/types.ts:227`](../packages/experimental/agent-team/src/types.ts)
+来源：[`packages/experimental/agent-team/src/types.ts:241`](../packages/experimental/agent-team/src/types.ts)
 
 <a id="teammessagequeued--log-only"></a>
 
@@ -1046,7 +1074,7 @@ export type SessionEvent<T extends SessionEventType = SessionEventType> = {
 
 类型：[TeamId](subsystems/agent-team.zh.md) · [TeamMessageSnapshot](subsystems/agent-team.zh.md)
 
-来源：[`packages/experimental/agent-team/src/types.ts:225`](../packages/experimental/agent-team/src/types.ts)
+来源：[`packages/experimental/agent-team/src/types.ts:239`](../packages/experimental/agent-team/src/types.ts)
 
 <a id="teamtask--log-only"></a>
 
@@ -1059,7 +1087,7 @@ export type SessionEvent<T extends SessionEventType = SessionEventType> = {
 
 类型：[TeamId](subsystems/agent-team.zh.md) · [TeamTaskSnapshot](subsystems/agent-team.zh.md)
 
-来源：[`packages/experimental/agent-team/src/types.ts:223`](../packages/experimental/agent-team/src/types.ts)
+来源：[`packages/experimental/agent-team/src/types.ts:237`](../packages/experimental/agent-team/src/types.ts)
 
 ### `todo/*`
 
@@ -1420,6 +1448,14 @@ SHA-256: `82470020b5bfcb1a843e2aa05602af7d37df99e82d01f015c7c589ba054fd89d`
 SHA-256: `557e148d30b79ee48645850832b30c717d7c3b64641deb5d6133b8b4e91ee0b8`
 
 `"agent-preset/selected"`
+
+<a id="persistence-type-agent-tool-bridgeexposed"></a>
+
+### `"agent-tool-bridge/exposed"`
+
+SHA-256: `17ad61b54b20623b30e122a84180885d56c98bda388d3a86a312c3b21e09bd6e`
+
+`"agent-tool-bridge/exposed"`
 
 <a id="persistence-type-agentharness"></a>
 
@@ -1801,7 +1837,7 @@ SHA-256: `f00b255540ce6368d8eabf9ef1f7b683a3e16d11af63b89c60542ca8251c708e`
 
 SHA-256: `ace5644cd9d89c97b7bf4470f2af5d5165fac85748bb1e3772854985d340b013`
 
-来源：[`packages/core/agent-acp/src/session-state.ts:22`](../packages/core/agent-acp/src/session-state.ts)
+来源：[`packages/core/agent-acp/src/session-state.ts:24`](../packages/core/agent-acp/src/session-state.ts)
 
 | 属性 | 存在性 | 类型 |
 |---|---|---|
@@ -1859,6 +1895,40 @@ SHA-256: `6e52dd55a1d48954ed5464ec46fe34d9eb65f709baabc9561e7a279910b0c406`
 |---|---|---|
 | `agentPreset` | 必需 | `string` |
 
+<a id="persistence-type-eventagent-tool-bridgeexposed"></a>
+
+### `event:agent-tool-bridge/exposed`
+
+SHA-256: `287f7b8c75a974e229b803985696279da5ed8c202564ff8686ef4b1dab68b8aa`
+
+| 属性 | 存在性 | 类型 |
+|---|---|---|
+| `data` | 必需 | [`event:agent-tool-bridge/exposed.data`](#persistence-type-eventagent-tool-bridgeexposeddata) |
+| `ignorable` | 可选 | `true` |
+| `seq` | 必需 | `number` |
+| `time` | 必需 | `number` |
+| `type` | 必需 | `"agent-tool-bridge/exposed"` |
+
+<a id="persistence-type-eventagent-tool-bridgeexposeddata"></a>
+
+### `event:agent-tool-bridge/exposed.data`
+
+SHA-256: `5deffe3f9b577121a63975fd2a747faa1fa44da54097f7e0d5ed74355a01598f`
+
+来源：[`packages/core/agent-tool-bridge/src/index.ts:91`](../packages/core/agent-tool-bridge/src/index.ts)
+
+| 属性 | 存在性 | 类型 |
+|---|---|---|
+| `tools` | 必需 | [`event:agent-tool-bridge/exposed.data.tools`](#persistence-type-eventagent-tool-bridgeexposeddatatools) |
+
+<a id="persistence-type-eventagent-tool-bridgeexposeddatatools"></a>
+
+### `event:agent-tool-bridge/exposed.data.tools`
+
+SHA-256: `93c33d9687613293f8c95d46c4d922fe9ceae83b84c384beff5c3315abe005f2`
+
+`string` 的数组。
+
 <a id="persistence-type-eventagentharness"></a>
 
 ### `event:agent/harness`
@@ -1879,7 +1949,7 @@ SHA-256: `297cac9c86389e3507f2163d2ba3b29717b893c0735df5ef3a2940fcc45f20ae`
 
 SHA-256: `ed94f0559d23718e3a1e05e6e6f8285782a478b19132772dbb0dcf404b9db1a8`
 
-来源：[`packages/core/agent/src/harness.ts:29`](../packages/core/agent/src/harness.ts)
+来源：[`packages/core/agent/src/harness.ts:55`](../packages/core/agent/src/harness.ts)
 
 | 属性 | 存在性 | 类型 |
 |---|---|---|
@@ -1973,7 +2043,7 @@ SHA-256: `0ddab4577db37a3e0d9e3a91761735c8ef6f5629d526ab8ecaeeea19c097c8f8`
 
 SHA-256: `6a4f72e2e179e17b922f2a9392c0e1c8f8c707f32494372454850a3eb184a6e7`
 
-来源：[`packages/api/session-controller/src/types.ts:432`](../packages/api/session-controller/src/types.ts)
+来源：[`packages/api/session-controller/src/types.ts:436`](../packages/api/session-controller/src/types.ts)
 
 | 属性 | 存在性 | 类型 |
 |---|---|---|
@@ -2281,19 +2351,11 @@ SHA-256: `e72269f931559e901e5e8fe1cfcbd0669fb795f43cc038ff39fba62f60403c33`
 
 | 属性 | 存在性 | 类型 |
 |---|---|---|
-| `dt` | 必需 | [`SessionEventEnvelope[42].sourceEventSeqs`](#persistence-type-sessioneventenvelope42sourceeventseqs) |
+| `dt` | 必需 | [`SessionEventEnvelope[43].sourceEventSeqs`](#persistence-type-sessioneventenvelope43sourceeventseqs) |
 | `index` | 必需 | `number` |
-| `texts` | 必需 | [`event:assistant/attempt.data.stream[0][0].texts`](#persistence-type-eventassistantattemptdatastream00texts) |
+| `texts` | 必需 | [`event:agent-tool-bridge/exposed.data.tools`](#persistence-type-eventagent-tool-bridgeexposeddatatools) |
 | `time0` | 必需 | `number` |
 | `type` | 必需 | `"text-chunks"` |
-
-<a id="persistence-type-eventassistantattemptdatastream00texts"></a>
-
-### `event:assistant/attempt.data.stream[0][0].texts`
-
-SHA-256: `93c33d9687613293f8c95d46c4d922fe9ceae83b84c384beff5c3315abe005f2`
-
-`string` 的数组。
 
 <a id="persistence-type-eventassistantattemptdatastream01"></a>
 
@@ -2305,9 +2367,9 @@ SHA-256: `71bb3254ec8f1e491ce63b762a7b5f18709de23aa4e8abcc8b886f4b6ce051dd`
 
 | 属性 | 存在性 | 类型 |
 |---|---|---|
-| `dt` | 必需 | [`SessionEventEnvelope[42].sourceEventSeqs`](#persistence-type-sessioneventenvelope42sourceeventseqs) |
+| `dt` | 必需 | [`SessionEventEnvelope[43].sourceEventSeqs`](#persistence-type-sessioneventenvelope43sourceeventseqs) |
 | `index` | 必需 | `number` |
-| `texts` | 必需 | [`event:assistant/attempt.data.stream[0][0].texts`](#persistence-type-eventassistantattemptdatastream00texts) |
+| `texts` | 必需 | [`event:agent-tool-bridge/exposed.data.tools`](#persistence-type-eventagent-tool-bridgeexposeddatatools) |
 | `time0` | 必需 | `number` |
 | `type` | 必需 | `"reasoning-chunks"` |
 
@@ -2321,8 +2383,8 @@ SHA-256: `3860b4757d512a2869be833acb0faf834335b1b056bf3f83df5474dce95f8fa6`
 
 | 属性 | 存在性 | 类型 |
 |---|---|---|
-| `args` | 必需 | [`event:assistant/attempt.data.stream[0][0].texts`](#persistence-type-eventassistantattemptdatastream00texts) |
-| `dt` | 必需 | [`SessionEventEnvelope[42].sourceEventSeqs`](#persistence-type-sessioneventenvelope42sourceeventseqs) |
+| `args` | 必需 | [`event:agent-tool-bridge/exposed.data.tools`](#persistence-type-eventagent-tool-bridgeexposeddatatools) |
+| `dt` | 必需 | [`SessionEventEnvelope[43].sourceEventSeqs`](#persistence-type-sessioneventenvelope43sourceeventseqs) |
 | `id` | 必需 | `string` |
 | `index` | 必需 | `number` |
 | `name` | 可选 | `string` |
@@ -2680,7 +2742,7 @@ SHA-256: `5dd766ccd1702a1142ad8b4bd44f2242f8e8a6752669ad3de0a5d224329b1438`
 | 属性 | 存在性 | 类型 |
 |---|---|---|
 | `shadowedRange` | 必需 | [`event:compaction/prune.data.shadowedRange`](#persistence-type-eventcompactionprunedatashadowedrange) |
-| `shadowedSeqs` | 必需 | [`SessionEventEnvelope[42].sourceEventSeqs`](#persistence-type-sessioneventenvelope42sourceeventseqs) |
+| `shadowedSeqs` | 必需 | [`SessionEventEnvelope[43].sourceEventSeqs`](#persistence-type-sessioneventenvelope43sourceeventseqs) |
 | `shadowedTokenCount` | 必需 | `number` |
 
 <a id="persistence-type-eventcompactionprunedatashadowedrange"></a>
@@ -2764,7 +2826,7 @@ SHA-256: `9ff2ad8dddb836f75e8f6197fff2371323dfc396c3c6fb667e6e0b42fda79a5c`
 | `provider` | 必需 | `string` |
 | `rawOutput` | 必需 | [`event:agent/inbox/spliced.data.inserted[0].content`](#persistence-type-eventagentinboxspliceddatainserted0content) |
 | `shadowedRange` | 必需 | [`event:compaction/prune.data.shadowedRange`](#persistence-type-eventcompactionprunedatashadowedrange) |
-| `shadowedSeqs` | 必需 | [`SessionEventEnvelope[42].sourceEventSeqs`](#persistence-type-sessioneventenvelope42sourceeventseqs) |
+| `shadowedSeqs` | 必需 | [`SessionEventEnvelope[43].sourceEventSeqs`](#persistence-type-sessioneventenvelope43sourceeventseqs) |
 | `shadowedTokenCount` | 必需 | `number` |
 | `sourceCommandId` | 可选 | `string` |
 | `summary` | 必需 | [`event:agent/inbox/spliced.data.inserted[0].content`](#persistence-type-eventagentinboxspliceddatainserted0content) |
@@ -2784,7 +2846,7 @@ SHA-256: `3aa261c8516b5c955ed12080e6257a56cbe513f6c9f0ac9274c12e96c196ebca`
 | `provider` | 必需 | `string` |
 | `rawOutput` | 可选 | [`event:agent/inbox/spliced.data.inserted[0].content`](#persistence-type-eventagentinboxspliceddatainserted0content) |
 | `shadowedRange` | 必需 | [`event:compaction/prune.data.shadowedRange`](#persistence-type-eventcompactionprunedatashadowedrange) |
-| `shadowedSeqs` | 必需 | [`SessionEventEnvelope[42].sourceEventSeqs`](#persistence-type-sessioneventenvelope42sourceeventseqs) |
+| `shadowedSeqs` | 必需 | [`SessionEventEnvelope[43].sourceEventSeqs`](#persistence-type-sessioneventenvelope43sourceeventseqs) |
 | `shadowedTokenCount` | 必需 | `number` |
 | `sourceCommandId` | 可选 | `string` |
 | `summary` | 必需 | [`event:agent/inbox/spliced.data.inserted[0].content`](#persistence-type-eventagentinboxspliceddatainserted0content) |
@@ -3515,7 +3577,7 @@ SHA-256: `69becfb6b2d3fd5da91518089454cae8ef33f1835637ec44dde35dd077fd4bae`
 | `data` | 必需 | [`event:system/message.data`](#persistence-type-eventsystemmessagedata) |
 | `ignorable` | 可选 | `true` |
 | `seq` | 必需 | `number` |
-| `sourceEventSeqs` | 可选 | [`SessionEventEnvelope[42].sourceEventSeqs`](#persistence-type-sessioneventenvelope42sourceeventseqs) |
+| `sourceEventSeqs` | 可选 | [`SessionEventEnvelope[43].sourceEventSeqs`](#persistence-type-sessioneventenvelope43sourceeventseqs) |
 | `surfaceOp` | 必需 | [`packages/core/session/src/types.ts#SurfaceOp`](#persistence-type-packagescoresessionsrctypestssurfaceop) |
 | `time` | 必需 | `number` |
 | `type` | 必需 | `"system/message"` |
@@ -3570,7 +3632,7 @@ SHA-256: `4fb59762612c3e3ac3a3bd4f84c9c148d3c3893bd422ba2b201cc039fabd49bc`
 
 SHA-256: `b1ebd5cda47d90d980bb05bffc3f970c51537b9aff15b3bc3d639811727741b1`
 
-来源：[`packages/experimental/agent-team/src/types.ts:221`](../packages/experimental/agent-team/src/types.ts)
+来源：[`packages/experimental/agent-team/src/types.ts:235`](../packages/experimental/agent-team/src/types.ts)
 
 | 属性 | 存在性 | 类型 |
 |---|---|---|
@@ -3609,7 +3671,7 @@ SHA-256: `48f9c19417a1abbedfa59f4667bba36b93ac2db407adf5e84cb3ba0de30942cb`
 
 SHA-256: `0bcfaf5566d271028429ac7b562cb59053c9d78b8ae14708c35fac835108d1b1`
 
-来源：[`packages/experimental/agent-team/src/types.ts:227`](../packages/experimental/agent-team/src/types.ts)
+来源：[`packages/experimental/agent-team/src/types.ts:241`](../packages/experimental/agent-team/src/types.ts)
 
 | 属性 | 存在性 | 类型 |
 |---|---|---|
@@ -3638,7 +3700,7 @@ SHA-256: `443371ec07a03a82a0e93d93abca3e70b03bca55ba5b01d507030fcb66e8fbb4`
 
 SHA-256: `0c3f4d2248d9bc9700e2d7253fa71aa9935f5c39af6f11de5727f08cccaf8383`
 
-来源：[`packages/experimental/agent-team/src/types.ts:225`](../packages/experimental/agent-team/src/types.ts)
+来源：[`packages/experimental/agent-team/src/types.ts:239`](../packages/experimental/agent-team/src/types.ts)
 
 | 属性 | 存在性 | 类型 |
 |---|---|---|
@@ -3666,7 +3728,7 @@ SHA-256: `d595ec73b32b016a6055333c67a5d646032b22e672da1d4a09c5b1ae398a093a`
 
 SHA-256: `a40d12070f6f4a124f32fb3cc86e7857554702e32f0eda3080a25c4b9ac9b18c`
 
-来源：[`packages/experimental/agent-team/src/types.ts:223`](../packages/experimental/agent-team/src/types.ts)
+来源：[`packages/experimental/agent-team/src/types.ts:237`](../packages/experimental/agent-team/src/types.ts)
 
 | 属性 | 存在性 | 类型 |
 |---|---|---|
@@ -3859,7 +3921,7 @@ SHA-256: `29af48b840d0cd9e48b6f50bf3b354f8f6340607c5b99220a48e74f60beac9e2`
 | `data` | 必需 | [`event:tool/result.data`](#persistence-type-eventtoolresultdata) |
 | `ignorable` | 可选 | `true` |
 | `seq` | 必需 | `number` |
-| `sourceEventSeqs` | 可选 | [`SessionEventEnvelope[42].sourceEventSeqs`](#persistence-type-sessioneventenvelope42sourceeventseqs) |
+| `sourceEventSeqs` | 可选 | [`SessionEventEnvelope[43].sourceEventSeqs`](#persistence-type-sessioneventenvelope43sourceeventseqs) |
 | `surfaceOp` | 必需 | [`packages/core/session/src/types.ts#SurfaceOp`](#persistence-type-packagescoresessionsrctypestssurfaceop) |
 | `time` | 必需 | `number` |
 | `type` | 必需 | `"tool/result"` |
@@ -4102,7 +4164,7 @@ SHA-256: `314765bdff29c7862fb6ce820f1773563ba3094a680d163ea21180a2591b8578`
 | `data` | 必需 | [`packages/llm/llm/src/message.ts#UserMessage`](#persistence-type-packagesllmllmsrcmessagetsusermessage) |
 | `ignorable` | 可选 | `true` |
 | `seq` | 必需 | `number` |
-| `sourceEventSeqs` | 可选 | [`SessionEventEnvelope[42].sourceEventSeqs`](#persistence-type-sessioneventenvelope42sourceeventseqs) |
+| `sourceEventSeqs` | 可选 | [`SessionEventEnvelope[43].sourceEventSeqs`](#persistence-type-sessioneventenvelope43sourceeventseqs) |
 | `surfaceOp` | 必需 | [`packages/core/session/src/types.ts#SurfaceOp`](#persistence-type-packagescoresessionsrctypestssurfaceop) |
 | `time` | 必需 | `number` |
 | `type` | 必需 | `"user/message"` |
@@ -4647,7 +4709,7 @@ SHA-256: `1cde1bedde79c5e8a56aee9c05c8e0a579cf5bc611deb85b93fa331a16ca978f`
 
 | 属性 | 存在性 | 类型 |
 |---|---|---|
-| `imageIndexes` | 必需 | [`SessionEventEnvelope[42].sourceEventSeqs`](#persistence-type-sessioneventenvelope42sourceeventseqs) |
+| `imageIndexes` | 必需 | [`SessionEventEnvelope[43].sourceEventSeqs`](#persistence-type-sessioneventenvelope43sourceeventseqs) |
 | `seq` | 必需 | `number` |
 
 <a id="persistence-type-packagescontextagent-instructionssrcrendertsagentinstructionchange"></a>
@@ -4784,7 +4846,7 @@ SHA-256: `335e242de1fcc17b6ca920fc420d71bec2d76e53e37955c00948b65ab77f05c5`
 以下类型之一：
 
 - `"append"`
-- [`SessionEventEnvelope[9].surfaceOp[1]`](#persistence-type-sessioneventenvelope9surfaceop1)
+- [`SessionEventEnvelope[10].surfaceOp[1]`](#persistence-type-sessioneventenvelope10surfaceop1)
 
 <a id="persistence-type-packagescoresessionsrctypeststurnendcancelcause"></a>
 
@@ -4829,8 +4891,8 @@ SHA-256: `3cfc3a56502da1f8c6153c2c56657bab4b749056968634dd0991d325ec1c919f`
 
 | 属性 | 存在性 | 类型 |
 |---|---|---|
-| `allow` | 可选 | [`event:assistant/attempt.data.stream[0][0].texts`](#persistence-type-eventassistantattemptdatastream00texts) |
-| `deny` | 可选 | [`event:assistant/attempt.data.stream[0][0].texts`](#persistence-type-eventassistantattemptdatastream00texts) |
+| `allow` | 可选 | [`event:agent-tool-bridge/exposed.data.tools`](#persistence-type-eventagent-tool-bridgeexposeddatatools) |
+| `deny` | 可选 | [`event:agent-tool-bridge/exposed.data.tools`](#persistence-type-eventagent-tool-bridgeexposeddatatools) |
 
 <a id="persistence-type-packagescoretoolssrctypestsptcdispatcheventdata"></a>
 
@@ -4886,7 +4948,7 @@ SHA-256: `b8fc636a2121df9d8423c242e03c9d23b7ab7c6fdce00e45746932c60b730f97`
 
 SHA-256: `dfce5db4aa42b7ebe0bb79eca92553587287e18c06b9eba85cbfb9d332e26acd`
 
-来源：[`packages/experimental/agent-team/src/types.ts:44`](../packages/experimental/agent-team/src/types.ts)
+来源：[`packages/experimental/agent-team/src/types.ts:45`](../packages/experimental/agent-team/src/types.ts)
 
 以下类型之一：
 
@@ -4900,7 +4962,7 @@ SHA-256: `dfce5db4aa42b7ebe0bb79eca92553587287e18c06b9eba85cbfb9d332e26acd`
 
 SHA-256: `6598cd6da253948d6b207c6374a45335804c79b576866d6215649c2d1bc85e25`
 
-来源：[`packages/experimental/agent-team/src/types.ts:47`](../packages/experimental/agent-team/src/types.ts)
+来源：[`packages/experimental/agent-team/src/types.ts:48`](../packages/experimental/agent-team/src/types.ts)
 
 | 属性 | 存在性 | 类型 |
 |---|---|---|
@@ -4918,7 +4980,7 @@ SHA-256: `6598cd6da253948d6b207c6374a45335804c79b576866d6215649c2d1bc85e25`
 
 SHA-256: `5b694f394d5e11609887a3ccfa82844935d49806c37e336b30be2186d649ab94`
 
-来源：[`packages/experimental/agent-team/src/types.ts:106`](../packages/experimental/agent-team/src/types.ts)
+来源：[`packages/experimental/agent-team/src/types.ts:107`](../packages/experimental/agent-team/src/types.ts)
 
 | 属性 | 存在性 | 类型 |
 |---|---|---|
@@ -4934,7 +4996,7 @@ SHA-256: `5b694f394d5e11609887a3ccfa82844935d49806c37e336b30be2186d649ab94`
 
 SHA-256: `2152caf1a71e588e4df2358a806dea24936c1c47131134f01a12939d12cdc0c0`
 
-来源：[`packages/experimental/agent-team/src/types.ts:115`](../packages/experimental/agent-team/src/types.ts)
+来源：[`packages/experimental/agent-team/src/types.ts:116`](../packages/experimental/agent-team/src/types.ts)
 
 | 属性 | 存在性 | 类型 |
 |---|---|---|
@@ -4950,18 +5012,18 @@ SHA-256: `2152caf1a71e588e4df2358a806dea24936c1c47131134f01a12939d12cdc0c0`
 
 SHA-256: `51edec100659da3a9bd9c3f6ba1180f5e64ec9a1585e5057080df45c180bd357`
 
-来源：[`packages/experimental/agent-team/src/types.ts:74`](../packages/experimental/agent-team/src/types.ts)
+来源：[`packages/experimental/agent-team/src/types.ts:75`](../packages/experimental/agent-team/src/types.ts)
 
 | 属性 | 存在性 | 类型 |
 |---|---|---|
-| `blockedBy` | 必需 | [`event:assistant/attempt.data.stream[0][0].texts`](#persistence-type-eventassistantattemptdatastream00texts) |
+| `blockedBy` | 必需 | [`event:agent-tool-bridge/exposed.data.tools`](#persistence-type-eventagent-tool-bridgeexposeddatatools) |
 | `description` | 必需 | `string` |
 | `id` | 必需 | `string` |
 | `ownerId` | 可选 | `string` |
 | `revision` | 必需 | `number` |
 | `status` | 必需 | [`packages/experimental/agent-team/src/types.ts#TeamTaskStatus`](#persistence-type-packagesexperimentalagent-teamsrctypeststeamtaskstatus) |
 | `subject` | 必需 | `string` |
-| `writeScopes` | 必需 | [`event:assistant/attempt.data.stream[0][0].texts`](#persistence-type-eventassistantattemptdatastream00texts) |
+| `writeScopes` | 必需 | [`event:agent-tool-bridge/exposed.data.tools`](#persistence-type-eventagent-tool-bridgeexposeddatatools) |
 
 <a id="persistence-type-packagesexperimentalagent-teamsrctypeststeamtaskstatus"></a>
 
@@ -4969,7 +5031,7 @@ SHA-256: `51edec100659da3a9bd9c3f6ba1180f5e64ec9a1585e5057080df45c180bd357`
 
 SHA-256: `b2d2a01e51341a3bfec809198952c8c830a7899f4cb6ecd3c1dc0b5d9a2af943`
 
-来源：[`packages/experimental/agent-team/src/types.ts:71`](../packages/experimental/agent-team/src/types.ts)
+来源：[`packages/experimental/agent-team/src/types.ts:72`](../packages/experimental/agent-team/src/types.ts)
 
 以下类型之一：
 
@@ -5266,7 +5328,7 @@ SHA-256: `67d5f73ceae82f5265258142ad6cf172de2c1fef93ba551b7f0454e0a93bffe0`
 | `model` | 必需 | `string` |
 | `provider` | 必需 | `string` |
 | `reasoningEffort` | 可选 | `string` |
-| `stop` | 可选 | [`event:assistant/attempt.data.stream[0][0].texts`](#persistence-type-eventassistantattemptdatastream00texts) |
+| `stop` | 可选 | [`event:agent-tool-bridge/exposed.data.tools`](#persistence-type-eventagent-tool-bridgeexposeddatatools) |
 | `temperature` | 可选 | `number` |
 
 <a id="persistence-type-packagesllmllmsrccall-configtsllmcallconfigadapterdefaults"></a>
@@ -5807,7 +5869,7 @@ SHA-256: `9fe0e77a7816b7fdb4b953ec0e2f0cd7bbd22c5de5c3567e612d1b20eb0992e6`
 | 属性 | 存在性 | 类型 |
 |---|---|---|
 | `maxTokens` | 必需 | `number` |
-| `messageSeqs` | 必需 | [`SessionEventEnvelope[42].sourceEventSeqs`](#persistence-type-sessioneventenvelope42sourceeventseqs) |
+| `messageSeqs` | 必需 | [`SessionEventEnvelope[43].sourceEventSeqs`](#persistence-type-sessioneventenvelope43sourceeventseqs) |
 | `messages` | 必需 | [`event:session/title-llm-request.data.messages`](#persistence-type-eventsessiontitle-llm-requestdatamessages) |
 | `route` | 必需 | [`packages/session/session-title/src/types.ts#SessionTitleModelIdentity`](#persistence-type-packagessessionsession-titlesrctypestssessiontitlemodelidentity) |
 | `system` | 必需 | `string` |
@@ -5823,7 +5885,7 @@ SHA-256: `b56f6a885da3dc394c69a3e3cc5c0cfc4da15601b63fda4989eee8f40efc5be4`
 
 | 属性 | 存在性 | 类型 |
 |---|---|---|
-| `messageSeqs` | 必需 | [`SessionEventEnvelope[42].sourceEventSeqs`](#persistence-type-sessioneventenvelope42sourceeventseqs) |
+| `messageSeqs` | 必需 | [`SessionEventEnvelope[43].sourceEventSeqs`](#persistence-type-sessioneventenvelope43sourceeventseqs) |
 | `source` | 必需 | [`packages/session/session-title/src/types.ts#SessionTitleSource`](#persistence-type-packagessessionsession-titlesrctypestssessiontitlesource) |
 | `title` | 必需 | `string` |
 
@@ -6356,8 +6418,8 @@ SHA-256: `5776e5553ff2dfe3f5bc202dbb1e7c9f93e35a531aebb7764c23b2b6153b2ccc`
 
 以下类型之一：
 
-- [`SessionEventEnvelope[42]`](#persistence-type-sessioneventenvelope42)
-- [`SessionEventEnvelope[9]`](#persistence-type-sessioneventenvelope9)
+- [`SessionEventEnvelope[43]`](#persistence-type-sessioneventenvelope43)
+- [`SessionEventEnvelope[10]`](#persistence-type-sessioneventenvelope10)
 - [`SessionEventEnvelope[0]`](#persistence-type-sessioneventenvelope0)
 
 <a id="persistence-type-sessioneventenvelope0"></a>
@@ -6373,32 +6435,9 @@ SHA-256: `e3e77b26f0148755a505f5b8ea843a3be117827d4703bb5754d9dc8ddbef521f`
 | `time` | 必需 | `number` |
 | `type` | 必需 | `string` |
 
-<a id="persistence-type-sessioneventenvelope42"></a>
+<a id="persistence-type-sessioneventenvelope10"></a>
 
-### `SessionEventEnvelope[42]`
-
-SHA-256: `998f22585a5d73ec005365e203f07fc3b3a029e82323fdda3fd7f13b0a9639d0`
-
-| 属性 | 存在性 | 类型 |
-|---|---|---|
-| `ignorable` | 可选 | `true` |
-| `seq` | 必需 | `number` |
-| `sourceEventSeqs` | 可选 | [`SessionEventEnvelope[42].sourceEventSeqs`](#persistence-type-sessioneventenvelope42sourceeventseqs) |
-| `surfaceOp` | 必需 | [`packages/core/session/src/types.ts#SurfaceOp`](#persistence-type-packagescoresessionsrctypestssurfaceop) |
-| `time` | 必需 | `number` |
-| `type` | 必需 | `string` |
-
-<a id="persistence-type-sessioneventenvelope42sourceeventseqs"></a>
-
-### `SessionEventEnvelope[42].sourceEventSeqs`
-
-SHA-256: `5d03ba38734809bcbd2a55221bd938b3b3fc34b49bb686c6113e9e4931e3aa78`
-
-`number` 的数组。
-
-<a id="persistence-type-sessioneventenvelope9"></a>
-
-### `SessionEventEnvelope[9]`
+### `SessionEventEnvelope[10]`
 
 SHA-256: `7af85bf70d4eafce63e739adae38ea85501e68df3a0e22f97f3a0be90fd9e4cb`
 
@@ -6410,9 +6449,9 @@ SHA-256: `7af85bf70d4eafce63e739adae38ea85501e68df3a0e22f97f3a0be90fd9e4cb`
 | `time` | 必需 | `number` |
 | `type` | 必需 | `string` |
 
-<a id="persistence-type-sessioneventenvelope9surfaceop1"></a>
+<a id="persistence-type-sessioneventenvelope10surfaceop1"></a>
 
-### `SessionEventEnvelope[9].surfaceOp[1]`
+### `SessionEventEnvelope[10].surfaceOp[1]`
 
 SHA-256: `bcf0caf62d964b2fcf5404bd5c909cfa9a21c3f3c96e6b7e36d9e33565223825`
 
@@ -6423,6 +6462,29 @@ SHA-256: `bcf0caf62d964b2fcf5404bd5c909cfa9a21c3f3c96e6b7e36d9e33565223825`
 | `endSeq` | 必需 | `number` |
 | `op` | 必需 | `"replace"` |
 | `startSeq` | 必需 | `number` |
+
+<a id="persistence-type-sessioneventenvelope43"></a>
+
+### `SessionEventEnvelope[43]`
+
+SHA-256: `998f22585a5d73ec005365e203f07fc3b3a029e82323fdda3fd7f13b0a9639d0`
+
+| 属性 | 存在性 | 类型 |
+|---|---|---|
+| `ignorable` | 可选 | `true` |
+| `seq` | 必需 | `number` |
+| `sourceEventSeqs` | 可选 | [`SessionEventEnvelope[43].sourceEventSeqs`](#persistence-type-sessioneventenvelope43sourceeventseqs) |
+| `surfaceOp` | 必需 | [`packages/core/session/src/types.ts#SurfaceOp`](#persistence-type-packagescoresessionsrctypestssurfaceop) |
+| `time` | 必需 | `number` |
+| `type` | 必需 | `string` |
+
+<a id="persistence-type-sessioneventenvelope43sourceeventseqs"></a>
+
+### `SessionEventEnvelope[43].sourceEventSeqs`
+
+SHA-256: `5d03ba38734809bcbd2a55221bd938b3b3fc34b49bb686c6113e9e4931e3aa78`
+
+`number` 的数组。
 
 <a id="persistence-type-sessiontitle"></a>
 
@@ -6502,7 +6564,7 @@ SHA-256: `57f3f606ff8b6c84d9c443faace9d1dd10cca0354f37a4f515ef075f7c351b90`
 
 SHA-256: `4cd48f3e5108bd6ebedf7301c3638839b8b2b9db8dbd493974177fbdeb91a01b`
 
-来源：[`packages/api/session-controller/src/types.ts:427`](../packages/api/session-controller/src/types.ts) · [`packages/attachment/attachment/src/brand.ts:6`](../packages/attachment/attachment/src/brand.ts) · [`packages/compaction/compaction/src/brand.ts:4`](../packages/compaction/compaction/src/brand.ts) · [`packages/core/session/src/types.ts:19`](../packages/core/session/src/types.ts) · [`packages/experimental/agent-team/src/types.ts:20`](../packages/experimental/agent-team/src/types.ts) · [`packages/experimental/agent-team/src/types.ts:32`](../packages/experimental/agent-team/src/types.ts) · [`packages/experimental/agent-team/src/types.ts:8`](../packages/experimental/agent-team/src/types.ts) · [`packages/feedback/message-feedback/src/types.ts:14`](../packages/feedback/message-feedback/src/types.ts) · [`packages/goal/goal/src/types.ts:17`](../packages/goal/goal/src/types.ts) · [`packages/interaction/commands/src/brand.ts:31`](../packages/interaction/commands/src/brand.ts) · [`packages/interaction/user-approval/src/types.ts:17`](../packages/interaction/user-approval/src/types.ts) · [`packages/llm/llm-retry/src/brand.ts:4`](../packages/llm/llm-retry/src/brand.ts) · [`packages/llm/llm/src/brand.ts:16`](../packages/llm/llm/src/brand.ts) · [`packages/llm/llm/src/brand.ts:31`](../packages/llm/llm/src/brand.ts) · [`packages/llm/llm/src/brand.ts:43`](../packages/llm/llm/src/brand.ts) · [`packages/llm/llm/src/brand.ts:67`](../packages/llm/llm/src/brand.ts) · [`packages/schedule/schedule/src/types.ts:10`](../packages/schedule/schedule/src/types.ts) · [`packages/session/session-title/src/index.ts:42`](../packages/session/session-title/src/index.ts) · [`packages/session/session-title/src/types.ts:17`](../packages/session/session-title/src/types.ts) · [`packages/webhook/webhook/src/brand.ts:12`](../packages/webhook/webhook/src/brand.ts) · [`packages/webhook/webhook/src/brand.ts:6`](../packages/webhook/webhook/src/brand.ts) · [`packages/webhook/webhook/src/brand.ts:9`](../packages/webhook/webhook/src/brand.ts) · [`packages/workflow/workflow/src/types.ts:13`](../packages/workflow/workflow/src/types.ts)
+来源：[`packages/api/session-controller/src/types.ts:431`](../packages/api/session-controller/src/types.ts) · [`packages/attachment/attachment/src/brand.ts:6`](../packages/attachment/attachment/src/brand.ts) · [`packages/compaction/compaction/src/brand.ts:4`](../packages/compaction/compaction/src/brand.ts) · [`packages/core/session/src/types.ts:19`](../packages/core/session/src/types.ts) · [`packages/experimental/agent-team/src/types.ts:21`](../packages/experimental/agent-team/src/types.ts) · [`packages/experimental/agent-team/src/types.ts:33`](../packages/experimental/agent-team/src/types.ts) · [`packages/experimental/agent-team/src/types.ts:9`](../packages/experimental/agent-team/src/types.ts) · [`packages/feedback/message-feedback/src/types.ts:14`](../packages/feedback/message-feedback/src/types.ts) · [`packages/goal/goal/src/types.ts:17`](../packages/goal/goal/src/types.ts) · [`packages/interaction/commands/src/brand.ts:31`](../packages/interaction/commands/src/brand.ts) · [`packages/interaction/user-approval/src/types.ts:17`](../packages/interaction/user-approval/src/types.ts) · [`packages/llm/llm-retry/src/brand.ts:4`](../packages/llm/llm-retry/src/brand.ts) · [`packages/llm/llm/src/brand.ts:16`](../packages/llm/llm/src/brand.ts) · [`packages/llm/llm/src/brand.ts:31`](../packages/llm/llm/src/brand.ts) · [`packages/llm/llm/src/brand.ts:43`](../packages/llm/llm/src/brand.ts) · [`packages/llm/llm/src/brand.ts:67`](../packages/llm/llm/src/brand.ts) · [`packages/schedule/schedule/src/types.ts:10`](../packages/schedule/schedule/src/types.ts) · [`packages/session/session-title/src/index.ts:42`](../packages/session/session-title/src/index.ts) · [`packages/session/session-title/src/types.ts:17`](../packages/session/session-title/src/types.ts) · [`packages/webhook/webhook/src/brand.ts:12`](../packages/webhook/webhook/src/brand.ts) · [`packages/webhook/webhook/src/brand.ts:6`](../packages/webhook/webhook/src/brand.ts) · [`packages/webhook/webhook/src/brand.ts:9`](../packages/webhook/webhook/src/brand.ts) · [`packages/workflow/workflow/src/types.ts:13`](../packages/workflow/workflow/src/types.ts)
 
 `string`
 

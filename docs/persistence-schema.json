@@ -542,6 +542,80 @@
       }
     },
     {
+      "key": "event:agent-tool-bridge/exposed",
+      "kind": "event",
+      "event": "agent-tool-bridge/exposed",
+      "surface": false,
+      "digest": "287f7b8c75a974e229b803985696279da5ed8c202564ff8686ef4b1dab68b8aa",
+      "schema": {
+        "root": 0,
+        "nodes": [
+          {
+            "kind": "object",
+            "properties": [
+              {
+                "name": "data",
+                "type": 1,
+                "optional": false
+              },
+              {
+                "name": "ignorable",
+                "type": 4,
+                "optional": true
+              },
+              {
+                "name": "seq",
+                "type": 5,
+                "optional": false
+              },
+              {
+                "name": "time",
+                "type": 5,
+                "optional": false
+              },
+              {
+                "name": "type",
+                "type": 6,
+                "optional": false
+              }
+            ],
+            "indices": []
+          },
+          {
+            "kind": "object",
+            "properties": [
+              {
+                "name": "tools",
+                "type": 2,
+                "optional": false
+              }
+            ],
+            "indices": []
+          },
+          {
+            "kind": "array",
+            "element": 3
+          },
+          {
+            "kind": "primitive",
+            "type": "string"
+          },
+          {
+            "kind": "literal",
+            "value": true
+          },
+          {
+            "kind": "primitive",
+            "type": "number"
+          },
+          {
+            "kind": "literal",
+            "value": "agent-tool-bridge/exposed"
+          }
+        ]
+      }
+    },
+    {
       "key": "event:agent/harness",
       "kind": "event",
       "event": "agent/harness",
@@ -15183,7 +15257,7 @@
         "event:team/message/delivered.data"
       ],
       "sources": [
-        "packages/experimental/agent-team/src/types.ts:227"
+        "packages/experimental/agent-team/src/types.ts:241"
       ]
     },
     {
@@ -15546,7 +15620,7 @@
         "event:team/message/queued.data"
       ],
       "sources": [
-        "packages/experimental/agent-team/src/types.ts:225"
+        "packages/experimental/agent-team/src/types.ts:239"
       ]
     },
     {
@@ -18283,6 +18357,20 @@
       "sources": []
     },
     {
+      "digest": "17ad61b54b20623b30e122a84180885d56c98bda388d3a86a312c3b21e09bd6e",
+      "schema": {
+        "root": 0,
+        "nodes": [
+          {
+            "kind": "literal",
+            "value": "agent-tool-bridge/exposed"
+          }
+        ]
+      },
+      "names": [],
+      "sources": []
+    },
+    {
       "digest": "17d1afb770d9941936130996da00dc86782cfef731d8d6526162c301256a4ac3",
       "schema": {
         "root": 0,
@@ -20241,7 +20329,7 @@
         "packages/experimental/agent-team/src/types.ts#TeamMessageSource"
       ],
       "sources": [
-        "packages/experimental/agent-team/src/types.ts:115"
+        "packages/experimental/agent-team/src/types.ts:116"
       ]
     },
     {
@@ -22831,6 +22919,80 @@
       "sources": [
         "packages/llm/llm/src/types.ts:145"
       ]
+    },
+    {
+      "digest": "287f7b8c75a974e229b803985696279da5ed8c202564ff8686ef4b1dab68b8aa",
+      "schema": {
+        "root": 0,
+        "nodes": [
+          {
+            "kind": "object",
+            "properties": [
+              {
+                "name": "data",
+                "type": 1,
+                "optional": false
+              },
+              {
+                "name": "ignorable",
+                "type": 4,
+                "optional": true
+              },
+              {
+                "name": "seq",
+                "type": 5,
+                "optional": false
+              },
+              {
+                "name": "time",
+                "type": 5,
+                "optional": false
+              },
+              {
+                "name": "type",
+                "type": 6,
+                "optional": false
+              }
+            ],
+            "indices": []
+          },
+          {
+            "kind": "object",
+            "properties": [
+              {
+                "name": "tools",
+                "type": 2,
+                "optional": false
+              }
+            ],
+            "indices": []
+          },
+          {
+            "kind": "array",
+            "element": 3
+          },
+          {
+            "kind": "primitive",
+            "type": "string"
+          },
+          {
+            "kind": "literal",
+            "value": true
+          },
+          {
+            "kind": "primitive",
+            "type": "number"
+          },
+          {
+            "kind": "literal",
+            "value": "agent-tool-bridge/exposed"
+          }
+        ]
+      },
+      "names": [
+        "event:agent-tool-bridge/exposed"
+      ],
+      "sources": []
     },
     {
       "digest": "297cac9c86389e3507f2163d2ba3b29717b893c0735df5ef3a2940fcc45f20ae",
@@ -32477,13 +32639,13 @@
         "packages/workflow/workflow/src/types.ts#WorkflowRunId"
       ],
       "sources": [
-        "packages/api/session-controller/src/types.ts:427",
+        "packages/api/session-controller/src/types.ts:431",
         "packages/attachment/attachment/src/brand.ts:6",
         "packages/compaction/compaction/src/brand.ts:4",
         "packages/core/session/src/types.ts:19",
-        "packages/experimental/agent-team/src/types.ts:20",
-        "packages/experimental/agent-team/src/types.ts:32",
-        "packages/experimental/agent-team/src/types.ts:8",
+        "packages/experimental/agent-team/src/types.ts:21",
+        "packages/experimental/agent-team/src/types.ts:33",
+        "packages/experimental/agent-team/src/types.ts:9",
         "packages/feedback/message-feedback/src/types.ts:14",
         "packages/goal/goal/src/types.ts:17",
         "packages/interaction/commands/src/brand.ts:31",
@@ -34193,7 +34355,7 @@
         "packages/experimental/agent-team/src/types.ts#TeamTaskSnapshot"
       ],
       "sources": [
-        "packages/experimental/agent-team/src/types.ts:74"
+        "packages/experimental/agent-team/src/types.ts:75"
       ]
     },
     {
@@ -35274,7 +35436,7 @@
         "packages/experimental/agent-team/src/types.ts#TeamMessageSnapshot"
       ],
       "sources": [
-        "packages/experimental/agent-team/src/types.ts:106"
+        "packages/experimental/agent-team/src/types.ts:107"
       ]
     },
     {
@@ -35440,9 +35602,9 @@
         ]
       },
       "names": [
-        "SessionEventEnvelope[42].sourceEventSeqs",
-        "SessionEventEnvelope[55].sourceEventSeqs",
-        "SessionEventEnvelope[58].sourceEventSeqs",
+        "SessionEventEnvelope[43].sourceEventSeqs",
+        "SessionEventEnvelope[56].sourceEventSeqs",
+        "SessionEventEnvelope[59].sourceEventSeqs",
         "event:assistant/attempt.data.stream[0][0].dt",
         "event:assistant/attempt.data.stream[0][1].dt",
         "event:assistant/attempt.data.stream[0][2].dt",
@@ -35588,6 +35750,39 @@
       ],
       "sources": [
         "packages/compaction/compaction/src/types.ts:82"
+      ]
+    },
+    {
+      "digest": "5deffe3f9b577121a63975fd2a747faa1fa44da54097f7e0d5ed74355a01598f",
+      "schema": {
+        "root": 0,
+        "nodes": [
+          {
+            "kind": "object",
+            "properties": [
+              {
+                "name": "tools",
+                "type": 1,
+                "optional": false
+              }
+            ],
+            "indices": []
+          },
+          {
+            "kind": "array",
+            "element": 2
+          },
+          {
+            "kind": "primitive",
+            "type": "string"
+          }
+        ]
+      },
+      "names": [
+        "event:agent-tool-bridge/exposed.data"
+      ],
+      "sources": [
+        "packages/core/agent-tool-bridge/src/index.ts:91"
       ]
     },
     {
@@ -37443,7 +37638,7 @@
         "packages/experimental/agent-team/src/types.ts#TeamMemberSnapshot"
       ],
       "sources": [
-        "packages/experimental/agent-team/src/types.ts:47"
+        "packages/experimental/agent-team/src/types.ts:48"
       ]
     },
     {
@@ -38425,7 +38620,7 @@
         "event:agent/inbox/spliced.data.inserted[0].source[11]"
       ],
       "sources": [
-        "packages/api/session-controller/src/types.ts:432"
+        "packages/api/session-controller/src/types.ts:436"
       ]
     },
     {
@@ -40687,7 +40882,7 @@
         ]
       },
       "names": [
-        "SessionEventEnvelope[9]"
+        "SessionEventEnvelope[10]"
       ],
       "sources": []
     },
@@ -44613,6 +44808,7 @@
         ]
       },
       "names": [
+        "event:agent-tool-bridge/exposed.data.tools",
         "event:assistant/attempt.data.stream[0][0].texts",
         "event:assistant/attempt.data.stream[0][1].texts",
         "event:assistant/attempt.data.stream[0][2].args",
@@ -44951,9 +45147,9 @@
         ]
       },
       "names": [
-        "SessionEventEnvelope[42]",
-        "SessionEventEnvelope[55]",
-        "SessionEventEnvelope[58]"
+        "SessionEventEnvelope[43]",
+        "SessionEventEnvelope[56]",
+        "SessionEventEnvelope[59]"
       ],
       "sources": []
     },
@@ -47297,7 +47493,7 @@
         "event:team/task.data"
       ],
       "sources": [
-        "packages/experimental/agent-team/src/types.ts:223"
+        "packages/experimental/agent-team/src/types.ts:237"
       ]
     },
     {
@@ -49426,7 +49622,7 @@
         "event:agent-acp/session.data"
       ],
       "sources": [
-        "packages/core/agent-acp/src/session-state.ts:22"
+        "packages/core/agent-acp/src/session-state.ts:24"
       ]
     },
     {
@@ -50091,7 +50287,7 @@
         "event:team/member.data"
       ],
       "sources": [
-        "packages/experimental/agent-team/src/types.ts:221"
+        "packages/experimental/agent-team/src/types.ts:235"
       ]
     },
     {
@@ -50234,7 +50430,7 @@
         "packages/experimental/agent-team/src/types.ts#TeamTaskStatus"
       ],
       "sources": [
-        "packages/experimental/agent-team/src/types.ts:71"
+        "packages/experimental/agent-team/src/types.ts:72"
       ]
     },
     {
@@ -52606,7 +52802,7 @@
         ]
       },
       "names": [
-        "SessionEventEnvelope[9].surfaceOp[1]"
+        "SessionEventEnvelope[10].surfaceOp[1]"
       ],
       "sources": [
         "packages/core/session/src/types.ts:441"
@@ -57340,7 +57536,7 @@
         "packages/experimental/agent-team/src/types.ts#TeamMemberPhase"
       ],
       "sources": [
-        "packages/experimental/agent-team/src/types.ts:44"
+        "packages/experimental/agent-team/src/types.ts:45"
       ]
     },
     {
@@ -59006,7 +59202,6 @@
       },
       "names": [
         "SessionEventEnvelope[0]",
-        "SessionEventEnvelope[10]",
         "SessionEventEnvelope[11]",
         "SessionEventEnvelope[12]",
         "SessionEventEnvelope[13]",
@@ -59041,7 +59236,7 @@
         "SessionEventEnvelope[3]",
         "SessionEventEnvelope[40]",
         "SessionEventEnvelope[41]",
-        "SessionEventEnvelope[43]",
+        "SessionEventEnvelope[42]",
         "SessionEventEnvelope[44]",
         "SessionEventEnvelope[45]",
         "SessionEventEnvelope[46]",
@@ -59054,14 +59249,16 @@
         "SessionEventEnvelope[52]",
         "SessionEventEnvelope[53]",
         "SessionEventEnvelope[54]",
-        "SessionEventEnvelope[56]",
+        "SessionEventEnvelope[55]",
         "SessionEventEnvelope[57]",
-        "SessionEventEnvelope[59]",
+        "SessionEventEnvelope[58]",
         "SessionEventEnvelope[5]",
         "SessionEventEnvelope[60]",
+        "SessionEventEnvelope[61]",
         "SessionEventEnvelope[6]",
         "SessionEventEnvelope[7]",
-        "SessionEventEnvelope[8]"
+        "SessionEventEnvelope[8]",
+        "SessionEventEnvelope[9]"
       ],
       "sources": []
     },
@@ -60108,7 +60305,7 @@
         "event:agent/harness.data"
       ],
       "sources": [
-        "packages/core/agent/src/harness.ts:29"
+        "packages/core/agent/src/harness.ts:55"
       ]
     },
     {

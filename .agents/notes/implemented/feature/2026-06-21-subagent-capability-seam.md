@@ -4,17 +4,16 @@ Status: implemented
 
 English | [中文](2026-06-21-subagent-capability-seam.zh.md)
 
-> The full seam is shipped: the `dsh-subagent` interface and `dsh-tool-subagent` consumer; the two in-process backends (`dsh-subagent-spawn-in-process`, `dsh-subagent-fork-in-process`); the nested-agent snapshot infrastructure ([per-session snapshot replay](../../archived/testing/2026-06-22-subagent-snapshot-replay.md)); and the out-of-process ACP, Codex, and Claude Code backends ([ACP Agent Note](../../archived/feature/2026-06-22-acp-subagent-backend.md), [product-provider Agent Note](2026-08-04-claude-code-and-codex-subagent-backends.md)).
+> The full seam is shipped: the `dsh-subagent` interface and `dsh-tool-subagent` consumer; the in-process backends (`dsh-subagent-spawn-in-process`, `dsh-subagent-fork-in-process`); the process-isolated `dsh-subagent-dsh-sdk` backend; and the nested-agent snapshot infrastructure ([per-session snapshot replay](../../archived/testing/2026-06-22-subagent-snapshot-replay.md)). The earlier one-shot out-of-process ACP, Codex, and Claude Code backends are replaced by harness-selected durable children ([harness-selected children Agent Note](2026-09-24-harness-selected-subagent-children.md), [ACP Agent Note](../../archived/feature/2026-06-22-acp-subagent-backend.md), [product-provider Agent Note](../../archived/feature/2026-08-04-claude-code-and-codex-subagent-backends.md)).
 
 ## Problem
 
 The harness has a long-deferred seam for **subagents** — an agent delegating work to another agent. The intent was sketched in the `Agent`/`AgentLoop` interfaces ([packages/core/agent/src/types.ts](../../../../packages/core/agent/src/types.ts), [packages/core/agent-loop/src/index.ts](../../../../packages/core/agent-loop/src/index.ts)): a creation option referencing a parent agent (fork = seed the child session with the parent's event log; spawn = fresh session), with the child returned as an `Agent` handle so steering and event subscription work uniformly.
 
-**Multiple subagent implementations must coexist at runtime.** A parent may want a cheap in-process child for a scoped subtask AND an isolated out-of-process child (over ACP) in the same session. The transports:
+**Multiple subagent implementations must coexist at runtime.** A parent may want a cheap in-process child for a scoped subtask AND an isolated process-separated child in the same session. The transports:
 
-- **in-process** — a child concrete `Agent` on the same `Context` (the cheapest, and nearly free given the existing agent factory);
-- **ACP** — act as an ACP *client* driving another agent process (which can be another instance of ourselves);
-- **Codex app-server and Claude Code Agent SDK** — current one-shot siblings that apply the same named-provider contract to official product processes ([product-provider Agent Note](2026-08-04-claude-code-and-codex-subagent-backends.md));
+- **in-process** — a child concrete `Agent` on the same `Context` (the cheapest, and nearly free given the existing agent factory); `spawn` additionally selects any mounted agent harness for the child;
+- **dsh SDK** — a process-isolated Harness child driven through the TypeScript SDK;
 - later: **A2A** using the same out-of-process "start a child, prompt it, settle, cancel" shape.
 
 ## Alternatives considered
@@ -34,9 +33,7 @@ A new package group `packages/subagent/`:
 | `@deepseek-ai/dsh-subagent` | interface: `SubagentRuntime` (`ctx.subagents`), `SubagentProvider`, `SubagentRun`, the request/result/capability vocabulary, the `subagent/*` events |
 | `@deepseek-ai/dsh-subagent-spawn-in-process` | implementation: a fresh in-process child via `ctx.agents.create` |
 | `@deepseek-ai/dsh-subagent-fork-in-process` | implementation: an in-process child seeded with a snapshot of the parent's log |
-| `@deepseek-ai/dsh-subagent-acp` | implementation: an ACP client driving a configured child process |
-| `@deepseek-ai/dsh-subagent-codex` | implementation: a one-shot official Codex app-server process |
-| `@deepseek-ai/dsh-subagent-claude-code` | implementation: a one-shot official Claude Code process through the Agent SDK |
+| `@deepseek-ai/dsh-subagent-dsh-sdk` | implementation: a process-isolated Harness child through the TypeScript SDK |
 | `@deepseek-ai/dsh-tool-subagent` | consumer: the model-facing `subagent` tool over `ctx.subagents` |
 
 ### The primitive: async `start → SubagentRun`
@@ -54,11 +51,11 @@ Fresh and forked children are separate providers, not a request flag. `dsh-subag
 
 ### Child isolation and the parent log
 
-Each in-process subagent runs in its **own `Session`** (own id, `parentSession` lineage), persisted independently. Remote ACP and one-shot product providers instead mint a parent-scoped lifecycle id and expose no local `Agent` or child `Session`; their internal state remains in the remote process. Across both forms, the parent's log records only the spawn `tool/call` and its `tool/result` (the child's final output, or a failed result with optional provider diagnostic), while child steps and tool calls remain outside the parent log.
+Each in-process subagent runs in its **own `Session`** (own id, `parentSession` lineage), persisted independently; harness selection only changes which harness drives that child Session. A process-isolated SDK child keeps its `Session` in the child process. Across both forms, the parent's log records only the spawn `tool/call` and its `tool/result` (the child's final output, or a failed result with optional provider diagnostic), while child steps and tool calls remain outside the parent log.
 
 ### Synchronous collect (first cut)
 
-`dsh-tool-subagent` passes its execution signal to `start()`, awaits the child result, and disposes the run before reporting. Non-completed outcomes become error results rather than successful partial output; they present the optional safe diagnostic owned by the [non-interactive permissions decision](2026-08-15-product-subagent-noninteractive-permissions.md) separately from partial assistant text. Independent result and disposal rejections remain independently observable.
+`dsh-tool-subagent` passes its execution signal to `start()`, awaits the child result, and disposes the run before reporting. Non-completed outcomes become error results rather than successful partial output; they present the optional safe diagnostic owned by the [non-interactive permissions decision](../../archived/feature/2026-08-15-product-subagent-noninteractive-permissions.md) separately from partial assistant text. Independent result and disposal rejections remain independently observable.
 
 ### Transport provider selection is config, not model-facing
 
@@ -70,7 +67,6 @@ Registry and tool tests replace only the nondeterministic child with a package-l
 
 ## Consequences
 
-- **Recursion.** Without a bound, an in-process child can see the delegation tool and recurse. The in-process backends implement the optional absolute depth limit and scoped live-global `toolFilter`; ACP advertises both capabilities off and rejects such a request. The [subagent composition-controls Agent Note](2026-07-12-subagent-persona-tool-filter-and-depth.md) owns their exact semantics and security limits.
+- **Recursion.** Without a bound, an in-process child can see the delegation tool and recurse. The in-process backends implement the optional absolute depth limit and scoped live-global `toolFilter`; the DSH SDK backend advertises both capabilities off and rejects such a request. The [subagent composition-controls Agent Note](2026-07-12-subagent-persona-tool-filter-and-depth.md) owns their exact semantics and security limits.
 - **Blocking the parent turn.** Foreground collection holds the parent's step open for the child's full duration. Background delegation uses the shared `ctx.jobs` runtime and generic `job_*` tools, the same collection mechanism as background bash; the subagent seam itself remains task-agnostic.
 - **Live progress.** Only lifecycle + the final result surface; a per-chunk child→parent update stream is deferred with the background redesign.
-- **ACP client surface.** Proxying `fs`/`terminal` from the ACP child back to the parent (a shared-workspace mode) is future work; the backend advertises neither capability, so the child self-serves in its own process.

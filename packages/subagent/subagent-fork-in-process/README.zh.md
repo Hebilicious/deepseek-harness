@@ -80,7 +80,7 @@ kind: "package-reference"
 
 ### 运行流程
 
-`start` 时，从父级事件日志中截取截至最后一个 `turn/end` 的前缀；共享驱动器随后以该初始内容创建子 agent，应用相同的 persona、工具过滤器与结构化输出设置，驱动一项任务，读取子 agent 自身的最终输出，并执行 dispose（资源释放）以等待所有工作完全停稳。该提供方声明 `agentOptions`，以及与 spawn 相同的输出、深度、过滤与 persona 能力。`prepareContinuable` 在创建时只捕获一次前缀，因为该前缀会成为子 agent 自身持久保存的 transcript（文本记录）的一部分。
+`start` 时，从父级事件日志中截取截至最后一个 `turn/end` 的前缀；共享驱动器随后以该初始内容创建子 agent，应用相同的 persona、工具过滤器与结构化输出设置，驱动一项任务，读取子 agent 自身的最终输出，并执行 dispose（资源释放）以等待所有工作完全停稳。该提供方声明 `agentOptions`，以及与 spawn 相同的输出、深度、过滤与 persona 能力，但不声明 `harness`：种子数据是父级持久日志的前缀，因此子 agent 必须在拥有该日志的 harness 下运行。`prepareContinuable` 在创建时只捕获一次前缀，因为该前缀会成为子 agent 自身持久保存的 transcript（文本记录）的一部分。
 
 ### 生命周期绑定
 

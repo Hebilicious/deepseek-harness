@@ -238,6 +238,17 @@ const install: InvariantInstaller = Object.assign((ctx: Context, fail: Invariant
     if (eventName !== 'session/event') return
     const [session, event] = args as [Session, SessionEvent]
     const trace = traceFor(session)
+    // A deferred-publication entry appends without dispatching: held events
+    // never reach this listener, so fold the committed log up to the last
+    // observed seq before staging the dispatching event's transition. The
+    // dispatch fires before the log push, so the snapshot never contains it.
+    if (event.seq > trace.lastSeq + 1) {
+      // oxlint-disable-next-line typescript/no-deprecated -- Existing Session history read; migration deferred.
+      for (const missed of session.snapshotEvents()) {
+        if (missed.seq <= trace.lastSeq) continue
+        applyTransition(trace, validateEvent(trace, missed, fail))
+      }
+    }
     const transition = validateEvent(trace, event, fail)
     // A later dispatch listener may veto. Validation is pure, so abandoning
     // this weakly keyed transition does not advance or retain the session.

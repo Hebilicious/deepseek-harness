@@ -9,8 +9,8 @@ import type { SubprocessHandle, SubprocessOutcome } from '@deepseek-ai/dsh-subpr
  * is defined only in terms of the seam's verbs: a fake records which verb ran at
  * which tier and when the escalation tier was reached, which a real child's
  * wall-clock behavior cannot show. The same function runs against real
- * short-lived node children in subagent-acp's suite, through its
- * `disposeAcpChild` name.
+ * short-lived node children in agent-external's suite, through
+ * `ManagedProcess.dispose`.
  */
 
 interface FakeScript {

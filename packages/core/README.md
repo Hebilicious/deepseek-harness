@@ -35,6 +35,7 @@ Use the core packages to build or extend an agent that records durable session h
 | [`agent-external/`](agent-external/README.md) | The shared driver base and lifecycle host every agent driver mounts | no ctx key |
 | [`agent-codex/`](agent-codex/README.md) | Codex session driver over the `codex app-server` protocol | `ctx.codexAppServer` |
 | [`agent-acp/`](agent-acp/README.md) | Devin session driver over the Agent Client Protocol | `ctx.acpHarness` |
+| [`agent-tool-bridge/`](agent-tool-bridge/README.md) | Exposes an agent's scoped tools to external harnesses through a loopback MCP endpoint | `ctx.agentToolBridge` |
 
 `scope` supplies the shared scoping primitive; `agent` owns the public `Agent` contract, while `agent-external` carries the phase machine and create/resume transaction every driver mounts and `agent-loop`, `agent-codex`, and `agent-acp` are the drivers, so extension plugins depend on `agent` and the driver stays swappable. `agent-default-model` owns the deployment selection an entry point applies when a session has none of its own. Runnable compositions live under [`packages/bundle`](../bundle/README.md); this group owns only the swappable spine pieces.
 

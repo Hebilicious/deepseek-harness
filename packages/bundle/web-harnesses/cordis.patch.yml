@@ -31,6 +31,35 @@
     timeoutMs: 60000
 
 - insert:
+    # The bridge serves the joining preset's tools to external harnesses over
+    # one authenticated loopback MCP endpoint per agent. The exclude list drops
+    # what every harness already has natively (filesystem, shell, search, task
+    # list) and what only the in-process loop can drive (PTC transport,
+    # plan-mode exit, subagent fork — a fork seeds a dsh
+    # loop's history, meaningless to a harness-owned loop). Delegation,
+    # messaging, jobs, goals, schedules, questions, and web tools stay bridged.
+    - id: agent-tool-bridge
+      name: '@deepseek-ai/dsh-agent-tool-bridge'
+      config:
+        exclude:
+          # Filesystem and shell: every harness ships these natively.
+          - read
+          - write
+          - edit
+          - read_image
+          - glob
+          - grep
+          - bash
+          - pwsh
+          # Task list and plan-mode exit are harness-native affordances.
+          - todo_write
+          - exit_plan_mode
+          # Loop internals only the in-process driver can act on.
+          - run_code
+          # A fork seeds a dsh-loop child with this session's history; an
+          # external loop cannot honor that contract.
+          - subagent_fork
+
     # One app-server per configured instance; this profile mounts one Codex
     # account, and every Codex session binds its own thread on that process.
     # `codexHome` owns auth, config.toml, MCP, and hooks.

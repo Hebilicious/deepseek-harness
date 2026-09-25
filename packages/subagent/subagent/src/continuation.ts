@@ -15,6 +15,7 @@
 
 import { randomUUID } from 'node:crypto'
 import type { Context } from '@deepseek-ai/cordis'
+import { recordedHarness } from '@deepseek-ai/dsh-agent'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import { brandString } from '@deepseek-ai/dsh-brand'
 import { ReasoningEffortId, contentHasImage, createUserMessage } from '@deepseek-ai/dsh-llm'
@@ -24,10 +25,13 @@ import type { SessionId } from '@deepseek-ai/dsh-session'
 import type { SessionPersistence } from '@deepseek-ai/dsh-session-persistence'
 import type { SessionObservation, SessionQueryEngine } from '@deepseek-ai/dsh-session-query'
 import {
+  assertSeededChildHarness,
   childSessionMeta,
   captureDelegatedPolicyOverrides,
+  dropCrossHarnessInheritedRoute,
   resolveChildAgentOptions,
   resolveChildDepth,
+  resolveChildHarness,
 } from './child-agent.ts'
 import {
   ContinuableActivationRegistry,
@@ -113,6 +117,18 @@ export class SubagentContinuationManager {
     // Snapshot before any await: invalid descriptor JSON rejects the call
     // before a child exists, and the detached value is what reaches the log.
     const agentOptions = resolveChildAgentOptions(parent, request.agentOptions, childDepth)
+    // An explicit cross-harness choice makes the parent's inherited route
+    // unservable; an unnamed route falls back to the chosen harness's default.
+    dropCrossHarnessInheritedRoute(this.ctx, parent, request.harness, agentOptions, request.agentOptions)
+    // The request's explicit harness wins; omission keeps the harness owning
+    // the parent's session. Loop-only composition and unserved model routes
+    // reject here, before any child exists.
+    const childHarness = resolveChildHarness(this.ctx, parent, request.harness, {
+      agentOptions,
+      persona: request.persona,
+      toolFilter: request.toolFilter,
+      outputSchema: undefined,
+    })
     const agentProvider = agentOptions.provider
     const agentModel = agentOptions.model
     const agentReasoningEffort = agentOptions.reasoningEffort
@@ -145,6 +161,9 @@ export class SubagentContinuationManager {
 
       const inheritedEventCount = SessionLogOffset(prepared.seed?.length ?? 0)
       const seed = prepared.seed
+      // A provider-contributed seed is a parent-log prefix: only the harness
+      // owning that log can continue it.
+      assertSeededChildHarness(this.ctx, parent, seed, request.harness)
       const messageId = await this.activations.locks.run(childId, async () => {
         spec.signal.throwIfAborted()
         this.activations.assertAdmitting(parent)
@@ -169,6 +188,7 @@ export class SubagentContinuationManager {
             delegatedPolicies,
             descriptor,
           },
+          harness: childHarness.harness,
           agentOptions,
           composition: { persona: request.persona, toolFilter: request.toolFilter },
           signal: spec.signal,
@@ -431,12 +451,23 @@ export class SubagentContinuationManager {
         'NOT_RESUMABLE',
       )
     }
+    // The child's own recorded harness owns the resume, not the parent's: a
+    // child created under a different harness keeps running under it.
+    const childHarness = recordedHarness(source.events)
+    if (childHarness !== undefined
+      && !this.ctx.agents.harnesses().some(entry => entry.id === childHarness)) {
+      throw new SubagentError(
+        `subagent "${childId}" runs agent harness "${childHarness}", which is not mounted`,
+        'NOT_RESUMABLE',
+      )
+    }
     let activation: Activation
     try {
       activation = await this.activations.materialize({
         childId,
         provider: descriptor.provider,
         parent,
+        harness: childHarness,
         agentOptions: {
           ...descriptor.agentProvider !== undefined ? { provider: descriptor.agentProvider } : {},
           ...descriptor.agentModel !== undefined ? { model: descriptor.agentModel } : {},
@@ -512,6 +543,10 @@ export class SubagentContinuationManager {
   ): Promise<void> {
     const { provider, model } = agent.options
     if (provider === undefined || model === undefined) return
+    // A harness declaring `modelProvider` owns that route alone, so the llm
+    // registry has no model information for it and cannot adjudicate its
+    // modalities.
+    if (this.ctx.agents.harnesses().some(harness => harness.modelProvider === provider)) return
     const llm = this.ctx.get('llm')
     /* v8 ignore next -- without an LLM registry, delivery defers to projection. */
     if (llm === undefined) return

@@ -12,8 +12,9 @@
 import { errorChain } from '@deepseek-ai/dsh-llm'
 import type { UserMessage } from '@deepseek-ai/dsh-llm'
 import type { TurnEndReason } from '@deepseek-ai/dsh-session'
+import type {} from '@deepseek-ai/dsh-agent-tool-bridge'
 import { ManagedAgent, type RunningAgentPhase, type TurnBodyOutcome } from './base.ts'
-import { ExternalTurnProjector, type RouteLogState } from './projector.ts'
+import { ExternalTurnProjector, type BridgedToolCalls, type RouteLogState } from './projector.ts'
 
 /** One live harness-turn boundary handed to the driver. */
 export interface ExternalTurnDrive {
@@ -62,9 +63,9 @@ export interface ExternalModelSelection {
  * inbox, turn/step events, live notifications, cancellation — comes from
  * {@link ManagedAgent}.
  *
- * The host calls {@link bind} after caller setup and before publication, and
- * {@link unbind} during teardown after driver quiescence; neither is part of
- * the public {@link Agent} surface.
+ * The host calls {@link bind} after caller setup and the agent's creation
+ * announcement, and {@link unbind} during teardown after driver quiescence;
+ * neither is part of the public {@link Agent} surface.
  */
 export abstract class ExternalAgent extends ManagedAgent {
   /** Live drive window for mid-turn steering, or undefined between turns. */
@@ -126,6 +127,7 @@ export abstract class ExternalAgent extends ManagedAgent {
         () => ++this.assistantAttemptCounter,
         () => ++this.assistantStreamRevision,
         this.routeState,
+        this.bridgedToolCalls(),
       )
       const session = this.session
       const drive: ExternalTurnDrive = {
@@ -213,14 +215,33 @@ export abstract class ExternalAgent extends ManagedAgent {
     }
   }
 
+  /**
+   * The projector-facing lookup for this agent's bridged tool calls, or
+   * undefined when the deployment mounts no `agentToolBridge` service. The
+   * bridge keeps each settled bridged execution's `meta`, so a
+   * harness-reported `mcp__<server>__<tool>` pair logs under the dsh tool
+   * name with its presentation payload.
+   * @returns the lookup closing over this agent, or undefined.
+   */
+  private bridgedToolCalls(): BridgedToolCalls | undefined {
+    const bridge = this.ctx.get('agentToolBridge')
+    if (bridge === undefined) return undefined
+    return {
+      toolName: reported => bridge.bridgedToolName(this, reported),
+      completion: (tool, argumentsJson) => bridge.takeCompletion(this, tool, argumentsJson),
+    }
+  }
+
   // ---- the driver's harness surface ----
 
   /**
    * Bind the harness-side conversation to this session — Codex `thread/start`
-   * or `thread/resume`, ACP `session/new` or `session/load`. Runs unpublished:
-   * a rejected handshake rolls the whole creation transaction back. Plugin-owned
-   * durable records (the foreign thread/session id) append to `this.session`
-   * here and flush with the pre-publication suffix.
+   * or `thread/resume`, ACP `session/new` or `session/load`. Runs after the
+   * agent's `agent/created` announcement so scoped tool installs are visible to
+   * the handshake's tool snapshot, with the session still unpublished: a
+   * rejected handshake rolls the creation transaction back and disposes the
+   * announced agent. Plugin-owned durable records (the foreign thread/session
+   * id) append to `this.session` here and flush with the pre-publication suffix.
    * @param signal - fused caller/lifecycle cancellation.
    */
   abstract override bind(signal: AbortSignal): Promise<void>

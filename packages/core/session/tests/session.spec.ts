@@ -1321,6 +1321,68 @@ describe('SessionStore', () => {
     expect(ctx.sessions.get(SessionId('lifecycle'))).toBeUndefined()
   })
 
+  it('holds a deferred entry\'s appends silent until publish commits it', async () => {
+    const ctx = new Context()
+    await ctx.plugin(SessionStore)
+    const events: SessionEvent[] = []
+    ctx.on('session/event', (_session, event) => void events.push(event))
+
+    const session = ctx.sessions.prepare(SessionId('deferred'), {
+      seed: [{ type: 'model/selection', seq: SessionSeq(0), time: 1, data: { provider: 'p0', model: 'm0' } }],
+    })
+    const detach = ctx.sessions.enter(session, { deferPublication: true })
+    expect(ctx.sessions.get(SessionId('deferred'))).toBe(session)
+
+    // A deferred entry cannot publish before its creation announcement runs.
+    expect(() => { ctx.sessions.publish(session) }).toThrow(/before its creation announcement/)
+
+    // A reentrant publish inside the announcement dispatch is likewise refused.
+    let reentrantError = ''
+    ctx.on('session/created', (created) => {
+      try {
+        ctx.sessions.publish(created)
+      } catch (error: unknown) {
+        reentrantError = String(error)
+      }
+    })
+    ctx.sessions.announce(session)
+    expect(reentrantError).toMatch(/before its creation announcement/)
+    // The pre-commit window appends durably without emitting session/event.
+    session.append('turn/start', { turn: 1 })
+    expect(session.snapshotEvents()).toHaveLength(3)
+    expect(events).toEqual([])
+
+    ctx.sessions.publish(session)
+    // Publish is single-shot on a deferred entry.
+    expect(() => { ctx.sessions.publish(session) }).toThrow(/already published/)
+    // An entry that was never deferred is already published at enter.
+    const live = ctx.sessions.create()
+    expect(() => { ctx.sessions.publish(live) }).toThrow(/already published/)
+
+    session.append('turn/end', { turn: 1, reason: { kind: 'completed' } })
+    expect(events.map(event => event.type)).toEqual(['turn/end'])
+    detach()
+  })
+
+  it('pairs session/disposed when a deferred entry rolls back before publish', async () => {
+    const ctx = new Context()
+    await ctx.plugin(SessionStore)
+    const lifecycle: string[] = []
+    ctx.on('session/created', () => void lifecycle.push('created'))
+    ctx.on('session/event', (_session, event) => void lifecycle.push(`event:${event.type}`))
+    ctx.on('session/disposed', () => void lifecycle.push('disposed'))
+
+    const session = ctx.sessions.prepare(SessionId('rolled-back'))
+    const detach = ctx.sessions.enter(session, { deferPublication: true })
+    ctx.sessions.announce(session)
+    session.append('turn/start', { turn: 1 })
+
+    detach()
+    // The held append never broadcast; the announced entry still pairs disposal.
+    expect(lifecycle).toEqual(['created', 'disposed'])
+    expect(ctx.sessions.get(SessionId('rolled-back'))).toBeUndefined()
+  })
+
   it('prevents simultaneous attachment of one session object to two stores', async () => {
     const firstCtx = new Context()
     const secondCtx = new Context()

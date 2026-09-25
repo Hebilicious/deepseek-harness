@@ -148,8 +148,6 @@ describe('web e2e: settings modal and General preferences', () => {
     const instanceRows = [
       ['tool-subagent', '已启用'],
       ['tool-subagent-fork', '已启用'],
-      ['tool-subagent-codex', '已停用'],
-      ['tool-subagent-claude-code', '已停用'],
     ] as const
     for (const [entryId, status] of instanceRows) {
       const row = dialog.locator(`[data-plugin-scope="preset"] [data-plugin-entry="${entryId}"]`)
@@ -167,10 +165,10 @@ describe('web e2e: settings modal and General preferences', () => {
     )
     await compareOrRefreshGolden(PLUGIN_INSTANCES_EXPECTED, instancesSnapshot, MODE)
     await dialog.getByRole('button', {
-      name: 'tool-subagent, tool-subagent-claude-code, 已停用',
+      name: 'tool-subagent, tool-subagent-fork, 已启用',
       exact: true,
     }).click()
-    expect(await dialog.locator('[data-plugin-entry="tool-subagent-claude-code"] button')
+    expect(await dialog.locator('[data-plugin-entry="tool-subagent-fork"] button')
       .getAttribute('aria-expanded')).toBe('true')
     await pluginSearch.fill('')
     // Close path 1: Escape.

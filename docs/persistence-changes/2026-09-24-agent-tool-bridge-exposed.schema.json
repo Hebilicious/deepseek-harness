@@ -1,0 +1,80 @@
+{
+  "formatVersion": 1,
+  "roots": [
+    {
+      "key": "event:agent-tool-bridge/exposed",
+      "kind": "event",
+      "event": "agent-tool-bridge/exposed",
+      "surface": false,
+      "digest": "287f7b8c75a974e229b803985696279da5ed8c202564ff8686ef4b1dab68b8aa",
+      "schema": {
+        "root": 0,
+        "nodes": [
+          {
+            "kind": "object",
+            "properties": [
+              {
+                "name": "data",
+                "type": 1,
+                "optional": false
+              },
+              {
+                "name": "ignorable",
+                "type": 4,
+                "optional": true
+              },
+              {
+                "name": "seq",
+                "type": 5,
+                "optional": false
+              },
+              {
+                "name": "time",
+                "type": 5,
+                "optional": false
+              },
+              {
+                "name": "type",
+                "type": 6,
+                "optional": false
+              }
+            ],
+            "indices": []
+          },
+          {
+            "kind": "object",
+            "properties": [
+              {
+                "name": "tools",
+                "type": 2,
+                "optional": false
+              }
+            ],
+            "indices": []
+          },
+          {
+            "kind": "array",
+            "element": 3
+          },
+          {
+            "kind": "primitive",
+            "type": "string"
+          },
+          {
+            "kind": "literal",
+            "value": true
+          },
+          {
+            "kind": "primitive",
+            "type": "number"
+          },
+          {
+            "kind": "literal",
+            "value": "agent-tool-bridge/exposed"
+          }
+        ]
+      }
+    }
+  ],
+  "types": []
+}

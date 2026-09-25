@@ -125,7 +125,6 @@ Read these pages when the package-level contract is not enough. They move from t
 
 - [Subagent subsystem](../../../docs/subsystems/subagent.md) — the service contract, provider contract, and terminal result semantics.
 - [dsh-subagent seam](../subagent/README.md) — the registry and start API this provider registers on.
-- [ACP subagent backend](../subagent-acp/README.md) — the sibling out-of-process provider over the Agent Client Protocol.
 - [TypeScript SDK client](../../sdk/client/README.md) — the stdio JSON-RPC client this backend drives the child through.
 - [Generated configuration catalog](../../../docs/config-catalog.md#deepseek-aidsh-subagent-dsh-sdk) — every accepted config field and its source declaration.
 
@@ -169,7 +168,7 @@ Append-only; newly visible content follows the reusable request prefix and does 
 
 These limits define when this backend is a poor fit or needs special operational care. They are current package constraints, not a general SDK comparison or a task backlog.
 
-- **A fresh runtime process per run** — no pooling; a harness runtime boots a full plugin tree, so per-run spawn cost is higher than the ACP backend's typical child.
+- **A fresh runtime process per run** — no pooling; a harness runtime boots a full plugin tree, so per-run spawn cost is higher than an in-process child sharing the parent's process.
 - **No non-route start-time capabilities** — the parent can select the child agent route but cannot enforce `outputSchema`, depth, tool filters, or persona inside the child process; configure the selected child profile and its ordered patches instead.
 - **The child's transcript stays in the child's own session root** — the parent log records only the delegation tool call and result; the streamed `session.event` channel is consumed for output extraction, not bridged into the parent log.
 - **Local child processes only** — the resolved working directory is a local path; a remote runtime would need its own backend.

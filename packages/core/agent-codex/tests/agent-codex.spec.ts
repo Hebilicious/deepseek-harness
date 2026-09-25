@@ -9,11 +9,11 @@
  */
 
 import { existsSync } from 'node:fs'
-import { mkdtemp, readFile, rm } from 'node:fs/promises'
+import { mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { Context, Service } from '@deepseek-ai/cordis'
 import AgentRegistry, { type Agent } from '@deepseek-ai/dsh-agent'
 import ApprovalService from '@deepseek-ai/dsh-user-approval'
@@ -25,6 +25,9 @@ import JsonlSessionPersistence from '@deepseek-ai/dsh-session-persistence-jsonl'
 import SessionStore, { SessionId, type SessionEvent } from '@deepseek-ai/dsh-session'
 import LocalSubprocessRuntime from '@deepseek-ai/dsh-subprocess-local'
 import TypertRegistry from '@deepseek-ai/dsh-typert-registry'
+import SystemPrompt from '@deepseek-ai/dsh-system-prompt'
+import ToolRuntime, { defineTool } from '@deepseek-ai/dsh-tools'
+import AgentToolBridge, { type BridgeMcpEndpoint } from '@deepseek-ai/dsh-agent-tool-bridge'
 import { CodexAppServer, CodexCatalogAdapter, codexThreadOf } from '../src/index.ts'
 import type { CodexAppServerRuntime } from '../src/index.ts'
 
@@ -89,6 +92,45 @@ class FakeCredentials extends Service {
   }
 }
 
+/**
+ * Minimal `agentToolBridge` stand-in: hands each bind a fixed endpoint and
+ * counts opens and closes; `failClose` makes `close()` reject so the
+ * driver's warn-and-continue teardown paths run. The endpoint URL is never
+ * contacted — the mock only probes `mcp_servers` entries under
+ * `MOCK_CODEX_MCP_PROBE`.
+ */
+class FakeToolBridge extends Service {
+  opened = 0
+  closed = 0
+
+  constructor(ctx: Context, private readonly failClose = false) {
+    super(ctx, 'agentToolBridge')
+  }
+
+  async openMcpEndpoint(): Promise<BridgeMcpEndpoint> {
+    this.opened += 1
+    const failClose = this.failClose
+    return {
+      name: 'dsh',
+      url: 'http://127.0.0.1:9/mcp',
+      headers: [{ name: 'Authorization', value: 'Bearer fake-tool-bridge' }],
+      close: async () => {
+        this.closed += 1
+        if (failClose) throw new Error('fake endpoint close failed')
+      },
+    }
+  }
+
+  /** The stand-in serves no real endpoint, so nothing it reports correlates. */
+  bridgedToolName(): undefined {
+    return undefined
+  }
+
+  takeCompletion(): undefined {
+    return undefined
+  }
+}
+
 interface Bench {
   readonly ctx: Context
   readonly root: string
@@ -102,7 +144,16 @@ interface Bench {
  */
 async function setup(
   env: Record<string, string> = {},
-  options: { approval?: boolean; questions?: boolean; credentials?: boolean; config?: Record<string, unknown> } = {},
+  options: {
+    approval?: boolean
+    questions?: boolean
+    credentials?: boolean
+    /** `true` mounts the real bridge; the fake variants mount the stand-in. */
+    bridge?: boolean | 'fake' | 'fake-fail-close'
+    /** Store the session log uncompressed so a test can rewrite its records. */
+    plainLog?: boolean
+    config?: Record<string, unknown>
+  } = {},
 ): Promise<Bench> {
   const root = await mkdtemp(join(tmpdir(), 'agent-codex-test-'))
   const recordFile = join(root, 'record.jsonl')
@@ -113,10 +164,20 @@ async function setup(
   await ctx.plugin(LocalSubprocessRuntime)
   await ctx.plugin(LlmRuntime)
   await ctx.plugin(TypertRegistry)
-  await ctx.plugin(JsonlSessionPersistence, { root: join(root, 'sessions') })
+  await ctx.plugin(JsonlSessionPersistence, {
+    root: join(root, 'sessions'),
+    ...options.plainLog === true ? { compression: 'none' as const } : {},
+  })
   if (options.approval === true) await ctx.plugin(ApprovalService)
   if (options.questions === true) await ctx.plugin(FakeQuestions)
   if (options.credentials === true) await ctx.plugin(FakeCredentials)
+  if (options.bridge === 'fake' || options.bridge === 'fake-fail-close') {
+    await ctx.plugin(FakeToolBridge, options.bridge === 'fake-fail-close')
+  } else if (options.bridge === true) {
+    await ctx.plugin(SystemPrompt)
+    await ctx.plugin(ToolRuntime)
+    await ctx.plugin(AgentToolBridge, {})
+  }
   await ctx.plugin(CodexAppServer, {
     harnesses: [{
       executable: process.execPath,
@@ -246,6 +307,88 @@ describe('agent-codex driver', () => {
     }).message.content[0]!
     expect(block.isError).toBe(false)
     expect(JSON.stringify(block.content)).toContain('tool output')
+  }, TEST_TIMEOUT)
+
+  it('interleaves streamed text, a tool item, and post-call text in one turn', async () => {
+    bench = await setup({ MOCK_CODEX_SCENARIO: 'interleaved' })
+    const { agent } = await bench.ctx.agents.create({ sessionId: SessionId('s5i'), agentOptions: {} })
+    send(agent, 'run a command')
+    await agent.whenIdle()
+
+    const log = events(agent)
+    const sequence = log.map(event => event.type)
+    // The call's advertisement folds into the streaming item's attempt and
+    // commits it; the item's remaining text completes on a fresh attempt.
+    const messages = sequence.flatMap((type, index) => type === 'assistant/message' ? [index] : [])
+    expect(messages).toHaveLength(2)
+    const callIndex = sequence.indexOf('tool/call')
+    const resultIndex = sequence.indexOf('tool/result')
+    expect(messages[0]! < callIndex && callIndex < resultIndex && resultIndex < messages[1]!).toBe(true)
+
+    const first = log[messages[0]!]
+    expect(first!.type === 'assistant/message' && first!.data['message']).toMatchObject({
+      content: [
+        { type: 'text', text: 'before ' },
+        { type: 'tool-call', id: 'cmd-1', name: 'shell', arguments: '{"command":"true","cwd":"/"}' },
+      ],
+    })
+    // The completion's whole-item text splits at the committed prefix.
+    const second = log[messages[1]!]
+    expect(second!.type === 'assistant/message' && second!.data['message']).toMatchObject({
+      content: [{ type: 'text', text: ' after' }],
+    })
+    expect(turnEndKind(agent)).toBe('completed')
+  }, TEST_TIMEOUT)
+
+  it('commits no extra message when the item completes with only its streamed text', async () => {
+    bench = await setup({ MOCK_CODEX_SCENARIO: 'interleaved-settled', MOCK_CODEX_TEXT: 'all of it' })
+    const { agent } = await bench.ctx.agents.create({ sessionId: SessionId('s5j'), agentOptions: {} })
+    send(agent, 'run a command')
+    await agent.whenIdle()
+
+    const log = events(agent)
+    const sequence = log.map(event => event.type)
+    const messages = sequence.flatMap((type, index) => type === 'assistant/message' ? [index] : [])
+    // One message carries the streamed text and the advertised call; the
+    // completion's continuation attempt held no new text and lands as a bare
+    // assistant/attempt.
+    expect(messages).toHaveLength(1)
+    const callIndex = sequence.indexOf('tool/call')
+    const resultIndex = sequence.indexOf('tool/result')
+    const attemptIndex = sequence.indexOf('assistant/attempt')
+    expect(messages[0]! < callIndex && callIndex < resultIndex && resultIndex < attemptIndex).toBe(true)
+
+    const first = log[messages[0]!]
+    expect(first!.type === 'assistant/message' && first!.data['message']).toMatchObject({
+      content: [
+        { type: 'text', text: 'all of it' },
+        { type: 'tool-call', id: 'cmd-1', name: 'shell', arguments: '{"command":"true","cwd":"/"}' },
+      ],
+    })
+    expect(turnEndKind(agent)).toBe('completed')
+  }, TEST_TIMEOUT)
+
+  it('skips the advertisement-settled attempt when its item never completes', async () => {
+    bench = await setup({ MOCK_CODEX_SCENARIO: 'advertised-open' })
+    const { agent } = await bench.ctx.agents.create({ sessionId: SessionId('s5k'), agentOptions: {} })
+    send(agent, 'run a command')
+    await agent.whenIdle()
+
+    const log = events(agent)
+    const sequence = log.map(event => event.type)
+    const messages = sequence.flatMap((type, index) => type === 'assistant/message' ? [index] : [])
+    // The advertisement committed the item's one attempt; turn settlement
+    // adds nothing for the still-open item.
+    expect(messages).toHaveLength(1)
+    expect(eventsOf(agent, 'assistant/attempt')).toHaveLength(0)
+    const first = log[messages[0]!]
+    expect(first!.type === 'assistant/message' && first!.data['message']).toMatchObject({
+      content: [
+        { type: 'text', text: 'mock codex answer' },
+        { type: 'tool-call', id: 'cmd-1', name: 'shell', arguments: '{"command":"true","cwd":"/"}' },
+      ],
+    })
+    expect(turnEndKind(agent)).toBe('completed')
   }, TEST_TIMEOUT)
 
   it('closes an open tool item as an error result at turn settlement', async () => {
@@ -678,4 +821,243 @@ describe('agent-codex driver', () => {
     } as unknown as CodexAppServerRuntime)
     expect(() => adapter.stream({ messages: [] } as never)).toThrow('catalog')
   })
+})
+
+const bridgeEcho = defineTool({
+  name: 'bridge_echo',
+  description: 'echo text back through the bridge',
+  parameters: { text: { type: 'string' } },
+  output: {
+    schema: { type: 'string' },
+    render: (_args, value) => [{ type: 'text', text: value }],
+    presentationMeta: (_args, value) => ({ echoed: value }),
+  },
+  async execute(args) {
+    return `pong:${args.text ?? ''}`
+  },
+})
+
+/** The `config` override map a recorded `thread/start`/`thread/resume` carried. */
+function configOf(call: RecordedCall | undefined): Record<string, unknown> {
+  return (call?.params as { config?: Record<string, unknown> } | undefined)?.config ?? {}
+}
+
+/** The `mcp_servers.dsh` entry fields a recorded thread request carried. */
+function bridgeEndpointOf(call: RecordedCall | undefined): { url: string; headers: Record<string, string> } {
+  const config = configOf(call)
+  return {
+    url: config['mcp_servers.dsh.url'] as string,
+    headers: config['mcp_servers.dsh.http_headers'] as Record<string, string>,
+  }
+}
+
+describe('agent-codex tool bridge', () => {
+  it('passes a live authenticated MCP endpoint to thread/start and records the exposure', async () => {
+    bench = await setup({
+      MOCK_CODEX_MCP_PROBE: '1',
+      MOCK_CODEX_MCP_CALL: JSON.stringify({ name: 'bridge_echo', arguments: { text: 'ping' } }),
+    }, { bridge: true })
+    bench.ctx.tools.register(bridgeEcho)
+
+    const { agent } = await bench.ctx.agents.create({ sessionId: SessionId('bridge-1'), agentOptions: {} })
+
+    const calls = await recordedCalls(bench.recordFile)
+    const endpoint = bridgeEndpointOf(calls.find(call => call.method === 'thread/start'))
+    expect(endpoint.url).toMatch(/^http:\/\/127\.0\.0\.1:\d+\/mcp$/)
+    expect(endpoint.headers['Authorization']).toMatch(/^Bearer /)
+
+    // The mock probed the endpoint from its own process: 401 without the
+    // bearer token, then the agent's bridged tools under it.
+    const unauthorized = calls.find(call => call.method === 'mcp-unauthorized')
+    expect(unauthorized?.params).toMatchObject({ status: 401 })
+    const tools = calls.find(call => call.method === 'mcp-tools')
+    const listed = (tools?.params as { result?: { tools?: { name: string }[] } })?.result?.tools
+    expect(listed?.map(tool => tool.name)).toEqual(['bridge_echo'])
+    const called = calls.find(call => call.method === 'mcp-call')
+    expect(called?.params).toMatchObject({
+      result: { content: [{ type: 'text', text: 'pong:ping' }] },
+    })
+
+    const exposed = eventsOf(agent, 'agent-tool-bridge/exposed')
+    expect(exposed).toHaveLength(1)
+    expect(exposed[0]!.data).toEqual({ tools: ['bridge_echo'] })
+  }, TEST_TIMEOUT)
+
+  it('logs a mid-turn bridged call under the dsh name with the execution meta', async () => {
+    bench = await setup({
+      MOCK_CODEX_SCENARIO: 'mcp-turn-call',
+      MOCK_CODEX_MCP_TURN_CALL: JSON.stringify({ name: 'bridge_echo', arguments: { text: 'ping' } }),
+    }, { bridge: true })
+    bench.ctx.tools.register(bridgeEcho)
+
+    const { agent } = await bench.ctx.agents.create({ sessionId: SessionId('bridge-meta'), agentOptions: {} })
+    send(agent, 'call it')
+    await agent.whenIdle()
+
+    // The mock called the endpoint and reported `mcpToolCall` items naming
+    // server `dsh`; the log carries the dsh tool name and the reported
+    // arguments.
+    const calls = eventsOf(agent, 'tool/call')
+    expect(calls).toHaveLength(1)
+    expect(calls[0]!.type === 'tool/call' && calls[0]!.data.name).toBe('bridge_echo')
+    expect(calls[0]!.type === 'tool/call' && calls[0]!.data.arguments).toBe(JSON.stringify({ text: 'ping' }))
+
+    // The result keeps the model-visible content the harness reported and
+    // picks up the execution's presentation meta.
+    const results = eventsOf(agent, 'tool/result')
+    expect(results).toHaveLength(1)
+    expect(results[0]!.type === 'tool/result' && results[0]!.data.meta).toEqual({ echoed: 'pong:ping' })
+    const message = (results[0]!.data as { message: {
+      content: { type: string; content?: { type: string; text?: string }[] }[]
+    } }).message
+    expect(message.content).toEqual([{
+      type: 'tool-result',
+      toolCallId: 'mcp-1',
+      isError: false,
+      content: [{ type: 'text', text: 'pong:ping' }],
+    }])
+
+    const called = (await recordedCalls(bench.recordFile))
+      .find(call => call.method === 'mcp-turn-call')
+    expect(called?.params).toMatchObject({ result: { content: [{ type: 'text', text: 'pong:ping' }] } })
+  }, TEST_TIMEOUT)
+
+  it('carries a fresh endpoint on thread/resume', async () => {
+    bench = await setup({ MOCK_CODEX_MCP_PROBE: '1', MOCK_CODEX_THREAD_ID: 'codex-bridge-1' }, { bridge: true })
+    bench.ctx.tools.register(bridgeEcho)
+    const first = await bench.ctx.agents.create({ sessionId: SessionId('bridge-2'), agentOptions: {} })
+    send(first.agent, 'first turn')
+    await first.agent.whenIdle()
+    await first.dispose()
+
+    const resumed = await bench.ctx.agents.resume({ resumeSessionId: SessionId('bridge-2') })
+
+    const calls = await recordedCalls(bench.recordFile)
+    const resume = calls.find(call => call.method === 'thread/resume')
+    expect(resume).toBeDefined()
+    const endpoint = bridgeEndpointOf(resume)
+    expect(endpoint.url).toMatch(/^http:\/\/127\.0\.0\.1:\d+\/mcp$/)
+    expect(endpoint.headers['Authorization']).toMatch(/^Bearer /)
+
+    // The rebind minted a fresh credential, and the mock probed it from the
+    // resumed thread's request: a second tools/list under the new headers.
+    const started = bridgeEndpointOf(calls.find(call => call.method === 'thread/start'))
+    expect(endpoint.headers['Authorization']).not.toBe(started.headers['Authorization'])
+    expect(calls.filter(call => call.method === 'mcp-tools')).toHaveLength(2)
+    await resumed.dispose()
+  }, TEST_TIMEOUT)
+
+  it('revokes the endpoint credential when the agent is disposed', async () => {
+    bench = await setup({}, { bridge: true })
+    const handle = await bench.ctx.agents.create({ sessionId: SessionId('bridge-3'), agentOptions: {} })
+
+    const calls = await recordedCalls(bench.recordFile)
+    const { url, headers } = bridgeEndpointOf(calls.find(call => call.method === 'thread/start'))
+
+    await handle.dispose()
+
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', accept: 'application/json, text/event-stream', ...headers },
+      body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'initialize', params: {} }),
+    })
+    expect(response.status).toBe(401)
+    await response.arrayBuffer()
+  }, TEST_TIMEOUT)
+
+  it('closes the endpoint when the bind rolls back', async () => {
+    bench = await setup({ MOCK_CODEX_FAIL_THREAD: '1' }, { bridge: true })
+    await expect(bench.ctx.agents.create({ sessionId: SessionId('bridge-4'), agentOptions: {} }))
+      .rejects.toThrow()
+    expect(bench.ctx.agents.roots()).toHaveLength(0)
+
+    const calls = await recordedCalls(bench.recordFile)
+    const { url, headers } = bridgeEndpointOf(calls.find(call => call.method === 'thread/start'))
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', accept: 'application/json, text/event-stream', ...headers },
+      body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'initialize', params: {} }),
+    })
+    expect(response.status).toBe(401)
+    await response.arrayBuffer()
+  }, TEST_TIMEOUT)
+
+  it('sends no config when the bridge is not mounted', async () => {
+    bench = await setup()
+    await bench.ctx.agents.create({ sessionId: SessionId('bridge-5'), agentOptions: {} })
+
+    const calls = await recordedCalls(bench.recordFile)
+    const start = calls.find(call => call.method === 'thread/start')
+    expect(start).toBeDefined()
+    expect((start!.params as { config?: unknown }).config).toBeUndefined()
+  }, TEST_TIMEOUT)
+
+  it('closes the endpoint when thread registration rolls the bind back', async () => {
+    // Two sessions cannot share one thread id: the second bind starts its
+    // thread, registerThread refuses the duplicate, and the rollback must
+    // revoke the endpoint the bind just opened.
+    bench = await setup({ MOCK_CODEX_THREAD_ID: 'codex-dup' }, { bridge: true })
+    await bench.ctx.agents.create({ sessionId: SessionId('bridge-6'), agentOptions: {} })
+    await expect(bench.ctx.agents.create({ sessionId: SessionId('bridge-7'), agentOptions: {} }))
+      .rejects.toThrow('already has a registered peer')
+    expect(bench.ctx.agents.roots()).toHaveLength(1)
+
+    const calls = await recordedCalls(bench.recordFile)
+    const starts = calls.filter(call => call.method === 'thread/start')
+    expect(starts).toHaveLength(2)
+    const { url, headers } = bridgeEndpointOf(starts[1])
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', accept: 'application/json, text/event-stream', ...headers },
+      body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'initialize', params: {} }),
+    })
+    expect(response.status).toBe(401)
+    await response.arrayBuffer()
+  }, TEST_TIMEOUT)
+
+  it('rejects a corrupted durable binding before opening an endpoint', async () => {
+    bench = await setup({ MOCK_CODEX_THREAD_ID: 'codex-fold' }, { bridge: 'fake', plainLog: true })
+    const first = await bench.ctx.agents.create({ sessionId: SessionId('bridge-8'), agentOptions: {} })
+    await first.dispose()
+
+    // Corrupt the stored binding: the projection fold rejects the malformed
+    // entry while the agent is constructed, before bind() opens its endpoint.
+    const sessionsRoot = join(bench.root, 'sessions')
+    const logs = await readdir(sessionsRoot, { recursive: true })
+    const stored = logs.find(name => name.endsWith('.jsonl'))
+    if (stored === undefined) throw new Error(`no session log under ${sessionsRoot}`)
+    const logFile = join(sessionsRoot, stored)
+    const content = await readFile(logFile, 'utf8')
+    expect(content).toContain('"threadId":"codex-fold"')
+    await writeFile(logFile, content.replace('"threadId":"codex-fold"', '"threadId":""'))
+
+    await expect(bench.ctx.agents.resume({ resumeSessionId: SessionId('bridge-8') }))
+      .rejects.toThrow('invalid agent-codex/thread')
+    const stub = bench.ctx.get('agentToolBridge') as unknown as FakeToolBridge
+    expect(stub.opened).toBe(1)
+    expect(stub.closed).toBe(1)
+  }, TEST_TIMEOUT)
+
+  it('reports the bind failure when the rollback close also fails', async () => {
+    bench = await setup({ MOCK_CODEX_FAIL_THREAD: '1' }, { bridge: 'fake-fail-close' })
+    const warn = vi.spyOn(bench.ctx.logger, 'warn')
+    await expect(bench.ctx.agents.create({ sessionId: SessionId('bridge-9'), agentOptions: {} }))
+      .rejects.toThrow('thread/start refused')
+
+    const stub = bench.ctx.get('agentToolBridge') as unknown as FakeToolBridge
+    expect(stub.closed).toBe(1)
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('tool-bridge endpoint close failed'))
+  }, TEST_TIMEOUT)
+
+  it('warns and finishes unbind when the endpoint close fails', async () => {
+    bench = await setup({}, { bridge: 'fake-fail-close' })
+    const handle = await bench.ctx.agents.create({ sessionId: SessionId('bridge-10'), agentOptions: {} })
+    const warn = vi.spyOn(bench.ctx.logger, 'warn')
+
+    await handle.dispose()
+
+    const stub = bench.ctx.get('agentToolBridge') as unknown as FakeToolBridge
+    expect(stub.closed).toBe(1)
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('tool-bridge endpoint close failed'))
+  }, TEST_TIMEOUT)
 })

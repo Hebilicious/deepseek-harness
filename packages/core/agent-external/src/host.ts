@@ -46,8 +46,13 @@ interface PreparedAgent<TAgent extends ManagedAgent> {
   agent: TAgent
   /** Aborts when the factory unloads, the caller cancels, or teardown begins — ends any setup await. */
   signal: AbortSignal
-  /** Enter registries and await the registry's creation edge before returning. */
-  publish(source: SessionStartSource): Promise<AgentHandle>
+  /**
+   * Enter both registries — the session with deferred `session/event`
+   * publication — and await both creation edges before the harness handshake.
+   */
+  announce(source: SessionStartSource): Promise<void>
+  /** Arm the session's live `session/event` routing after a successful bind and return the live handle. */
+  publish(): Promise<AgentHandle>
   /** Reverse teardown: stop the driver, unbind, unregister, unwind the scope. Memoized. */
   dispose(): Promise<void>
 }
@@ -435,25 +440,37 @@ export abstract class ExternalAgentHost<TAgent extends ManagedAgent> implements 
       return {
         agent,
         signal: abort.signal,
-        publish: async (source) => {
+        announce: async (source) => {
           publication = Promise.withResolvers<void>()
           try {
             assertLive()
-            detachSession = agent.ctx.sessions.enter(session)
-            // The mounted backend routes announced live events into the active
-            // write handle by session id; the driver only owns the handle itself.
+            // Entered with deferred publication, the session joins the store
+            // and announces while its appends stay silent: creation listeners
+            // write the pre-commit window without routing events into the live
+            // write path a refused handshake would have to drain.
+            detachSession = agent.ctx.sessions.enter(session, { deferPublication: true })
             detachAgent = hostCtx.agents.enter(agent, parentAgent)
+            // The harness record precedes the creation edges so the durable
+            // log keeps its seed → harness → listener-write order through the
+            // commit flush.
+            this.recordHarness(session)
             agent.ctx.sessions.announce(session)
             assertLive()
             // The registry's creation edge owns `agent/created` and awaits its
-            // listeners; teardown above waits for this publication to settle.
+            // listeners; teardown above waits for this announcement to settle.
             await hostCtx.agents.announce(agent, source, abort.signal)
             assertLive()
-            return { agent, dispose }
           } finally {
             publication.resolve()
             publication = undefined
           }
+        },
+        publish: () => {
+          assertLive()
+          // The commit flush stored the silent pre-commit window; publishing
+          // arms live `session/event` routing for everything that follows.
+          agent.ctx.sessions.publish(session)
+          return Promise.resolve({ agent, dispose })
         },
         dispose,
       }
@@ -498,13 +515,16 @@ export abstract class ExternalAgentHost<TAgent extends ManagedAgent> implements 
         try {
           const setupCommit = await raceAbort(setup?.(prepared.agent.ctx, prepared.agent), prepared.signal, id)
           setupCommit?.commit()
-          // Binding runs unpublished: a rejected harness handshake (unresumable
-          // thread, refused session) rolls the transaction back without ever
-          // publishing either identity.
+          // The creation edges run before the handshake: `session/created` and
+          // `agent/created` listeners install the agent's scoped tools
+          // (delegation, Team) before the driver snapshots the tool set into
+          // `session/new` or `thread/start`. The session's appends stay silent
+          // through this window, so a rejected handshake rolls the whole
+          // announcement back without routed durable residue.
+          await prepared.announce(source)
           await raceAbort(prepared.agent.bind(prepared.signal), prepared.signal, id)
-          this.recordHarness(session)
           await this.appendUnstoredSuffix(stored, session)
-          return await prepared.publish(source)
+          return await prepared.publish()
         } catch (error: unknown) {
           // Teardown owns inbox cleanup and may already have removed its projection.
           prepared.agent.cancel({ kind: 'disposed' }, { keepInbox: true })

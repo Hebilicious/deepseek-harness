@@ -99,6 +99,8 @@ kind: "package-reference"
 
 `bind()` 加入所属 harness 的共享连接，并在 dsh 会话发布之前创建 ACP 会话（`session/new`）或加载已记录的那个（`session/load`）。新会话追加带 agent 所发 id 的 `agent-acp/session`；恢复要求 agent 声明 `loadSession`，否则驱动器以 `session "<id>" cannot resume: the agent does not advertise loadSession` 明确失败。peer 只在加载响应之后注册，因此重放的历史绝不会重复提交。部分 agent 只在会话收到提示后才保存它（Claude Code 即如此），因此 harness 重启后，对从未运行过轮次的会话执行 `session/load` 会得到 `Resource not found`；此时驱动器创建新的 ACP 会话并追加一条替换用的 `agent-acp/session`，因为 agent 并未为它保存任何历史。已运行过轮次的会话仍保留该失败。会话声明还会重新发布该 harness 的模型目录。
 
+当挂载了 [`ctx.agentToolBridge`](../agent-tool-bridge/README.zh.md) 且 agent 声明 `mcpCapabilities.http` 时，`bind()` 会打开一个桥接端点，并在 `session/new` 与 `session/load` 中都以 `http` `mcpServers` 条目传入它，使 harness 在其自身的 MCP 集成下获得该会话 agent 作用域内可见的 dsh 工具。端点凭证按 agent 生成，并随 agent 关闭。当桥已挂载而 agent 不支持 HTTP MCP 时，驱动器记录一条警告，会话在没有桥接工具的情况下运行；一次性目录探测会话始终以 `mcpServers: []` 开启，因为它先于持久 agent 存在。桥接的 `tool_call` 会以 dsh 工具名记录：无论 harness 把 `mcp__<server>__<tool>` 放在更新的 `name`/`title`（Claude Code）还是 `_meta` 的 `cognition.ai/toolName`/`inferenceToolName`（Devin）里，驱动器都会解析它；当工具声明了 `presentationMeta` 时，结果携带该执行的 `meta`。
+
 ### 轮次驱动
 
 一次 `session/prompt` 是一个持久的 dsh 轮次；当 agent 开始新的模型响应时，驱动器会开启新的步骤，即在当前步骤的每个工具调用都已有结果之后，又收到文本、思考、计划或工具调用。`agent_message_chunk` 与 `agent_thought_chunk` 更新汇入 assistant 流，`tool_call` 与 `tool_call_update` 提交持久的工具事件对，`plan` 渲染为文本块，`config_option_update` 刷新会话已知的配置选项。agent 可能在工具输入流式传完之前就宣告调用（Claude Code 适配器先发送 `{}`，再经 `tool_call_update` 补全），因此输入为空的调用会在以下时机中最早的一个提交其 `tool/call`：第一个携带输入的补全更新、其权限请求、其终态更新、agent 的下一个分块、计划或调用，或轮次结束。新的调用会先提交在它之前流出的 assistant 文本，因此日志保持 agent 产生文本与工具调用的顺序。响应的停止原因映射为轮次结束：`end_turn` 完成，`max_tokens` 记录上限，`cancelled` 以用户原因中止，`refusal` 或 `max_turn_requests` 以固定错误码失败。若轮次结束时仍有未关闭的工具调用或 assistant 流，驱动器会为其收尾，因此不会留下悬空的模型可见内容。

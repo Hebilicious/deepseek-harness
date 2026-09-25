@@ -1,5 +1,5 @@
 # Test-only product-shaped composition: mount a deterministic provider behind
-# the same one-shot tool schema as the public Codex example.
+# a one-shot tool schema; the recorded transcript fixes the tool name.
 - insert:
     - id: subagent-result-diagnostic
       name: '../../../packages/test-support/session-snapshot/tests/fixtures/subagent-result-diagnostic.ts'

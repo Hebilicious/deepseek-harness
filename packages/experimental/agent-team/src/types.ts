@@ -1,5 +1,6 @@
 /** Public Agent Teams identities, durable records, and service request values. */
 
+import type { AgentOptions, HarnessId } from '@deepseek-ai/dsh-agent/types'
 import type { Branded } from '@deepseek-ai/dsh-brand'
 import type { ContentBlock } from '@deepseek-ai/dsh-llm/types'
 import type { SessionId } from '@deepseek-ai/dsh-session/types'
@@ -147,6 +148,19 @@ export interface SpawnTeammateRequest {
   readonly prompt: ContentBlock[]
   readonly context: 'fresh' | 'fork'
   readonly provider: string
+  /**
+   * Agent runtime the teammate runs under. Requires the provider's `harness`
+   * capability; a `fork` provider that cannot honor it rejects at start.
+   * Omission keeps the Lead's runtime and model route; an explicit different
+   * runtime applies its own default route unless `agentOptions` names one.
+   */
+  readonly harness?: HarnessId
+  /**
+   * Route overrides for the teammate, merged over the inherited or
+   * harness-default route. Required when `harness` names a runtime that
+   * cannot serve the Lead's route and has no default of its own.
+   */
+  readonly agentOptions?: AgentOptions
   readonly signal: AbortSignal
 }
 

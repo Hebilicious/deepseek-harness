@@ -18,6 +18,32 @@ import type { Session, SessionEvent } from '@deepseek-ai/dsh-session'
 import type { ProjectionDefinition } from '@deepseek-ai/dsh-session-projection'
 import type SessionProjectionRegistry from '@deepseek-ai/dsh-session-projection'
 import { HarnessId } from './types.ts'
+import type { AgentHarness } from './types.ts'
+
+/**
+ * Harness id under which the in-process agent loop registers itself
+ * (`@deepseek-ai/dsh-agent-loop`). Only a session owned by this harness
+ * consumes the loop's scoped composition: `tools.restrict()`, `systemPrompt`
+ * sections, and the structured-output runtime.
+ */
+export const LOOP_HARNESS_ID = HarnessId('dsh')
+
+/**
+ * The harnesses a Session may run while selecting a model from one provider.
+ *
+ * A harness that declares a `modelProvider` owns that route alone: the route
+ * lists its models and serves no model calls. Every other route is sent through
+ * the deployment's LLM providers, so it serves exactly the harnesses that
+ * declare no `modelProvider`.
+ * @param harnesses - the mounted harnesses.
+ * @param provider - one LLM provider route id.
+ * @returns the ids of the harnesses that can drive `provider`, in registration order.
+ */
+export function harnessesServing(harnesses: readonly AgentHarness[], provider: string): HarnessId[] {
+  const owner = harnesses.find(harness => harness.modelProvider === provider)
+  if (owner !== undefined) return [owner.id]
+  return harnesses.filter(harness => harness.modelProvider === undefined).map(harness => harness.id)
+}
 
 declare module '@deepseek-ai/dsh-session/types' {
   interface SessionEventMap {
@@ -76,9 +102,10 @@ export function agentHarnessOf(
  * A child belongs to the same harness as the session it descends from, which is
  * what the single-harness world did implicitly: the caller passes the result as
  * the create/resume `harness`. A session recording no harness yields
- * `undefined`, and the host then resolves the harness that claims those logs —
- * the in-process loop — or its sole mounted harness, refusing only when neither
- * exists, so no caller invents a harness id for it. The
+ * `undefined`, and the fallback then differs by operation — a resume resolves
+ * the harness that claims unrecorded logs (the in-process loop, else the sole
+ * mounted harness), while a fresh child may fall back only to the sole mounted
+ * harness, so no caller invents a harness id for it. The
  * projection registry is optional; without one this read has nothing to fold
  * and yields `undefined` too.
  * @param ctx - context the projection registry is resolved from.

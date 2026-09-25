@@ -80,7 +80,7 @@ A start request resolves through the subagent service, then the shared driver va
 
 ### Ownership and scope
 
-The child gets a fresh flat registration scope: parent tool restrictions and authority are never imported, and the filter the tool applies is composition, not a parent-derived grant. The backend advertises all five start-time capabilities, including `agentOptions`, because it controls the child's creation window and can enforce each one.
+The child gets a fresh flat registration scope: parent tool restrictions and authority are never imported, and the filter the tool applies is composition, not a parent-derived grant. The backend advertises all six start-time capabilities, including `agentOptions` and `harness`, because it controls the child's creation window and can enforce each one; a requested harness names the mounted agent harness the child is created under.
 
 </details>
 

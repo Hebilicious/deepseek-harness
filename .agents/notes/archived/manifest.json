@@ -1171,6 +1171,9 @@
     "feature/2026-08-03-web-turn-run-time.i18n.yaml": "sha256:aa0ed89476908932ee7f95c95be67c49751f595c604afe107eaa8f7a857842c7",
     "feature/2026-08-03-web-turn-run-time.md": "sha256:5274b10edd0d73f90ddc3720e0b69fe15ca6abe8b4c88bb661c73d6e312d8761",
     "feature/2026-08-03-web-turn-run-time.zh.md": "sha256:e9e6664177adf24f6815882dd4aa4076f83dca8a4f3bc333f56f18446d2f8304",
+    "feature/2026-08-04-claude-code-and-codex-subagent-backends.i18n.yaml": "sha256:a5b01318c79d41cd34d8a7433f47b6508ea256701b218df8baad0473e649beb3",
+    "feature/2026-08-04-claude-code-and-codex-subagent-backends.md": "sha256:dceb78438be64e7a0bda7b74e3049124eb5507a640849fc9f76f41cc04f3ce49",
+    "feature/2026-08-04-claude-code-and-codex-subagent-backends.zh.md": "sha256:d7853e9d2bb16e49f0cea4152ffb01173ffcd97a4ff7595541cf17b3e15d679e",
     "feature/2026-08-04-pointer-revealed-sidebar-scrollbars.i18n.yaml": "sha256:36d632e657acbcf966d7124984b8da9ea9a42e922a47b73fe2ed4f4c071382b4",
     "feature/2026-08-04-pointer-revealed-sidebar-scrollbars.md": "sha256:ff5bbf8b485074dd72bb86e2f3c5a2a779e8156a46cc06cc8d79b0fea57142b2",
     "feature/2026-08-04-pointer-revealed-sidebar-scrollbars.zh.md": "sha256:ace1304545f6f282107530bf3bd7b05b376bd5347237899c57d61aca1b125797",
@@ -1309,6 +1312,9 @@
     "feature/2026-08-14-web-turn-process-folding.i18n.yaml": "sha256:6f15becaf7a1519ec6a3e2b83359e6cd79f7ff98b7c0507c35780e9cdad895dc",
     "feature/2026-08-14-web-turn-process-folding.md": "sha256:d21d4cb116ddce06989a4062c2b53373a8f4123bd0190a88f870d72f3142bd7b",
     "feature/2026-08-14-web-turn-process-folding.zh.md": "sha256:eef128c55dda00fffd2d035f7a70c39d714ceacc99827245872501106bfa038c",
+    "feature/2026-08-15-product-subagent-noninteractive-permissions.i18n.yaml": "sha256:ab04ec7bde1fad1cf49905b3160d4c01e99d43cc3c2f6b87add90779d21505ff",
+    "feature/2026-08-15-product-subagent-noninteractive-permissions.md": "sha256:4540ec2397522f3df4457212e2205efea4f6ff5fd27c954aaef37b4b9865df40",
+    "feature/2026-08-15-product-subagent-noninteractive-permissions.zh.md": "sha256:e9f2a90062e76630c36373569e5042dec64b45495aea7b39d8cd335e50058431",
     "feature/2026-08-17-web-search-multiple-queries.i18n.yaml": "sha256:613a8bbf6d26152ce255f33cd7c144e31f9bc7c6cdd7f8243d3d82dd2e41c0ad",
     "feature/2026-08-17-web-search-multiple-queries.md": "sha256:36bcf5ce5874b9b4d35019c79180911ba86f65202063ba81669a0ab6ea3aaa7b",
     "feature/2026-08-17-web-search-multiple-queries.zh.md": "sha256:7188d58f1d448aa6caee3a648b055e40f9613a1d69fd383700036ea31497cad1",
@@ -1399,6 +1405,9 @@
     "feature/2026-09-08-web-explicit-file-delivery.i18n.yaml": "sha256:99daae539cc8fd7376ce0265538bee21e1e33f3c0d77c8cc4e011f94b4e9568a",
     "feature/2026-09-08-web-explicit-file-delivery.md": "sha256:bb416b1e8be081e6cb6af17792eb1a442172ff114c3a3577e5ef06a77eb57093",
     "feature/2026-09-08-web-explicit-file-delivery.zh.md": "sha256:00a642380e1f6ac9d5cd840e021f4e3e4ae68a289cb6344eb3dcd73a6fd81f4d",
+    "feature/2026-09-13-codex-child-reasoning-effort.i18n.yaml": "sha256:674be47695f872e84b1e83900a738d7b79d043633e8176c554fb9b4e3f09eece",
+    "feature/2026-09-13-codex-child-reasoning-effort.md": "sha256:3e96c0d38d4e5ed3368759e2b7a9833d48f1aa91205f36bdcc6ba57d3e2e7fc1",
+    "feature/2026-09-13-codex-child-reasoning-effort.zh.md": "sha256:21fcd14136babf0b871db8e1b6352356715f0825234817646241d35e7e6bfc0c",
     "process/2026-06-11-doc-sync-enforcement.i18n.yaml": "sha256:33b6d5874427bd7a2bd82e7e2f4f482b12448b2464aef15a9c57975edb48554d",
     "process/2026-06-11-doc-sync-enforcement.md": "sha256:aa2fe83d519fc30d48dff19e596e83c8922aacc9e063e14fe2cc35b769b9100e",
     "process/2026-06-11-doc-sync-enforcement.zh.md": "sha256:698017bd35f030fdea3eac51df9e43138c48140f504739d687b7251d13fced2b",
@@ -1902,6 +1911,9 @@
     "testing/2026-08-28-ci-test-reliability-skill.zh.md": "sha256:f58bc370c9a1bf2fe2badd5bf10bd1a8c1012133bb506206113d5c12cb60f93a",
     "testing/2026-08-29-windows-lane-hook-and-lefthook-budget.i18n.yaml": "sha256:d6bd5a532f5ed27678291659c5a9424a854e97da6c8bdddba16e4ac4764b9762",
     "testing/2026-08-29-windows-lane-hook-and-lefthook-budget.md": "sha256:18a9c2d55ddf166ea3ae854e48cdbd69a9851ab6d68da71c650085ff9611753a",
-    "testing/2026-08-29-windows-lane-hook-and-lefthook-budget.zh.md": "sha256:571322ae3764969df7bfca845ab5fbec2b577762c53701333db7f6c10489cb9b"
+    "testing/2026-08-29-windows-lane-hook-and-lefthook-budget.zh.md": "sha256:571322ae3764969df7bfca845ab5fbec2b577762c53701333db7f6c10489cb9b",
+    "testing/2026-09-07-subagent-teardown-test-budgets.i18n.yaml": "sha256:4d6665807681d427dfca46f6c68c63aa7df78fcc0958a77a227e9ca03cdb5b66",
+    "testing/2026-09-07-subagent-teardown-test-budgets.md": "sha256:3995fc73886322a8439684856caa5be9cf573630e45c8a47831fe45ae75dfbed",
+    "testing/2026-09-07-subagent-teardown-test-budgets.zh.md": "sha256:520d73f0498e01cd016eb562e2fae3a83dec7152663e7b7b26501ae9d880abbc"
   }
 }

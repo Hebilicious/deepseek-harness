@@ -80,7 +80,7 @@ One difference from spawn, expressed as data: the backend computes the balanced 
 
 ### Run flow
 
-On `start`, the prefix is sliced from the parent's event log up to and including the last `turn/end`; the shared driver then creates the child with that seed, applies the same persona, tool-filter, and structured-output setup, drives one task, reads the child's own final output, and disposes quiescently. The provider advertises `agentOptions` plus the same output, depth, filter, and persona capabilities as spawn. `prepareContinuable` captures the prefix once, at creation, because it becomes part of the child's own durable transcript.
+On `start`, the prefix is sliced from the parent's event log up to and including the last `turn/end`; the shared driver then creates the child with that seed, applies the same persona, tool-filter, and structured-output setup, drives one task, reads the child's own final output, and disposes quiescently. The provider advertises `agentOptions` plus the same output, depth, filter, and persona capabilities as spawn, but not `harness`: the seed is a prefix of the parent's durable log, so the child must run under the harness that owns that log. `prepareContinuable` captures the prefix once, at creation, because it becomes part of the child's own durable transcript.
 
 ### Lifecycle binding
 

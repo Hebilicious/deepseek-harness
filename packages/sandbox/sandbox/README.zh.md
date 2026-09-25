@@ -180,6 +180,6 @@ sandbox mode "<mode>" is requested but no sandbox backend is usable on this host
 
 #### 未来：消费方与环境
 
-[沙箱决策](../../../.agents/notes/implemented/feature/2026-07-06-sandbox.zh.md)列出延期阶段——可选的 `subagent-acp` 消费方（隔离子 agent（智能体），默认不隔离）与环境一致的能力组示例。两者均未决定；该笔记列为延期的 Windows 链已通过 `sandbox-local` 的 ACL 受限令牌档交付。
+[沙箱决策](../../../.agents/notes/implemented/feature/2026-07-06-sandbox.zh.md)列出延期阶段——可选的 `subagent-dsh-sdk` 消费方（隔离子 agent（智能体），默认不隔离）与环境一致的能力组示例。两者均未决定；该笔记列为延期的 Windows 链已通过 `sandbox-local` 的 ACL 受限令牌档交付。
 
 </details>

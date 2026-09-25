@@ -16,10 +16,6 @@ npm 保留配置的持久化缓存，在 POSIX 上通常为 `$HOME/.npm`；主 C
 
 [发布演练决策](../process/2026-09-06-release-rehearsal-selfhosted.zh.md) 对发布消费者采用相同的生命周期规则。[故障切换运行手册](../process/2026-07-26-ci-failover-runbook.zh.md) 继续负责 runner 选择和共享主机容量。本变更不调整作业目标、不降低并发、不重试测试、不削弱断言，也不修改仅在 master 上执行的 CI。
 
-## ACP 完成顺序的录制
-
-[ACP 诊断场景](../../../../snapshots/session/subagent-acp-diagnostic/cordis.snapshot.yml) 暂停脚本化的后台响应，直到 `job_output` 开始等待完成。没有这种同步，快速子进程可能在录制的父步骤之间发布合法的作业通知。场景本地 wrapper 在 jobs 服务注册完成等待器后释放子进程；mock 在测试私有 workspace 中监听独占创建的标记，并在释放后关闭 watcher。夹具在销毁时恢复被包装的方法。录制的 Session 字节和生产作业通知行为保持不变。
-
 ## Workspace 授权夹具的位置
 
 Headless 的 `session-sandbox-root` 夹具声明 `workspace.parent: outside-temp`，而不是依赖 home 所在文件系统。分配器在父目录可写且避开系统临时授权时选择规范化平台临时根目录的同级目录，否则使用 home，并拒绝已被自动临时写授权覆盖的 cwd。在故障切换 runner 上，这让测试留在数据卷中，同时不会让写入借助临时目录豁免而成功。文件系统沙箱的包含关系测试使用同一分配器创建 workspace 及被拒绝的同级目录，并在成功获取目录后立即注册清理。原子 workspace 分配、录制的 Session 字节以及独立预期文件保持不变。

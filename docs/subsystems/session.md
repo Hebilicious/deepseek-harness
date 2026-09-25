@@ -749,6 +749,24 @@ What a persistence backend relies on: the durable log persists every event lossl
 
 The backends that consume this contract are on [persistence.md](persistence.md).
 
+## Deferred publication — `SessionEnterOptions`
+
+`enter(session, { deferPublication: true })` admits the session with its `session/event` broadcast held silent: the creation window's appends — the harness record, permission pins, composition-listener writes — land in the durable log without emitting. The agent factory, whose commit point follows the `bind()` handshake, flushes that window through the write handle itself and then calls `publish()` to arm live routing; a rolled-back transaction routed nothing. `publish` requires a completed `session/created` announcement and rejects a second call.
+
+```ts type-equiv
+/** Options for {@link SessionStore.enter}. */
+interface SessionEnterOptions {
+  /**
+   * When `true`, appends stay silent — no `session/event` broadcast — until
+   * {@link SessionStore.publish} commits the entry. An owning transaction
+   * whose commit point follows the creation edges (the agent factory's
+   * harness handshake) uses this to flush the pre-commit window through its
+   * own durable path; a rolled-back entry never routed a single event.
+   */
+  readonly deferPublication?: boolean
+}
+```
+
 ## Remote catalog and workspace opening
 
 `ModelCatalog` is the Host-generation model directory returned by `session/modelCatalog`: it carries the deployment default, routable provider ids, successful provider groups, and isolated provider failures. It is not derived from one Session and remains separate from Session projections.
@@ -1020,12 +1038,14 @@ prepare(id?: SessionId, options?: PrepareSessionOptions): Session
  * assume that.
  *
  * @param session - a {@link prepare}d session not yet in the store.
+ * @param options - `deferPublication` enters the session with its
+ *   `session/event` broadcast held silent until {@link publish} commits it.
  * @returns the detach disposer (publication hooks + store removal). When called from
  *   a synchronous `session/created` listener, removal and disposal wait until
  *   that creation dispatch unwinds.
  * @throws if a session with this id is already in the store.
  */
-enter(session: Session): () => void
+enter(session: Session, options?: SessionEnterOptions): () => void
 
 /** Emit `session/created` exactly once for an {@link enter}ed session (with
  * the carrier {@link enter} captured). Separate from {@link enter} so the
@@ -1035,6 +1055,19 @@ enter(session: Session): () => void
  * @throws if the session is not live or its announcement already began,
  *   including a reentrant call from a creation listener. */
 announce(session: Session): void
+
+/**
+ * Commit a {@link SessionEnterOptions.deferPublication deferred} entry's
+ * publication: appends from this call emit `session/event` and reach live
+ * consumers. The owner must have flushed the silent pre-commit window through
+ * its own durable path BEFORE this call — the store does not replay held
+ * appends.
+ * @param session - the entered, announced session to publish.
+ * @throws if the session is not live in this store, its creation announcement
+ *   has not run, or it was already published (entries entered without
+ *   `deferPublication` publish at enter and never call this).
+ */
+publish(session: Session): void
 
 /**
  * Dispatch the awaited `session/flush` durability checkpoint for `session`,
@@ -1241,13 +1274,16 @@ Source: [`packages/core/session/src/index.ts`](../../packages/core/session/src/i
 
 #### `session/event` — emit
 
-Post-commit, fire-and-forget append feed. The listener snapshot resolves before the log push, but callbacks run after it; observer failures are logged and contained without making the committed append fail. Scope-filtered dispatch (`@deepseek-ai/dsh-scope`): agent-scoped listeners receive only events from sessions entered through that agent's context.
+Post-commit, fire-and-forget append feed. The listener snapshot resolves before the log push, but callbacks run after it; observer failures are logged and contained without making the committed append fail. An entry entered with SessionEnterOptions.deferPublication appends silently — its owner flushes that window itself — until SessionStore.publish commits it. Scope-filtered dispatch (`@deepseek-ai/dsh-scope`): agent-scoped listeners receive only events from sessions entered through that agent's context.
 
 ```ts cordis-catalog
 /**
  * Post-commit, fire-and-forget append feed. The listener snapshot resolves
  * before the log push, but callbacks run after it; observer failures are
  * logged and contained without making the committed append fail.
+ * An entry entered with {@link SessionEnterOptions.deferPublication} appends
+ * silently — its owner flushes that window itself — until
+ * {@link SessionStore.publish} commits it.
  * Scope-filtered dispatch (`@deepseek-ai/dsh-scope`): agent-scoped listeners
  * receive only events from sessions entered through that agent's context.
  * @param session - the session whose log grew.

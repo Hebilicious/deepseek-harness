@@ -54,7 +54,7 @@ Status: implemented
 ### 范围之外
 
 - **`ctx.web` 的网络策略**——`SandboxMode` 所声明的语义只涵盖文件系统效果；在 bash `curl` 畅通时给一个仅限 web 的网络旋钮会是一道假边界。待某个 bash 后端能强制执行网络策略（bwrap `--unshare-net`、Landlock ABI v4+）时再议。
-- **`subagent-acp` 消费方**——沙箱 RFC 中未变的延后阶段。
+- **`subagent-dsh-sdk` 消费方**——沙箱 RFC 中未变的延后阶段。
 - **单个会话中的额外可写根目录**——解析后的策略携带一个主要 `SessionHeader.cwd`；ACP `additionalDirectories` 仍是独立的 bridge 与策略设计问题。
 - **统一的 per-tool 沙箱运行时**——因沙箱 RFC 中的理由继续否决。
 

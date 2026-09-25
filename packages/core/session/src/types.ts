@@ -184,6 +184,18 @@ export type PrepareSessionOptions =
   | (CreateSessionOptions & { readonly eventState?: undefined })
   | RestoredSessionOptions
 
+/** Options for {@link SessionStore.enter}. */
+export interface SessionEnterOptions {
+  /**
+   * When `true`, appends stay silent — no `session/event` broadcast — until
+   * {@link SessionStore.publish} commits the entry. An owning transaction
+   * whose commit point follows the creation edges (the agent factory's
+   * harness handshake) uses this to flush the pre-commit window through its
+   * own durable path; a rolled-back entry never routed a single event.
+   */
+  readonly deferPublication?: boolean
+}
+
 /** Why an active agent driver was cancelled. */
 export type AgentCancelCause =
   | { readonly kind: 'user' }

@@ -62,7 +62,7 @@ class DiagnosticProvider implements SubagentProvider {
   }
 }
 
-/** Register the fixed provider behind the public Codex-shaped snapshot tool. */
+/** Register the fixed provider behind the public product-shaped snapshot tool. */
 export function apply(ctx: Context): void {
   ctx.subagents.registerProvider(new DiagnosticProvider())
 }
