@@ -52,11 +52,29 @@ export class ExternalTurnProjector {
     private readonly session: Session,
     private readonly dispatch: AgentEventDispatch,
     readonly turn: number,
-    readonly step: number,
+    step: number,
     private readonly allocAttempt: () => number,
     private readonly nextRevision: () => number,
     private readonly routeState: RouteLogState,
-  ) {}
+  ) {
+    this.currentStep = step
+  }
+
+  /** The step later projections are written into. */
+  private currentStep: number
+
+  /** Durable step every projection is written into. */
+  get step(): number {
+    return this.currentStep
+  }
+
+  /**
+   * Write every later projection into another step of the same turn.
+   * @param step - the step the driver just opened.
+   */
+  enterStep(step: number): void {
+    this.currentStep = step
+  }
 
   /**
    * Open one streamed assistant attempt: live `agent/assistant-stream` frames

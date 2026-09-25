@@ -69,7 +69,7 @@ class MyHost extends ExternalAgentHost<MyAgent> {
 
 ### 设计理念
 
-本包把一个 agent 拆成面向会话的一半与面向 harness 的一半。`ManagedAgent` 拥有会话能看到的一切：持久收件箱、活动阶段状态机、唤醒闩锁、维护互斥、协作式取消，以及围绕一次 `runTurnBody()` 调用的 `turn/start` … `turn/end` 骨架。`ExternalAgent` 在其上增加 harness 接口：外部轮次恰好是一个持久步骤，实时 steering 与注入通过驱动器自己的动词抵达 harness，模型路由来自持久选择折叠区。`ExternalAgentHost` 拥有每个驱动器共享的生命周期，因此驱动器实现只包含协议转换。
+本包把一个 agent 拆成面向会话的一半与面向 harness 的一半。`ManagedAgent` 拥有会话能看到的一切：持久收件箱、活动阶段状态机、唤醒闩锁、维护互斥、协作式取消，以及围绕一次 `runTurnBody()` 调用的 `turn/start` … `turn/end` 骨架。`ExternalAgent` 在其上增加 harness 接口：外部轮次从第 1 步开始，驱动器在 harness 每次新的模型响应时调用 `drive.nextStep()`，因此日志与进程内循环一样，每一步承载一条 assistant 消息及其工具调用；实时 steering 与注入通过驱动器自己的动词抵达 harness，模型路由来自持久选择折叠区。`ExternalAgentHost` 拥有每个驱动器共享的生命周期，因此驱动器实现只包含协议转换。
 
 ### 生命周期事务
 
@@ -92,7 +92,7 @@ class MyHost extends ExternalAgentHost<MyAgent> {
 | 文件 | 作用 |
 |---|---|
 | [`src/base.ts`](src/base.ts) | `ManagedAgent`：收件箱、阶段状态机、取消、维护互斥、轮次骨架 |
-| [`src/agent.ts`](src/agent.ts) | `ExternalAgent`：单步骤的外部轮次、实时 steering 与注入、`HARNESS_DEFAULT_MODEL` 路由标记 |
+| [`src/agent.ts`](src/agent.ts) | `ExternalAgent`：多步骤的外部轮次、实时 steering 与注入、`HARNESS_DEFAULT_MODEL` 路由标记 |
 | [`src/host.ts`](src/host.ts) | `ExternalAgentHost`：create/resume/publish 事务、注册、反向 teardown |
 | [`src/lifecycle.ts`](src/lifecycle.ts) | `FactoryOwnership`、中止竞态、agent 选项校验 |
 | [`src/inbox.ts`](src/inbox.ts) | `DurableAgentInbox` 与 `inbox` 投影 |

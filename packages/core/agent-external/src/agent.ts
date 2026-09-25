@@ -1,9 +1,10 @@
 /**
  * Abstract Agent driver whose work runs inside a foreign harness process. The
  * shared {@link ManagedAgent} base owns the session-facing machinery every
- * driver has in common; this subclass adds the harness surface — one turn is
- * exactly one durable step, live steering and context injection reach the
- * harness, and the durable model-selection fold decides the route.
+ * driver has in common; this subclass adds the harness surface — one turn
+ * opens at step 1 and the driver advances a step at each harness model
+ * response, live steering and context injection reach the harness, and the
+ * durable model-selection fold decides the route.
  *
  * @module @deepseek-ai/dsh-agent-external/agent
  */
@@ -18,12 +19,20 @@ import { ExternalTurnProjector, type RouteLogState } from './projector.ts'
 export interface ExternalTurnDrive {
   /** Durable turn number. */
   readonly turn: number
-  /** Durable step number; a foreign turn always owns step 1. */
+  /** Durable step number the projector writes into; a turn opens at step 1. */
   readonly step: number
   /** Abort signal for this turn; aborted by {@link Agent.cancel} or lifecycle teardown. */
   readonly signal: AbortSignal
-  /** Session-event projector bound to this turn and step. */
+  /** Session-event projector bound to this turn and its current step. */
   readonly projector: ExternalTurnProjector
+  /**
+   * Close the current step and open the next one. A harness makes several
+   * model calls in one turn; a driver advances at each new model response so
+   * the log carries one assistant message and its tool calls per step, as the
+   * in-process loop writes it. The caller commits or settles every assistant
+   * stream and tool call of the current step first.
+   */
+  nextStep(): void
 }
 
 /**
@@ -83,9 +92,10 @@ export abstract class ExternalAgent extends ManagedAgent {
   }
 
   /**
-   * Drive exactly one durable step for the claimed batch. A foreign turn has
-   * no step loop: the harness call owns everything between `step/start` and
-   * `step/end`, and an empty claim still opens the turn boundary.
+   * Drive the claimed batch through one harness call. The turn opens at step
+   * 1, the driver advances through {@link ExternalTurnDrive.nextStep}, and the
+   * last step closes when the call settles; an empty claim still opens the
+   * turn boundary.
    * @param turn - the durable turn already appended.
    * @param signal - the live turn's abort signal.
    * @param phase - the running phase the skeleton reserved for this turn.
@@ -101,7 +111,7 @@ export abstract class ExternalAgent extends ManagedAgent {
     // A bare wake (cleared or consumed input) still owns its turn boundary
     // but spends no harness call.
     if (claimed.length === 0) return { ends: { kind: 'completed' }, stop: true }
-    const step = 1
+    let step = 1
     this.session.append('step/start', { turn, step })
     phase.step = step
     try {
@@ -117,7 +127,20 @@ export abstract class ExternalAgent extends ManagedAgent {
         () => ++this.assistantStreamRevision,
         this.routeState,
       )
-      const drive: ExternalTurnDrive = { turn, step, signal, projector }
+      const session = this.session
+      const drive: ExternalTurnDrive = {
+        turn,
+        get step() { return step },
+        signal,
+        projector,
+        nextStep: () => {
+          session.append('step/end', { turn, step })
+          step += 1
+          session.append('step/start', { turn, step })
+          phase.step = step
+          projector.enterStep(step)
+        },
+      }
       const onAbort = (): void => {
         void Promise.resolve()
           .then(() => this.interruptTurn(drive))

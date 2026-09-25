@@ -127,6 +127,113 @@ describe('agent-acp driver', () => {
     expect(JSON.stringify(block.content)).toContain('tool output')
   }, TEST_TIMEOUT)
 
+  it('commits streamed tool input and keeps text and tool calls in the order the agent sent them', async () => {
+    const call = (toolCallId: string, name: string) => ({ sessionUpdate: 'tool_call', toolCallId, name, title: name, kind: 'execute', rawInput: {} })
+    const done = (toolCallId: string) => ({
+      sessionUpdate: 'tool_call_update', toolCallId, status: 'completed',
+      content: [{ type: 'content', content: { type: 'text', text: `${toolCallId} output` } }],
+    })
+    bench = await setup({
+      MOCK_TEXT: 'closing text',
+      MOCK_SCRIPT: JSON.stringify([
+        // A chunk with no text opens a lane with nothing to commit before a call.
+        { sessionUpdate: 'agent_message_chunk', messageId: 'm0', content: { type: 'image', data: 'AQ==', mimeType: 'image/png' } },
+        { sessionUpdate: 'agent_message_chunk', messageId: 'm1', content: { type: 'text', text: 'first I look' } },
+        // Claude Code announces a call with `{}` and refines it as input streams.
+        call('c1', 'Bash'),
+        { sessionUpdate: 'tool_call_update', toolCallId: 'c1', rawInput: { command: 'ls' }, title: 'ls' },
+        done('c1'),
+        // No refinement: the next frame, a terminal update, a permission
+        // request, a plan, or the turn end commits it with what it has.
+        call('c2', 'Write'),
+        { sessionUpdate: 'agent_thought_chunk', messageId: 'm2', content: { type: 'text', text: 'thinking' } },
+        call('c3', 'Read'),
+        done('c3'),
+        call('c4', 'Bash'),
+        { permission: { toolCallId: 'c4', title: 'rm', rawInput: { command: 'rm x' } } },
+        call('c5', 'Grep'),
+        { permission: { toolCallId: 'c5', title: 'grep' } },
+        call('c6', 'Glob'),
+        { sessionUpdate: 'plan', entries: [{ content: 'step', status: 'pending', priority: 'medium' }] },
+        call('c7', 'Edit'),
+      ]),
+    }, { approval: 'fake' })
+    const { agent } = await bench.ctx.agents.create({ sessionId: SessionId('s4s'), agentOptions: {} })
+    send(agent, 'stream tools')
+    await agent.whenIdle()
+
+    const order = agent.session.snapshotEvents().flatMap((event) => {
+      if (event.type === 'tool/call') {
+        const data = event.data as { callId: string; arguments: string }
+        return [`call ${data.callId} ${data.arguments}`]
+      }
+      if (event.type === 'tool/result') return [`result ${(event.data as { message: { content: { toolCallId: string }[] } }).message.content[0]!.toolCallId}`]
+      if (event.type === 'assistant/message') return ['text']
+      return []
+    })
+    expect(order).toEqual([
+      'text',
+      'call c1 {"command":"ls"}',
+      'result c1',
+      'call c2 {}',
+      // The thought streamed after c2, before c3.
+      'text',
+      'call c3 {}',
+      'result c3',
+      'call c4 {"command":"rm x"}',
+      'call c5 {}',
+      'call c6 {}',
+      // The plan streamed after c6, before c7.
+      'text',
+      'call c7 {}',
+      // Calls with no terminal update close at settlement, before the final text.
+      'result c2',
+      'result c4',
+      'result c5',
+      'result c6',
+      'result c7',
+      'text',
+    ])
+  }, TEST_TIMEOUT)
+
+  it('opens a durable step for each model response the agent streams', async () => {
+    const call = (toolCallId: string) => ({ sessionUpdate: 'tool_call', toolCallId, name: 'Bash', title: 'Bash', kind: 'execute', rawInput: { command: toolCallId } })
+    const done = (toolCallId: string) => ({ sessionUpdate: 'tool_call_update', toolCallId, status: 'completed', content: [] })
+    bench = await setup({
+      MOCK_TEXT: 'all done',
+      MOCK_SCRIPT: JSON.stringify([
+        { sessionUpdate: 'agent_message_chunk', messageId: 'm1', content: { type: 'text', text: 'one' } },
+        call('a'),
+        // Text while a call is still open stays in its step.
+        { sessionUpdate: 'agent_thought_chunk', messageId: 'm1', content: { type: 'text', text: 'waiting' } },
+        done('a'),
+        // A response of parallel calls only, with no text.
+        call('b'),
+        call('c'),
+        done('b'),
+        done('c'),
+        { sessionUpdate: 'plan', entries: [{ content: 'next', status: 'pending', priority: 'medium' }] },
+      ]),
+    })
+    const { agent } = await bench.ctx.agents.create({ sessionId: SessionId('s4t'), agentOptions: {} })
+    send(agent, 'steps')
+    await agent.whenIdle()
+
+    const steps = agent.session.snapshotEvents().flatMap((event) => {
+      const data = event.data as { step?: number; callId?: string }
+      if (event.type === 'step/start') return [`step ${data.step}`]
+      if (event.type === 'tool/call') return [`call ${data.callId}`]
+      if (event.type === 'tool/result') return ['result']
+      if (event.type === 'assistant/message') return ['text']
+      return []
+    })
+    expect(steps).toEqual([
+      'step 1', 'text', 'call a', 'text', 'result',
+      'step 2', 'call b', 'call c', 'result', 'result',
+      'step 3', 'text', 'text',
+    ])
+  }, TEST_TIMEOUT)
+
   it('closes an open tool call as an error result at turn settlement', async () => {
     bench = await setup({ MOCK_TOOL_OPEN: '1' })
     const { agent } = await bench.ctx.agents.create({ sessionId: SessionId('s5'), agentOptions: {} })

@@ -95,6 +95,14 @@ interface ActiveTurn {
   readonly attempts: Map<string, StreamLane>
   /** Open ACP tool calls awaiting their terminal update. */
   readonly openToolCalls: Set<string>
+  /**
+   * Announced tool calls whose `tool/call` is not committed yet, in
+   * announcement order: an agent may announce a call before its input has
+   * streamed (Claude Code sends `{}` and refines it with `tool_call_update`).
+   */
+  readonly pendingToolCalls: Map<string, { readonly name: string; input: unknown }>
+  /** Tool calls committed in the current durable step. */
+  stepToolCalls: number
   /** The model sent on this turn, recorded on the committed assistant message. */
   readonly model: string
 }
@@ -349,6 +357,8 @@ export class AcpAgent extends ExternalAgent implements AcpSessionPeer {
       drive,
       attempts: new Map(),
       openToolCalls: new Set(),
+      pendingToolCalls: new Map(),
+      stepToolCalls: 0,
       model,
     }
     this.active = active
@@ -403,6 +413,8 @@ export class AcpAgent extends ExternalAgent implements AcpSessionPeer {
     switch (update.sessionUpdate) {
       case 'agent_message_chunk': {
         if (active === undefined) return
+        this.commitPendingToolCalls(active)
+        this.advanceAfterTools(active)
         const lane = this.ensureAttempt(active, optionalString(update.messageId) ?? 'default')
         const text = this.chunkText(update.content)
         if (text.length === 0) return
@@ -415,6 +427,8 @@ export class AcpAgent extends ExternalAgent implements AcpSessionPeer {
       }
       case 'agent_thought_chunk': {
         if (active === undefined) return
+        this.commitPendingToolCalls(active)
+        this.advanceAfterTools(active)
         const lane = this.ensureAttempt(active, optionalString(update.messageId) ?? 'default')
         const text = this.chunkText(update.content)
         if (text.length === 0) return
@@ -429,10 +443,15 @@ export class AcpAgent extends ExternalAgent implements AcpSessionPeer {
         if (active === undefined) return
         const callId = update.toolCallId
         if (callId.length === 0) return
-        active.openToolCalls.add(callId)
-        const args = update.rawInput === undefined ? '{}' : JSON.stringify(update.rawInput)
+        // A call after every earlier call has its result opens a new model
+        // response; text streamed before this call belongs before it in the
+        // log, and a call announced earlier has finished streaming its input.
+        this.advanceAfterTools(active)
+        this.commitText(active)
+        this.commitPendingToolCalls(active)
         const name = optionalString(update.name) ?? optionalString(update.title) ?? 'tool'
-        active.drive.projector.toolCall(callId, name, args)
+        active.pendingToolCalls.set(callId, { name, input: update.rawInput })
+        if (hasInput(update.rawInput)) this.commitToolCall(active, callId)
         return
       }
       case 'tool_call_update': {
@@ -446,6 +465,8 @@ export class AcpAgent extends ExternalAgent implements AcpSessionPeer {
       }
       case 'plan': {
         if (active === undefined) return
+        this.commitPendingToolCalls(active)
+        this.advanceAfterTools(active)
         const lines = update.entries.flatMap((entry) => {
           const content = optionalString(entry.content)
           return content === undefined ? [] : [`- [${entry.status}] ${content}`]
@@ -474,6 +495,12 @@ export class AcpAgent extends ExternalAgent implements AcpSessionPeer {
     const approval = this.ctx.get('approval')
     if (active === undefined || approval === undefined) return { outcome: { outcome: 'cancelled' } }
     const toolCall = params.toolCall
+    // The approval record names the call, so the call is committed first.
+    const pending = active.pendingToolCalls.get(toolCall.toolCallId)
+    if (pending !== undefined) {
+      if (hasInput(toolCall.rawInput)) pending.input = toolCall.rawInput
+      this.commitToolCall(active, toolCall.toolCallId)
+    }
     const toolName = optionalString(toolCall.name) ?? optionalString(toolCall.title) ?? 'tool'
     const reason = optionalString(toolCall.title) ?? toolName
     try {
@@ -691,6 +718,7 @@ export class AcpAgent extends ExternalAgent implements AcpSessionPeer {
    * ending, complete on a clean stop.
    */
   private settleActive(active: ActiveTurn, ending: TurnEndReason): void {
+    this.commitPendingToolCalls(active)
     for (const callId of active.openToolCalls) {
       try {
         active.drive.projector.toolResult(
@@ -739,7 +767,13 @@ export class AcpAgent extends ExternalAgent implements AcpSessionPeer {
     const callId = update.toolCallId
     if (callId.length === 0) return
     const status = update.status
-    if (status !== 'completed' && status !== 'failed') return
+    const terminal = status === 'completed' || status === 'failed'
+    const pending = active.pendingToolCalls.get(callId)
+    if (pending !== undefined && hasInput(update.rawInput)) pending.input = update.rawInput
+    if (pending !== undefined && (terminal || hasInput(update.rawInput))) this.commitToolCall(active, callId)
+    if (!terminal) return
+    // Text the agent streamed while the call ran precedes its result.
+    this.commitText(active)
     active.openToolCalls.delete(callId)
     const { blocks } = acpToolContent(update.content ?? undefined, update.rawOutput)
     active.drive.projector.toolResult(
@@ -749,6 +783,56 @@ export class AcpAgent extends ExternalAgent implements AcpSessionPeer {
         ? { isError: true, error: { name: 'AcpToolFailed', code: 'FAILED' } }
         : {},
     )
+  }
+
+  /**
+   * Commit one announced tool call with the latest input the agent reported.
+   * @param active - the live turn.
+   * @param callId - an id in {@link ActiveTurn.pendingToolCalls}.
+   */
+  private commitToolCall(active: ActiveTurn, callId: string): void {
+    const pending = active.pendingToolCalls.get(callId)
+    /* v8 ignore next -- every caller reads the entry before committing it */
+    if (pending === undefined) return
+    active.pendingToolCalls.delete(callId)
+    active.openToolCalls.add(callId)
+    active.stepToolCalls += 1
+    active.drive.projector.toolCall(callId, pending.name, pending.input === undefined ? '{}' : JSON.stringify(pending.input))
+  }
+
+  /**
+   * Open the next durable step when the agent starts a new model response:
+   * the current step committed tool calls and every one of them has its
+   * result. Its streams settle first so nothing crosses the step boundary.
+   */
+  private advanceAfterTools(active: ActiveTurn): void {
+    if (active.stepToolCalls === 0 || active.openToolCalls.size > 0 || active.pendingToolCalls.size > 0) return
+    this.commitText(active)
+    for (const [messageId, lane] of active.attempts) {
+      active.drive.projector.commitAttempt(lane.attempt)
+      active.attempts.delete(messageId)
+    }
+    active.drive.nextStep()
+    active.stepToolCalls = 0
+  }
+
+  /** Commit every announced tool call the agent has moved past, in announcement order. */
+  private commitPendingToolCalls(active: ActiveTurn): void {
+    for (const callId of [...active.pendingToolCalls.keys()]) this.commitToolCall(active, callId)
+  }
+
+  /**
+   * Commit every assistant lane that streamed content, so the log keeps the
+   * order the agent produced text and tool calls in. A later chunk with the
+   * same message id opens a new lane.
+   */
+  private commitText(active: ActiveTurn): void {
+    for (const [messageId, lane] of active.attempts) {
+      if (lane.nextIndex === 0) continue
+      lane.attempt.push({ type: 'finish', reason: { kind: 'stop' } })
+      active.drive.projector.commitAssistant(lane.attempt, { provider: this.driverConfig.harness.id, model: active.model })
+      active.attempts.delete(messageId)
+    }
   }
 
   /** Open or fetch the assistant stream lane for one ACP message id. */
@@ -789,6 +873,12 @@ export class AcpAgent extends ExternalAgent implements AcpSessionPeer {
       return undefined
     }
   }
+}
+
+/** Whether an agent-reported tool input carries anything: `{}` is the placeholder of a still-streaming call. */
+function hasInput(value: unknown): boolean {
+  if (value === undefined || value === null) return false
+  return typeof value !== 'object' || Object.keys(value).length > 0
 }
 
 /** JSON-RPC code ACP agents answer for an unknown session (`RequestError.resourceNotFound`). */

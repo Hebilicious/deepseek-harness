@@ -351,6 +351,35 @@ describe('ExternalAgent turn drive', () => {
     expect(turnEndKinds(agent)).toEqual(['completed'])
   })
 
+  it('advances the durable step when the driver starts another model response', async () => {
+    bench = await harness()
+    const { agent } = await create(bench.ctx)
+    agent.driveImpl = (_messages, drive) => {
+      drive.projector.assistantText('first', { provider: 'p1', model: 'm1' })
+      expect(drive.step).toBe(1)
+      drive.nextStep()
+      expect(drive.step).toBe(2)
+      drive.projector.assistantText('second', { provider: 'p1', model: 'm1' })
+      return Promise.resolve({ kind: 'completed' })
+    }
+
+    send(agent, 'one')
+    await agent.whenIdle()
+
+    const steps = agent.session.snapshotEvents().flatMap(event =>
+      event.type === 'step/start' || event.type === 'step/end' || event.type === 'assistant/message'
+        ? [`${event.type} ${(event.data as { step: number }).step}`]
+        : [])
+    expect(steps).toEqual([
+      'step/start 1',
+      'assistant/message 1',
+      'step/end 1',
+      'step/start 2',
+      'assistant/message 2',
+      'step/end 2',
+    ])
+  })
+
   it('commits an accepted live steer inside the open turn boundary', async () => {
     bench = await harness()
     const { agent } = await create(bench.ctx)

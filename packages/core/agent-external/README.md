@@ -69,7 +69,7 @@ Constructing `MyHost` inside a service constructor registers the `turnBoundary` 
 
 ### Design concept
 
-The package splits one agent into a session-facing half and a harness-facing half. `ManagedAgent` owns everything the session sees: the durable inbox, the activity phase machine, wake latching, maintenance exclusion, cooperative cancellation, and the `turn/start` … `turn/end` skeleton around one `runTurnBody()` call. `ExternalAgent` adds the harness surface on top: a foreign turn is exactly one durable step, live steering and injection reach the harness through the driver's own verbs, and the model route comes from the durable selection fold. `ExternalAgentHost` owns the lifecycle every driver shares, so a driver implementation contains protocol translation only.
+The package splits one agent into a session-facing half and a harness-facing half. `ManagedAgent` owns everything the session sees: the durable inbox, the activity phase machine, wake latching, maintenance exclusion, cooperative cancellation, and the `turn/start` … `turn/end` skeleton around one `runTurnBody()` call. `ExternalAgent` adds the harness surface on top: a foreign turn opens at step 1 and the driver calls `drive.nextStep()` at each new harness model response, so the log carries one assistant message and its tool calls per step as the in-process loop writes it, live steering and injection reach the harness through the driver's own verbs, and the model route comes from the durable selection fold. `ExternalAgentHost` owns the lifecycle every driver shares, so a driver implementation contains protocol translation only.
 
 ### Lifecycle transaction
 
@@ -92,7 +92,7 @@ The package splits one agent into a session-facing half and a harness-facing hal
 | File | Role |
 |---|---|
 | [`src/base.ts`](src/base.ts) | `ManagedAgent`: inbox, phase machine, cancellation, maintenance exclusion, turn skeleton |
-| [`src/agent.ts`](src/agent.ts) | `ExternalAgent`: one-step foreign turns, live steering and injection, `HARNESS_DEFAULT_MODEL` route marker |
+| [`src/agent.ts`](src/agent.ts) | `ExternalAgent`: multi-step foreign turns, live steering and injection, `HARNESS_DEFAULT_MODEL` route marker |
 | [`src/host.ts`](src/host.ts) | `ExternalAgentHost`: create/resume/publish transaction, registrations, reverse teardown |
 | [`src/lifecycle.ts`](src/lifecycle.ts) | `FactoryOwnership`, abort races, agent-option validation |
 | [`src/inbox.ts`](src/inbox.ts) | `DurableAgentInbox` and the `inbox` projection |

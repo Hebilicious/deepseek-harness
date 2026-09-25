@@ -31,6 +31,9 @@
  * - `MOCK_THOUGHT`      — text streamed as one `agent_thought_chunk` first.
  * - `MOCK_PLAN`         — JSON `[{content, status}]` emitted as a `plan` update.
  * - `MOCK_TOOL`         — emit `tool_call` then a completed `tool_call_update`.
+ * - `MOCK_SCRIPT`       — JSON list sent in order before the text: each entry is
+ *                         a `session/update` payload, or `{permission: toolCall}`
+ *                         for one allow-once permission request.
  * - `MOCK_TOOL_OPEN`    — emit `tool_call` with no terminal update, so the
  *                         driver's settlement must close it as an error result.
  * - `MOCK_TOOL_BARE`    — emit a `tool_call` with no name/title/rawInput and a
@@ -119,6 +122,7 @@ import {
   type NewSessionResponse,
   type PromptRequest,
   type PromptResponse,
+  type RequestPermissionRequest,
   type RequestPermissionResponse,
   type SessionConfigOption,
   type SetSessionConfigOptionRequest,
@@ -377,6 +381,21 @@ function makeAgent() {
       record('session/prompt', params)
       prompts += 1
       const hangThisPrompt = HANG || (HANG_ONCE && prompts === 1)
+      for (const step of (jsonEnv('MOCK_SCRIPT') ?? []) as Record<string, unknown>[]) {
+        if ('permission' in step) {
+          const decision = await conn.request(methods.client.session.requestPermission, {
+            sessionId: params.sessionId,
+            toolCall: step.permission as RequestPermissionRequest['toolCall'],
+            options: [{ optionId: 'yes', name: 'Allow once', kind: 'allow_once' as const }],
+          })
+          record('permission-outcome', decision)
+          continue
+        }
+        await conn.notify(methods.client.session.update, {
+          sessionId: params.sessionId,
+          update: step as SessionNotification['update'],
+        })
+      }
       if (WANT_PERMISSION) {
         const decision = await conn.request(methods.client.session.requestPermission, {
           sessionId: params.sessionId,
