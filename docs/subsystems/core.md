@@ -355,6 +355,82 @@ The one pipeline-authoring type that is core: what every registered tool *is* �
 
 Its full fields, the `defineTool`/`ValueSchemaSpec`/`ParameterSchemaSpec` typed schema DSL, the `ToolExecution`/`ToolExecutionResult` waterfall types, and the tool-presentation UI types are on **[tools.md](tools.md)**.
 
+## Tool bridging
+
+`dsh-agent-tool-bridge` projects the tools visible in an external-harness agent's scope onto one bearer-credentialed loopback MCP endpoint per agent — the ACP driver carries it as a `session/new`/`session/load` `mcpServers` entry and the Codex driver as `mcp_servers.*` config overrides on `thread/start`/`thread/resume`. `BridgedTool` is the model-facing projection, `BridgeToolCall` one invocation the endpoint's MCP handler runs, `BridgedToolResult` its settled outcome, `BridgedCompletion` the retained record a driver's `tool/result` correlates against, and `BridgeMcpEndpoint` the connection record a driver hands to the harness.
+
+Source: [`packages/core/agent-tool-bridge/src/types.ts`](../../packages/core/agent-tool-bridge/src/types.ts)
+
+```ts type-equiv
+/** One dsh tool projected for an external harness: model-facing fields only. */
+interface BridgedTool {
+  /** The registered tool name, as `tools/call` names it. */
+  readonly name: string
+  /** The tool's model-facing description. */
+  readonly description: string
+  /** The tool's JSON Schema arguments object. */
+  readonly inputSchema: Record<string, unknown>
+}
+```
+
+```ts type-equiv
+/** One tool invocation the endpoint's MCP handler asks the bridge to run. */
+interface BridgeToolCall {
+  /** The tool name to execute; must be a member of the agent's bridged set. */
+  readonly name: string
+  /** Parsed call arguments; the tool's own schema validates them. */
+  readonly arguments: unknown
+  /** Caller cancellation, forwarded to the tool execution. */
+  readonly signal: AbortSignal
+}
+```
+
+```ts type-equiv
+/** The settled outcome of one bridged call, in dsh content blocks. */
+interface BridgedToolResult {
+  /** Model-facing content, or the materialized error text on failure. */
+  readonly content: ContentBlock[]
+  /** Whether the call failed — policy denial, guard rejection, or tool error. */
+  readonly isError: boolean
+}
+```
+
+```ts type-equiv
+/**
+ * One settled bridged execution retained for transcript correlation. The
+ * external driver reports the harness's own `tool/call`/`tool/result` pair;
+ * the bridge keeps the dsh execution's presentation `meta` so the driver's
+ * `tool/result` can carry the same card payload an in-process call logs.
+ */
+interface BridgedCompletion {
+  /** The dsh tool the call ran — the name `tool/call` is logged under. */
+  readonly name: string
+  /** Canonical JSON of the call's arguments: object keys sorted recursively. */
+  readonly argumentsJson: string
+  /** The execution's `presentationMeta` projection, when the tool produced one. */
+  readonly meta?: JsonValue
+}
+```
+
+```ts type-equiv
+/**
+ * One opened MCP endpoint, exactly as an ACP `mcpServers` http entry needs it:
+ * the URL plus the header set the client must send. `close` revokes the
+ * endpoint's credential and stops serving it; the owning agent's disposal
+ * closes it implicitly.
+ */
+interface BridgeMcpEndpoint {
+  /** The MCP server name the endpoint serves under. */
+  readonly name: string
+  /** Loopback URL the client connects to. */
+  readonly url: string
+  /** HTTP headers the client must attach to every request. */
+  readonly headers: readonly { name: string; value: string }[]
+  /** Revoke the endpoint's credential and close its in-flight exchanges. */
+  close(): Promise<void>
+}
+```
+
 ## Repo-wide type patterns
 
 Two patterns recur across every subsystem and are documented once, here.
@@ -969,6 +1045,52 @@ roots(): Agent[]
 
 Source: [`packages/core/agent/src/index.ts`](../../packages/core/agent/src/index.ts)
 
+<a id="ctxagenttoolbridge--agenttoolbridge"></a>
+
+### `ctx.agentToolBridge` — `AgentToolBridge`
+
+The `agentToolBridge` service (`ctx.agentToolBridge`). Owns one shared loopback HTTP listener; every openMcpEndpoint call attaches one bearer-credentialed endpoint to it. The listener binds lazily on the first opened endpoint and closes with the service.
+
+```ts cordis-catalog
+/**
+ * Expose `agent`'s bridged tools on the shared loopback listener under a
+ * fresh bearer credential, and record `agent-tool-bridge/exposed` on the
+ * agent's session. The endpoint answers `tools/list` from the agent's live
+ * scope on every request and routes `tools/call` through the shared policy
+ * pipeline with the request's abort signal fused with the endpoint's.
+ * `close()` revokes the credential and aborts in-flight calls; the agent's
+ * `agent/disposed` and the service's disposal close it implicitly.
+ * @param agent - the agent the endpoint serves.
+ * @returns the URL and headers a client connects with, plus `close()`.
+ */
+async openMcpEndpoint(agent: Agent): Promise<BridgeMcpEndpoint>
+
+/**
+ * Resolve a harness-reported tool name to the agent's bridged dsh tool:
+ * `mcp__<serverName>__<tool>` where `<tool>` is currently bridged for
+ * `agent`. Excluded, unscoped, and unrecognized names return undefined, so
+ * the caller logs them exactly as the harness reported.
+ * @param agent - the agent the harness is driving.
+ * @param reported - the tool name the harness reported for the call.
+ * @returns the dsh tool name, or undefined when the call is not bridged.
+ */
+bridgedToolName(agent: Agent, reported: string): string | undefined
+
+/**
+ * Consume the oldest settled bridged execution for `agent` whose dsh tool
+ * name and arguments match, so a harness-reported `tool/result` can carry
+ * the execution's `meta`. Arguments compare as canonical JSON — object key
+ * order is irrelevant — and identical calls correlate first-in-first-out.
+ * @param agent - the agent the harness is driving.
+ * @param tool - the dsh tool name {@link bridgedToolName} resolved.
+ * @param argumentsJson - the serialized arguments the harness reported.
+ * @returns the settled completion, or undefined when none matches.
+ */
+takeCompletion(agent: Agent, tool: string, argumentsJson: string): BridgedCompletion | undefined
+```
+
+Source: [`packages/core/agent-tool-bridge/src/index.ts`](../../packages/core/agent-tool-bridge/src/index.ts)
+
 <a id="ctxcodexappserver--codexappserver"></a>
 
 ### `ctx.codexAppServer` — `CodexAppServer`
@@ -1386,4 +1508,26 @@ One session committed a different agent preset to its durable log. Consumers inv
 ```
 
 Source: [`packages/preset/agent-presets/src/types.ts`](../../packages/preset/agent-presets/src/types.ts)
+
+<a id="agents-events"></a>
+
+### `agents/*` events
+
+<a id="agentsharnesses-changed--emit"></a>
+
+#### `agents/harnesses-changed` — emit
+
+The mounted agent-harness set changed: a harness registered with or left the registry. Consumers that enumerate `ctx.agents.harnesses()` re-read it.
+
+```ts cordis-catalog
+/**
+ * The mounted agent-harness set changed: a harness registered with or left
+ * the registry. Consumers that enumerate `ctx.agents.harnesses()` re-read
+ * it.
+ * @mode emit
+ */
+'agents/harnesses-changed'(): void
+```
+
+Source: [`packages/core/agent/src/runtime-types.ts`](../../packages/core/agent/src/runtime-types.ts)
 <!-- END GENERATED cordis-surface -->

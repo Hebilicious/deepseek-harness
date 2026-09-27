@@ -27,9 +27,17 @@
  *     `tool`       commandExecution started → completed → message → completed.
  *     `tool-open`  commandExecution started, never completed — the driver's
  *                  settlement must close it as an error result.
+ *     `interleaved` agentMessage delta, a completed commandExecution, then
+ *                  more of the same item's deltas and its completion —
+ *                  text → call → text inside one streamed item.
+ *     `interleaved-settled` agentMessage delta, a completed commandExecution,
+ *                  then the item's completion carrying only the already
+ *                  streamed text — the continuation attempt commits nothing.
  *     `message-open` agentMessage started → delta → turn completed, with no item
  *                  completion — the settlement must close the open stream.
  *     `file-change` fileChange started → completed with a diff → completed.
+ *     `mcp-turn-call` calls `MOCK_CODEX_MCP_TURN_CALL` on the thread's first
+ *                  `mcp_servers` entry, then reports one `mcpToolCall` pair.
  *     `approval`   commandExecution gated on an `item/commandExecution/
  *                  requestApproval` answer; `MOCK_CODEX_DECISIONS` overrides
  *                  the offered list.
@@ -109,6 +117,19 @@
  *                             `MOCK_CODEX_EARLY_STARTED_FILE` is touched once it
  *                             is written.
  * - `MOCK_CODEX_FAIL_INJECT` — `thread/inject_items` answers an error.
+ * - `MOCK_CODEX_MCP_PROBE` — probe every `mcp_servers.<name>` entry a
+ *                             `thread/start`/`thread/resume` `config` override
+ *                             carries: a credential-less POST
+ *                             (`mcp-unauthorized`), then initialize,
+ *                             `tools/list` (`mcp-tools`), and the
+ *                             `MOCK_CODEX_MCP_CALL` (`{name, arguments}`)
+ *                             `tools/call` (`mcp-call`) under the entry's
+ *                             `http_headers`.
+ * - `MOCK_CODEX_MCP_TURN_CALL` — JSON `{name, arguments}` called on the
+ *                             thread's first `mcp_servers` entry during the
+ *                             `mcp-turn-call` scenario, then reported as one
+ *                             `mcpToolCall` item pair (`server` names the
+ *                             endpoint, `tool` the dsh tool).
  *
  * `thread/resume` models the real rollout store: a thread earns a rollout only
  * once a turn starts on it (recorded under `$CODEX_HOME/mock-rollouts`), and
@@ -153,6 +174,15 @@ const INJECT_GATE = process.env.MOCK_CODEX_INJECT_GATE_FILE
 const EARLY_STARTED = process.env.MOCK_CODEX_EARLY_STARTED === '1'
 const EARLY_STARTED_FILE = process.env.MOCK_CODEX_EARLY_STARTED_FILE
 const FAIL_INJECT = process.env.MOCK_CODEX_FAIL_INJECT === '1'
+const MCP_PROBE = process.env.MOCK_CODEX_MCP_PROBE === '1'
+const MCP_CALL = process.env.MOCK_CODEX_MCP_CALL === undefined
+  ? undefined
+  : JSON.parse(process.env.MOCK_CODEX_MCP_CALL) as { name: string; arguments?: unknown }
+const MCP_TURN_CALL = process.env.MOCK_CODEX_MCP_TURN_CALL === undefined
+  ? undefined
+  : JSON.parse(process.env.MOCK_CODEX_MCP_TURN_CALL) as { name: string; arguments?: unknown }
+/** The `mcp_servers` entries the latest thread request's config carried. */
+let threadMcpServers: ProbedMcpServer[] = []
 /** Rollout store the real app-server keeps under `CODEX_HOME`. */
 const ROLLOUT_ROOT = join(process.env.CODEX_HOME ?? process.cwd(), 'mock-rollouts')
 
@@ -282,6 +312,162 @@ function serverRequest(method: string, params: Record<string, unknown>): Promise
 
 function touchReady(): void {
   if (READY_FILE !== undefined) writeFileSync(READY_FILE, 'ready')
+}
+
+// ---- MCP endpoint probe ----
+
+/** One MCP server reconstructed from the dotted `mcp_servers.*` config overrides. */
+interface ProbedMcpServer {
+  readonly name: string
+  readonly url: string
+  readonly headers: Record<string, string>
+}
+
+/**
+ * Rebuild the `mcp_servers.<name>` tables a thread request's `config`
+ * overrides carry: `mcp_servers.<name>.url` selects the entry and
+ * `mcp_servers.<name>.http_headers` supplies its request headers.
+ */
+function mcpServersOf(config: unknown): ProbedMcpServer[] {
+  if (config === null || typeof config !== 'object' || Array.isArray(config)) return []
+  const servers = new Map<string, { url?: string; headers: Record<string, string> }>()
+  for (const [key, value] of Object.entries(config as JsonObject)) {
+    const match = /^mcp_servers\.([^.]+)\.(url|http_headers)$/.exec(key)
+    if (match === null) continue
+    const entry = servers.get(match[1]!) ?? { headers: {} }
+    if (match[2] === 'url' && typeof value === 'string') entry.url = value
+    if (match[2] === 'http_headers' && value !== null && typeof value === 'object' && !Array.isArray(value)) {
+      for (const [name, header] of Object.entries(value as JsonObject)) {
+        if (typeof header === 'string') entry.headers[name] = header
+      }
+    }
+    servers.set(match[1]!, entry)
+  }
+  return [...servers.entries()].flatMap(([name, server]) =>
+    server.url === undefined ? [] : [{ name, url: server.url, headers: server.headers }])
+}
+
+/**
+ * Call `MOCK_CODEX_MCP_TURN_CALL` on the thread's first `mcp_servers` entry
+ * mid-turn, then report it as one `mcpToolCall` item pair — the shape Codex
+ * emits for MCP calls, with `server` naming the configured endpoint and
+ * `tool` the dsh tool it ran.
+ */
+async function emitMcpTurnCall(threadId: string, turnId: string): Promise<void> {
+  const server = threadMcpServers[0]
+  if (MCP_TURN_CALL === undefined || server === undefined) {
+    record('mcp-turn-call', { error: 'no mcp_servers entry' })
+    return
+  }
+  try {
+    const opened = await mcpPost(server.url, server.headers, {
+      jsonrpc: '2.0',
+      id: 1,
+      method: 'initialize',
+      params: {
+        protocolVersion: '2025-06-18',
+        capabilities: {},
+        clientInfo: { name: 'mock-codex-app-server', version: '0' },
+      },
+    })
+    if (opened.error !== undefined || opened.result === undefined) {
+      record('mcp-turn-call', opened)
+      return
+    }
+    await mcpPost(server.url, server.headers, { jsonrpc: '2.0', method: 'notifications/initialized' })
+    const called = await mcpPost(server.url, server.headers, {
+      jsonrpc: '2.0',
+      id: 2,
+      method: 'tools/call',
+      params: { name: MCP_TURN_CALL.name, arguments: MCP_TURN_CALL.arguments ?? {} },
+    })
+    record('mcp-turn-call', called)
+    const payload = called.result as { content?: unknown[]; isError?: boolean } | undefined
+    const failed = payload?.isError === true || called.error !== undefined
+    notify('item/started', {
+      threadId,
+      turnId,
+      item: {
+        id: 'mcp-1',
+        type: 'mcpToolCall',
+        server: server.name,
+        tool: MCP_TURN_CALL.name,
+        arguments: MCP_TURN_CALL.arguments ?? {},
+      },
+    })
+    notify('item/completed', {
+      threadId,
+      turnId,
+      item: {
+        id: 'mcp-1',
+        type: 'mcpToolCall',
+        server: server.name,
+        tool: MCP_TURN_CALL.name,
+        status: failed ? 'failed' : 'completed',
+        result: { content: payload?.content ?? [] },
+        ...failed ? { error: { message: 'mcp call failed' } } : {},
+      },
+    })
+  } catch (error) {
+    record('mcp-turn-call', { error: String(error) })
+  }
+}
+
+/** POST one MCP JSON-RPC message; returns the status and any result/error payload. */
+async function mcpPost(
+  url: string,
+  headers: Record<string, string>,
+  message: Record<string, unknown>,
+): Promise<{ status: number; result?: unknown; error?: unknown }> {
+  const response = await fetch(url, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', accept: 'application/json, text/event-stream', ...headers },
+    body: JSON.stringify(message),
+  })
+  const text = await response.text()
+  if (!response.ok || text === '') return { status: response.status }
+  const messages = (response.headers.get('content-type') ?? '').includes('text/event-stream')
+    ? text.split('\n').filter(line => line.startsWith('data:')).map(line => JSON.parse(line.slice(5).trim()) as { result?: unknown; error?: unknown })
+    : [JSON.parse(text) as { result?: unknown; error?: unknown }]
+  const reply = messages.find(entry => entry !== null && ('result' in entry || 'error' in entry)) ?? {}
+  return { status: response.status, ...reply }
+}
+
+/**
+ * Probe every `mcp_servers` entry a thread request's `config` carried, so a
+ * test reads from the record whether the endpoint is reachable, requires its
+ * bearer credential, and serves the bridged tools. A probe failure lands as
+ * `mcp-error` rather than failing the thread request.
+ */
+async function probeMcpConfig(config: unknown): Promise<void> {
+  const init = {
+    jsonrpc: '2.0',
+    id: 1,
+    method: 'initialize',
+    params: {
+      protocolVersion: '2025-06-18',
+      capabilities: {},
+      clientInfo: { name: 'mock-codex-app-server', version: '0' },
+    },
+  }
+  for (const server of mcpServersOf(config)) {
+    try {
+      record('mcp-unauthorized', await mcpPost(server.url, {}, init))
+      record('mcp-initialize', await mcpPost(server.url, server.headers, init))
+      await mcpPost(server.url, server.headers, { jsonrpc: '2.0', method: 'notifications/initialized' })
+      record('mcp-tools', await mcpPost(server.url, server.headers, { jsonrpc: '2.0', id: 2, method: 'tools/list', params: {} }))
+      if (MCP_CALL !== undefined) {
+        record('mcp-call', await mcpPost(server.url, server.headers, {
+          jsonrpc: '2.0',
+          id: 3,
+          method: 'tools/call',
+          params: { name: MCP_CALL.name, arguments: MCP_CALL.arguments ?? {} },
+        }))
+      }
+    } catch (error) {
+      record('mcp-error', String(error))
+    }
+  }
 }
 
 /** One bounded poll beat for the gate fixtures. */
@@ -444,6 +630,95 @@ async function runTurn(threadId: string, turnId: string): Promise<void> {
       notify('item/agentMessage/delta', { threadId, turnId, itemId: 'msg-1', delta: TEXT })
       completeTurn(threadId, turnId, 'completed')
       return
+    case 'interleaved':
+      // One agentMessage item streams text, yields to a tool pair, then
+      // resumes; its completion text is the whole item's, so the driver
+      // splits it across the two attempts the advertisement settles between.
+      notify('item/started', { threadId, turnId, item: { id: 'msg-1', type: 'agentMessage' } })
+      notify('item/agentMessage/delta', { threadId, turnId, itemId: 'msg-1', delta: 'before ' })
+      notify('item/started', {
+        threadId,
+        turnId,
+        item: { id: 'cmd-1', type: 'commandExecution', command: 'true', cwd: '/' },
+      })
+      notify('item/completed', {
+        threadId,
+        turnId,
+        item: {
+          id: 'cmd-1',
+          type: 'commandExecution',
+          command: 'true',
+          status: 'completed',
+          aggregatedOutput: 'tool output',
+          exitCode: 0,
+          durationMs: 5,
+        },
+      })
+      notify('item/agentMessage/delta', { threadId, turnId, itemId: 'msg-1', delta: ' after' })
+      notify('item/completed', {
+        threadId,
+        turnId,
+        item: { id: 'msg-1', type: 'agentMessage', text: 'before  after', phase: null },
+      })
+      completeTurn(threadId, turnId, 'completed')
+      return
+    case 'interleaved-settled':
+      // The tool pair lands between the item's last delta and its completion,
+      // whose text repeats what already streamed: the advertisement settled
+      // the first attempt, and the continuation attempt carries no new text.
+      notify('item/started', { threadId, turnId, item: { id: 'msg-1', type: 'agentMessage' } })
+      notify('item/agentMessage/delta', { threadId, turnId, itemId: 'msg-1', delta: TEXT })
+      notify('item/started', {
+        threadId,
+        turnId,
+        item: { id: 'cmd-1', type: 'commandExecution', command: 'true', cwd: '/' },
+      })
+      notify('item/completed', {
+        threadId,
+        turnId,
+        item: {
+          id: 'cmd-1',
+          type: 'commandExecution',
+          command: 'true',
+          status: 'completed',
+          aggregatedOutput: 'tool output',
+          exitCode: 0,
+          durationMs: 5,
+        },
+      })
+      notify('item/completed', {
+        threadId,
+        turnId,
+        item: { id: 'msg-1', type: 'agentMessage', text: TEXT, phase: null },
+      })
+      completeTurn(threadId, turnId, 'completed')
+      return
+    case 'advertised-open':
+      // The tool-call advertisement settles the message item's streaming
+      // attempt, and the item never completes: turn settlement must skip the
+      // ended attempt rather than double-committing it.
+      notify('item/started', { threadId, turnId, item: { id: 'msg-1', type: 'agentMessage' } })
+      notify('item/agentMessage/delta', { threadId, turnId, itemId: 'msg-1', delta: TEXT })
+      notify('item/started', {
+        threadId,
+        turnId,
+        item: { id: 'cmd-1', type: 'commandExecution', command: 'true', cwd: '/' },
+      })
+      notify('item/completed', {
+        threadId,
+        turnId,
+        item: {
+          id: 'cmd-1',
+          type: 'commandExecution',
+          command: 'true',
+          status: 'completed',
+          aggregatedOutput: 'tool output',
+          exitCode: 0,
+          durationMs: 5,
+        },
+      })
+      completeTurn(threadId, turnId, 'completed')
+      return
     case 'foreign-frame':
       // One frame naming a turn the driver never committed, while its own turn
       // is live and committed from the response.
@@ -464,6 +739,12 @@ async function runTurn(threadId: string, turnId: string): Promise<void> {
         turnId,
         item: { id: 'fc-1', type: 'fileChange', status: 'completed', changes },
       })
+      break
+    }
+    case 'mcp-turn-call': {
+      // The harness runs the bridged tool itself, then reports its own
+      // mcpToolCall pair — the driver only projects what it observed.
+      await emitMcpTurnCall(threadId, turnId)
       break
     }
     case 'items-tools':
@@ -1024,6 +1305,8 @@ async function dispatch(method: string, params: JsonObject): Promise<unknown> {
       const ephemeral = process.env.MOCK_CODEX_EPHEMERAL === '1'
       const response = threadResponse(threadId, ephemeral)
       if (process.env.MOCK_CODEX_NO_THREAD_ID === '1') delete (response.thread as JsonObject).id
+      threadMcpServers = mcpServersOf(params.config)
+      if (MCP_PROBE) await probeMcpConfig(params.config)
       return response
     }
     case 'thread/resume': {
@@ -1039,6 +1322,8 @@ async function dispatch(method: string, params: JsonObject): Promise<unknown> {
         throw new MockProtocolError(-32600, `no rollout found for thread id ${requested}`)
       }
       threads.add(requested)
+      threadMcpServers = mcpServersOf(params.config)
+      if (MCP_PROBE) await probeMcpConfig(params.config)
       return threadResponse(process.env.MOCK_CODEX_RESUME_THREAD_ID ?? requested, false)
     }
     case 'thread/unsubscribe': {

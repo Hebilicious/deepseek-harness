@@ -50,6 +50,7 @@ In-box bundles resolve from the dsh installation; the launcher activates this la
 | `session-title-llm` | Pinned to `deepseek-official` / `deepseek-flash`, because a session's logged route is a catalog-only adapter for external harnesses and serves no streams |
 | `agent-codex` | Inserted: one shared app-server per profile, one Codex thread per session |
 | `agent-acp` | Inserted with five harness entries, one process each: `devin`, `grok`, `opencode`, `mimo`, `claude` |
+| `agent-tool-bridge` | Inserted: serves the session's scoped dsh tools to external harnesses over one authenticated loopback MCP endpoint per agent, excluding names every harness has natively or only the in-process loop can drive |
 
 The harness rows themselves are ordinary profile configuration. Repoint, add, or remove an ACP entry in the profile's own `cordis.patch.yml`, and the picker follows the mounted set.
 
@@ -69,7 +70,7 @@ The driver contracts, configuration, and limitations live in [`dsh-agent-codex`]
 
 ### Patch semantics
 
-A patch replaces the targeted row's whole `config`, and an `insert` list appends new rows. This bundle therefore states only what it owns: two id-targeted overrides and two inserted rows. The profile's own `cordis.patch.yml`, the home-level patch, and any `--patch` overlay still apply after this layer, so a deployment can add a harness, repoint an executable, or change a sandbox policy without editing the bundle.
+A patch replaces the targeted row's whole `config`, and an `insert` list appends new rows. This bundle therefore states only what it owns: two id-targeted overrides and three inserted rows. The profile's own `cordis.patch.yml`, the home-level patch, and any `--patch` overlay still apply after this layer, so a deployment can add a harness, repoint an executable, or change a sandbox policy without editing the bundle.
 
 ### Why several harnesses coexist here
 
@@ -83,7 +84,7 @@ Each driver registers its factory through `ctx.agents.registerHarness({ id, name
 
 | File | Role |
 |---|---|
-| [`cordis.patch.yml`](cordis.patch.yml) | The whole layer: the two overrides and the two inserted driver rows |
+| [`cordis.patch.yml`](cordis.patch.yml) | The whole layer: the two overrides and the inserted bridge and driver rows |
 | [`src/index.ts`](src/index.ts) | Module marker only; the package carries no runtime API |
 | [`packages/boot/app-boot/src/profile.ts`](../../boot/app-boot/src/profile.ts) | The `web` and `web-harnesses` profile templates that stack this bundle |
 
@@ -98,6 +99,7 @@ Each driver registers its factory through `ctx.agents.registerHarness({ id, name
 
 - [dsh-agent-acp](../../core/agent-acp/README.md) — the ACP driver this layer mounts for Devin, Grok Build, opencode, and mimocode.
 - [dsh-agent-codex](../../core/agent-codex/README.md) — the Codex app-server driver this layer mounts.
+- [dsh-agent-tool-bridge](../../core/agent-tool-bridge/README.md) — the loopback MCP bridge serving scoped dsh tools to the mounted external harnesses.
 - [dsh-agent](../../core/agent/README.md) — the harness registry every driver registers with.
 - [dsh-web-app](../web-app/README.md) — the browser surface this layer builds on.
 - [Bundle package map](../README.md) — the surfaces built on the same core.

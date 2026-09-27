@@ -10,12 +10,13 @@
  */
 
 import type { Context } from '@deepseek-ai/cordis'
-import { harnessOwning } from '@deepseek-ai/dsh-agent'
+import { LOOP_HARNESS_ID } from '@deepseek-ai/dsh-agent'
 import type {
   Agent,
   AgentHandle,
   AgentOptions,
   CreateAgentOptions,
+  HarnessId,
 } from '@deepseek-ai/dsh-agent'
 import { errorChain } from '@deepseek-ai/dsh-llm'
 import type { MessageId } from '@deepseek-ai/dsh-llm'
@@ -126,6 +127,13 @@ export interface MaterializeInputs {
     /** Child-owned composition record appended after the inherited marker. */
     descriptor: SubagentDescriptorData
   }
+  /**
+   * The harness the create or resume resolves under: a fresh child's explicit
+   * or parent-inherited choice, or the child's own recorded harness on resume.
+   * `undefined` applies the registry's own fallback — the loop harness for an
+   * unrecorded resume, else the sole mounted harness.
+   */
+  harness?: HarnessId | undefined
   agentOptions: AgentOptions
   composition: { persona?: string | undefined; toolFilter?: ToolRestriction | undefined }
   signal: AbortSignal
@@ -621,27 +629,33 @@ export class ContinuableActivationRegistry {
   ): Promise<Activation> {
     const { childId, provider, parent, create } = inputs
     inputs.signal.throwIfAborted()
+    // A fresh child runs under its resolved choice; a resume runs under the
+    // child's own recorded harness, which `harness` already carries. The
+    // effective id reproduces the registry's fallbacks (the loop for an
+    // unrecorded resume, else the sole mounted harness) so composition gating
+    // sees the harness the call resolves to.
+    const mounted = this.ownerCtx.agents.harnesses()
+    const effective = inputs.harness
+      ?? (create === undefined ? this.ownerCtx.agents.harnessForUnrecordedSession() : undefined)
+      ?? (mounted.length === 1 ? mounted[0]?.id : undefined)
+    const isLoop = effective === undefined || effective === LOOP_HARNESS_ID
     const setup = (childCtx: Context, child: Agent): void => {
-      // Only fresh creation appends the descriptor and delegated policy after
+      // Only fresh creation appends the delegated policy and descriptor after
       // the inherited marker; a cold resume replays those persisted events.
       if (create !== undefined) {
-        child.session.append('subagent/descriptor', create.descriptor)
         appendDelegatedPolicyOverrides(child.session, create.delegatedPolicies)
+        child.session.append('subagent/descriptor', create.descriptor)
       }
-      applyChildComposition(childCtx, parent, inputs.composition)
+      // The scoped composition installs through loop-only services, which a
+      // non-loop harness's scope does not host.
+      if (isLoop) applyChildComposition(childCtx, parent, inputs.composition)
     }
     const observer = this.observeActivation(provider, childId, parent)
-    // A continuable child belongs to the harness that owns its parent's
-    // session, fresh or resumed, so one read serves both materializations. A
-    // parent recording none leaves the option absent: a resumed child resolves
-    // the loop that wrote that log, and a fresh one needs the deployment's sole
-    // mounted harness.
-    const harness = harnessOwning(this.ownerCtx, parent.session)
-    const inheritedHarness = harness === undefined ? {} : { harness }
+    const harnessOption = inputs.harness === undefined ? {} : { harness: inputs.harness }
     const handle: AgentHandle = create === undefined
       ? await this.ownerCtx.agents.resume({
         resumeSessionId: childId,
-        ...inheritedHarness,
+        ...harnessOption,
         parentAgent: parent,
         agentOptions: inputs.agentOptions,
         signal: inputs.signal,
@@ -649,7 +663,7 @@ export class ContinuableActivationRegistry {
       })
       : await this.ownerCtx.agents.create({
         sessionId: childId,
-        ...inheritedHarness,
+        ...harnessOption,
         parentAgent: parent,
         meta: create.meta,
         ...(create.seed === undefined ? {} : { seed: create.seed }),

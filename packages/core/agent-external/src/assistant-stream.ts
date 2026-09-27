@@ -10,6 +10,7 @@ import {
   type ReplayEnvelope,
   type StreamChunk,
   type TokenUsage,
+  type ToolCallId,
 } from '@deepseek-ai/dsh-llm'
 import type { AssistantStreamFrame } from '@deepseek-ai/dsh-agent'
 import type { SessionEventMap, SessionId, SessionSeq } from '@deepseek-ai/dsh-session'
@@ -19,6 +20,8 @@ export class AssistantStreamAttempt {
   private readonly accumulator = new AssistantStreamAccumulator()
   private readonly assembler = new BlockAssembler()
   private index = 0
+  /** Next free content-block index; callers choose `chunk.index` freely. */
+  private nextBlockIndex = 0
   private terminal = false
   /** Attempt identity unique within this Agent lifecycle. */
   readonly attemptId: LlmAttemptId
@@ -63,6 +66,7 @@ export class AssistantStreamAttempt {
   push(chunk: StreamChunk): void {
     const timed = this.accumulator.push({ time: Date.now(), chunk })
     this.assembler.push(timed.chunk)
+    if ('index' in chunk) this.nextBlockIndex = Math.max(this.nextBlockIndex, chunk.index + 1)
     this.emit({
       type: 'chunk',
       attemptId: this.attemptId,
@@ -71,6 +75,21 @@ export class AssistantStreamAttempt {
       time: timed.time,
       chunk: timed.chunk,
     })
+  }
+
+  /**
+   * Push one complete tool-call block at the next free block index. The
+   * projector advertises a harness-reported call inside an open attempt this
+   * way before the call's durable `tool/call` commits.
+   * @param id - the durable call identity the block advertises.
+   * @param name - the tool name the block advertises.
+   * @param argumentsJson - serialized arguments the block advertises.
+   */
+  pushToolCall(id: ToolCallId, name: string, argumentsJson: string): void {
+    const index = this.nextBlockIndex
+    this.push({ type: 'block-start', index, blockType: 'tool-call' })
+    this.push({ type: 'tool-call-delta', index, id, name, argumentsDelta: argumentsJson })
+    this.push({ type: 'block-end', index, block: { type: 'tool-call', id, name, arguments: argumentsJson } })
   }
 
   /**

@@ -9,7 +9,7 @@ English | [中文](README.zh.md)
 
 ## Summary
 
-Run agent sessions on Codex instead of the in-process loop. One plugin instance drives one or more Codex instances, each with its own `codex app-server` process, `CODEX_HOME`, credentials, agent-registry identity, and model-picker route; every session binds its own Codex thread with its own durable thread id. The driver forwards each turn over JSON-RPC, projects Codex items into `assistant/message`, `tool/call`, and `tool/result` events, routes Codex approvals into the dsh approval seam, and exposes the account operations a settings surface drives. Codex keeps the loop, prompt, tools, MCP servers, and config; dsh keeps the session, transcript, approvals, notifications, and model picker.
+Run agent sessions on Codex instead of the in-process loop. One plugin instance drives one or more Codex instances, each with its own `codex app-server` process, `CODEX_HOME`, credentials, and model-picker route; every session binds its own Codex thread. The driver forwards each turn over JSON-RPC, projects Codex items into session events, routes Codex approvals into the dsh approval seam, and exposes account operations. A mounted `agentToolBridge` lends the session's dsh tools to the thread as one authenticated loopback MCP endpoint. Codex keeps the loop, prompt, tools, and config; dsh keeps the session, transcript, approvals, and model picker.
 
 ## Table of Contents
 
@@ -91,6 +91,10 @@ Each entry constructs its own `CodexAgentHost`, which registers `{id, name, desc
 
 `bind()` joins its instance's connection, proves the account is authenticated, then resumes the recorded thread or starts a fresh one, all before the session is published. A fresh `thread/start` runs with `ephemeral: false` and appends `agent-codex/thread`; a recorded thread is resumed with `excludeTurns: true`. Codex answering `-32600 no rollout found` for a thread that was never prompted makes the driver log a warning and start a fresh thread; every other refusal stays fatal, and a resumed id that differs from the recorded one is a protocol error. `unbind()` sends `thread/unsubscribe` while that instance's process is still alive.
 
+### Bridged dsh tools
+
+When the deployment mounts [`ctx.agentToolBridge`](../agent-tool-bridge/README.md), `bind()` opens one authenticated loopback MCP endpoint for the agent and hands it to both `thread/start` and `thread/resume` as `mcp_servers.<name>` config overrides carrying its URL and `Authorization` bearer header, so Codex loads the session's dsh tools under its own MCP integration. Codex reports each bridged call as `mcp__<name>__<tool>`; the shared projector resolves that name through the bridge and logs the call under the dsh tool name, and the result carries the execution's `meta` when the tool declares `presentationMeta`. `thread/resume` declares no `dynamicTools` member, so the endpoint rides the `config` override both requests accept rather than the experimental dynamic-tool API. The durable `agent-tool-bridge/exposed` event records that an endpoint credential was issued together with the tool list it opened with — a rolled-back bind still leaves that record even though its endpoint never served a thread. Each bind opens a fresh endpoint with a fresh credential; `unbind()`, or a bind that rolls back, closes it and revokes the token. With no bridge mounted the thread requests carry no `config` member.
+
 ### Turn driving
 
 One Codex turn is one durable dsh step. `turn/start` carries the claimed input, `clientUserMessageId`, the effective approval policy and sandbox policy, and the selected `model`/`effort`; notifications stream through `ExternalTurnProjector`. A turn id is provisional until `turn/started` or the `turn/start` response commits it, and frames that arrive first are buffered and replayed. `turn/completed` maps `completed` to a completed turn, `interrupted` to an aborted one, and `failed` to `max-tokens` or an error code derived from Codex's failure category. An interrupted or failed turn still settles its open tool items and assistant streams, so a dangling `tool/call` never survives.
@@ -113,7 +117,7 @@ Each instance id is also a `ctx.llm` provider route, served by a `CodexCatalogAd
 |---|---|
 | [`src/index.ts`](src/index.ts) | The `codexAppServer` service: per-entry runtimes, hosts, catalog routes, account Remote |
 | [`src/config.ts`](src/config.ts) | Instance entries, the static Config schema, and default resolution |
-| [`src/agent.ts`](src/agent.ts) | `CodexAgent`: thread lifecycle, turn driving, item projection, approvals |
+| [`src/agent.ts`](src/agent.ts) | `CodexAgent`: thread lifecycle, turn driving, item projection, approvals, tool-bridge endpoint |
 | [`src/host.ts`](src/host.ts) | `CodexAgentHost`: registers one instance and binds its runtime into each agent |
 | [`src/runtime.ts`](src/runtime.ts) | `CodexAppServerRuntime`: one instance's process, connection, thread routing, account calls, `model/list` |
 | [`src/connection.ts`](src/connection.ts) | `CodexAppServerConnection`: line transport, handshake, request/notification dispatch |
@@ -121,7 +125,7 @@ Each instance id is also a `ctx.llm` provider route, served by a `CodexCatalogAd
 | [`src/catalog.ts`](src/catalog.ts) | `CodexCatalogAdapter`: the catalog-only route for one instance id |
 | [`src/thread-state.ts`](src/thread-state.ts) | `agent-codex/thread` event and its projection |
 | [`src/types.ts`](src/types.ts) | Client-safe account payloads and Remote error codes |
-| [`tests/agent-codex.spec.ts`](tests/agent-codex.spec.ts) | Turn, thread, approval, and account behavior over a mock app-server |
+| [`tests/agent-codex.spec.ts`](tests/agent-codex.spec.ts) | Turn, thread, approval, account, and tool-bridge behavior over a mock app-server |
 | [`tests/multi-instance.spec.ts`](tests/multi-instance.spec.ts) | Several instances in one plugin: routing, homes, resume, account scope, disposal |
 | [`tests/config.spec.ts`](tests/config.spec.ts) | Entry defaults and the loud refusals for an unmountable instance list |
 | [`tests/service.spec.ts`](tests/service.spec.ts) | Mounted instance identities and Remote scoping and error normalization |
@@ -151,11 +155,11 @@ Each instance id is also a `ctx.llm` provider route, served by a `CodexCatalogAd
 
 #### What the model sees
 
-The claimed user input is forwarded as Codex `UserInput` entries: text blocks pass through, an image with a resolvable attachment path becomes `localImage`, and files become their deterministic handle text. Everything else the model sees — Codex's system prompt, its earlier turns, and its tool definitions — belongs to the Codex process, not to dsh.
+The claimed user input is forwarded as Codex `UserInput` entries: text blocks pass through, an image with a resolvable attachment path becomes `localImage`, and files become their deterministic handle text. Everything else the model sees — Codex's system prompt, its earlier turns, and its tool definitions — belongs to the Codex process, not to dsh; a mounted `agentToolBridge` adds the session's dsh tools as one MCP server's entries.
 
 #### Token effect
 
-dsh contributes only the new user input per turn; Codex pays for its own prompt, history, and tool schemas. A content block the driver cannot forward fails the turn with an `agent-codex: Codex sessions cannot forward ... input blocks` error rather than being dropped silently.
+dsh contributes only the new user input per turn; Codex pays for its own prompt, history, and the tool schemas it advertises, bridged dsh tools included. A content block the driver cannot forward fails the turn with an `agent-codex: Codex sessions cannot forward ... input blocks` error rather than being dropped silently.
 
 #### KV Cache effect
 
@@ -183,7 +187,8 @@ These limits define when this driver is the wrong choice or needs operational ca
 
 - **The `dsh-web-codex` bundle keeps its profile Codex-only** — it disables the `agent-loop` row. The driver itself needs no such exclusion: a multi-harness profile mounts this driver beside the loop and the ACP harnesses.
 - **Several Codex accounts need several entries** — two instances of the same `codex` CLI run side by side by mounting two `harnesses` entries with distinct ids; each entry owns its own process, `codexHome`, `credentialRef`, and catalog route, so a `codex login` or an API key applies to the instance that declares it and no other.
-- **Codex owns the turn, dsh owns the shell** — the loop, prompt, tools, MCP servers, and config live in Codex. DSH keeps the durable session, transcript, approvals, notifications, and model picker; the driver forwards a model selection per turn and reports the harness's own current model, falling back to `agent-default` when Codex never reports one.
+- **Codex owns the turn, dsh owns the shell** — the loop, prompt, tools, MCP servers, and config live in Codex, and a mounted `agentToolBridge` lends the session's dsh tools to the thread as one more of those MCP servers. DSH keeps the durable session, transcript, approvals, notifications, and model picker; the driver forwards a model selection per turn and reports the harness's own current model, falling back to `agent-default` when Codex never reports one.
+- **A `config.toml` `[mcp_servers.dsh]` is shadowed** — the bind's `mcp_servers.<name>` config overrides apply to every bound session, so an MCP server the instance's `config.toml` declares under the bridge's name is overridden; mount `agentToolBridge` with a different `serverName` to run both.
 - **A Codex account is required and not provided** — sessions need `CODEX_HOME` with a completed `codex login`, or a `credentialRef` for the API-key path; dsh neither stores nor provisions Codex credentials.
 - **The model catalog needs the CLI** — every picker read walks `model/list` over that instance's app-server, so an unreachable, broken, or slow `codex` binary leaves that instance's route without entries.
 - **A thread without a rollout is replaced** — a session bound but never prompted owns a Codex thread with no stored rollout; the next bind logs a warning and starts a fresh thread instead of resuming.

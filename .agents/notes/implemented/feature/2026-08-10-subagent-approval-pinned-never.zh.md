@@ -29,6 +29,6 @@ Status: implemented
 
 - 子 agent 的沙箱继承就是委派权限模型的全部；`DelegatedPolicyOverrides.approvalPolicy` 字段收窄为 `'never' | undefined`（仅在未组合审批能力时为 `undefined`）。
 - 模型可见：每个子 agent 的运行时上下文快照携带 `subagent:delegation` 声明以及固定的审批已禁用语句；父级请求不变。executor 边界测试证明：即使根部有一个本会批准的应答者，子 agent 的升级仍被拒绝且不咨询该应答者，审计对照常落日志。
-- 边界：进程内一次性、可继续以及 workflow 派生的子 agent 都经由共享辅助函数强制执行；`subagent-acp` 子 agent 保留该提供方显式的机器 `permission` 策略；`claude-code`、`codex` 与 `dsh-sdk` 子 agent 运行在外部进程中，由各自的组合决定。
+- 边界：进程内一次性、可继续以及 workflow 派生的子 agent 都经由共享辅助函数强制执行；harness 选择的子 agent 在所选 harness 自身的组合与权限策略下运行；`dsh-sdk` 子 agent 运行在外部进程中，由各自的组合决定。
 - 在钉定之前持久化的子 agent 冷恢复时折叠到部署审批默认值；处于预发布阶段，不添加迁移。
 - 快照夹具记录了该钉定：每个进程内子日志都新增委派 `approval/policy` 事件，`subagent-published-run-failure` 现在会持久化一份单事件子日志，而此前该子 agent 不留任何持久化事件。

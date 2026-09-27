@@ -12,7 +12,7 @@ describe('workflow program environment', () => {
     await ctx.plugin(SubagentRuntime)
     ctx.subagents.registerProvider({
       name: 'stub',
-      capabilities: { agentOptions: false, outputSchema: false, depthLimit: false, toolFilter: false, persona: false },
+      capabilities: { agentOptions: false, outputSchema: false, depthLimit: false, toolFilter: false, persona: false, harness: false },
       inheritsParentContext: false,
       start: () => Promise.reject(new Error('environment script must not start a child')),
     })

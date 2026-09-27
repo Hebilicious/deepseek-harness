@@ -15,7 +15,7 @@ import type { Scoped } from '@deepseek-ai/dsh-scope'
 import type { Message, ToolCallId } from '@deepseek-ai/dsh-llm'
 import { SESSION_FORMAT_VERSION, SessionLogOffset, SessionSeq } from './types.ts'
 import type { TypertLookup } from '@deepseek-ai/dsh-typert-protocol'
-import type { CreateSessionOptions, EpochHeader, PrepareSessionOptions, RequestContext, SessionEvent, SessionEventMap, SessionEventType, SessionHeader, SessionId, SessionSeedEventState, SurfaceIntent, SurfaceEventType } from './types.ts'
+import type { CreateSessionOptions, EpochHeader, PrepareSessionOptions, RequestContext, SessionEnterOptions, SessionEvent, SessionEventMap, SessionEventType, SessionHeader, SessionId, SessionSeedEventState, SurfaceIntent, SurfaceEventType } from './types.ts'
 import { SurfaceManager, validateSessionEventData, validateSurfaceMetadata, withoutUnanswerableToolCalls } from './surface.ts'
 import type { SessionSurface, SessionMessageProjection } from './surface.ts'
 import { foldRequestHeader } from './request-header.ts'
@@ -63,6 +63,9 @@ declare module '@deepseek-ai/cordis' {
      * Post-commit, fire-and-forget append feed. The listener snapshot resolves
      * before the log push, but callbacks run after it; observer failures are
      * logged and contained without making the committed append fail.
+     * An entry entered with {@link SessionEnterOptions.deferPublication} appends
+     * silently — its owner flushes that window itself — until
+     * {@link SessionStore.publish} commits it.
      * Scope-filtered dispatch (`@deepseek-ai/dsh-scope`): agent-scoped listeners
      * receive only events from sessions entered through that agent's context.
      * @param session - the session whose log grew.
@@ -428,6 +431,13 @@ interface SessionEntry {
   readonly emitCtx: Context
   announced: boolean
   announcing: boolean
+  /**
+   * Whether appends emit `session/event`. Entries created with
+   * `deferPublication` hold it false until {@link SessionStore.publish} commits:
+   * their appends stay durable-silent so the owner's transaction can flush the
+   * pre-commit window itself and a rollback leaves no routed residue.
+   */
+  published: boolean
   appending: boolean
   detachRequested: boolean
   detach(): void
@@ -753,7 +763,7 @@ export class Session {
     try {
       let callbacks: SessionCallback[] | undefined
       const callbackArgs: unknown[] = [this, event]
-      if (entry !== undefined) {
+      if (entry !== undefined && entry.published) {
         callbacks = collectSessionCallbacks(entry.emitCtx, [entry.carrier, 'session/event', ...callbackArgs])
       }
       this.log.push(event as SessionEvent)
@@ -1157,12 +1167,14 @@ export class SessionStore extends Service {
    * assume that.
    *
    * @param session - a {@link prepare}d session not yet in the store.
+   * @param options - `deferPublication` enters the session with its
+   *   `session/event` broadcast held silent until {@link publish} commits it.
    * @returns the detach disposer (publication hooks + store removal). When called from
    *   a synchronous `session/created` listener, removal and disposal wait until
    *   that creation dispatch unwinds.
    * @throws if a session with this id is already in the store.
    */
-  enter(session: Session): () => void {
+  enter(session: Session, options?: SessionEnterOptions): () => void {
     const id = session.id
     const carrier = scopeTarget(session, scopeOf(this.ctx))
     // This is the authoritative collision boundary after arbitrary unpublished
@@ -1176,6 +1188,7 @@ export class SessionStore extends Service {
       emitCtx: this.ctx,
       announced: false,
       announcing: false,
+      published: options?.deferPublication !== true,
       appending: false,
       detachRequested: false,
       detach: () => { this.detachEntered(entry) },
@@ -1245,6 +1258,26 @@ export class SessionStore extends Service {
       entry.announcing = false
       if (entry.detachRequested && !entry.appending) entry.detach()
     }
+  }
+
+  /**
+   * Commit a {@link SessionEnterOptions.deferPublication deferred} entry's
+   * publication: appends from this call emit `session/event` and reach live
+   * consumers. The owner must have flushed the silent pre-commit window through
+   * its own durable path BEFORE this call — the store does not replay held
+   * appends.
+   * @param session - the entered, announced session to publish.
+   * @throws if the session is not live in this store, its creation announcement
+   *   has not run, or it was already published (entries entered without
+   *   `deferPublication` publish at enter and never call this).
+   */
+  publish(session: Session): void {
+    const entry = this.liveEntryFor(session)
+    if (!entry.announced || entry.announcing) {
+      throw new Error(`session "${entry.id}" cannot publish before its creation announcement completes`)
+    }
+    if (entry.published) throw new Error(`session "${entry.id}" is already published`)
+    entry.published = true
   }
 
   /** Emit the paired teardown notification with per-listener containment. */

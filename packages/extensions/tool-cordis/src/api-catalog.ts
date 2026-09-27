@@ -478,6 +478,31 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
     ],
   },
   {
+    key: 'agentToolBridge',
+    summary: 'The `agentToolBridge` service (`ctx.agentToolBridge`).',
+    description: 'The `agentToolBridge` service (`ctx.agentToolBridge`). Owns one shared loopback HTTP listener; every openMcpEndpoint call attaches one bearer-credentialed endpoint to it. The listener binds lazily on the first opened endpoint and closes with the service.',
+    methods: [
+      {
+        signature: 'async openMcpEndpoint(agent: Agent): Promise<BridgeMcpEndpoint>',
+        description: 'Expose `agent`\'s bridged tools on the shared loopback listener under a fresh bearer credential, and record `agent-tool-bridge/exposed` on the agent\'s session. The endpoint answers `tools/list` from the agent\'s live scope on every request and routes `tools/call` through the shared policy pipeline with the request\'s abort signal fused with the endpoint\'s. `close()` revokes the credential and aborts in-flight calls; the agent\'s `agent/disposed` and the service\'s disposal close it implicitly.',
+        parameters: [{ name: 'agent', description: 'the agent the endpoint serves.' }],
+        returns: 'the URL and headers a client connects with, plus `close()`.',
+      },
+      {
+        signature: 'bridgedToolName(agent: Agent, reported: string): string | undefined',
+        description: 'Resolve a harness-reported tool name to the agent\'s bridged dsh tool: `mcp__<serverName>__<tool>` where `<tool>` is currently bridged for `agent`. Excluded, unscoped, and unrecognized names return undefined, so the caller logs them exactly as the harness reported.',
+        parameters: [{ name: 'agent', description: 'the agent the harness is driving.' }, { name: 'reported', description: 'the tool name the harness reported for the call.' }],
+        returns: 'the dsh tool name, or undefined when the call is not bridged.',
+      },
+      {
+        signature: 'takeCompletion(agent: Agent, tool: string, argumentsJson: string): BridgedCompletion | undefined',
+        description: 'Consume the oldest settled bridged execution for `agent` whose dsh tool name and arguments match, so a harness-reported `tool/result` can carry the execution\'s `meta`. Arguments compare as canonical JSON — object key order is irrelevant — and identical calls correlate first-in-first-out.',
+        parameters: [{ name: 'agent', description: 'the agent the harness is driving.' }, { name: 'tool', description: 'the dsh tool name {@link bridgedToolName} resolved.' }, { name: 'argumentsJson', description: 'the serialized arguments the harness reported.' }],
+        returns: 'the settled completion, or undefined when none matches.',
+      },
+    ],
+  },
+  {
     key: 'approval',
     summary: 'Approval service that applies session policy before answerers and logs every ask/outcome pair to the requesting session.',
     description: 'Approval service that applies session policy before answerers and logs every ask/outcome pair to the requesting session. It exposes deterministic policy changes to the model through the runtime-context snapshot and switch notices.',
@@ -2222,9 +2247,9 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
         throws: ['if a session with `id` already exists, metadata is not a plain lossless-JSON record with valid scalar fields, or `meta.cwd` is a non-absolute path.'],
       },
       {
-        signature: 'enter(session: Session): () => void',
+        signature: 'enter(session: Session, options?: SessionEnterOptions): () => void',
         description: 'Enter a prepared session into the store: install the module-private append publication hooks and add it to the store. Returns the DETACH disposer (hooks + store removal). Does NOT emit `session/created` — the caller yields this disposer inside its effect and THEN calls announce, so a throwing `session/created` listener rolls the attach back instead of leaking it.\n\nRe-checks the id for a duplicate: `prepare` and `enter` are public cross-package primitives and a caller may interleave arbitrary work (or another create) between them, so a stale prepared session must NOT overwrite a live store entry of the same id — its detach disposer would later delete the REAL session. The create convenience and the agent factory call the two back-to-back so they never trip this, but the public API cannot assume that.',
-        parameters: [{ name: 'session', description: 'a {@link prepare}d session not yet in the store.' }],
+        parameters: [{ name: 'session', description: 'a {@link prepare}d session not yet in the store.' }, { name: 'options', description: '`deferPublication` enters the session with its `session/event` broadcast held silent until {@link publish} commits it.' }],
         returns: 'the detach disposer (publication hooks + store removal). When called from a synchronous `session/created` listener, removal and disposal wait until that creation dispatch unwinds.',
         throws: ['if a session with this id is already in the store.'],
       },
@@ -2233,6 +2258,12 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
         description: 'Emit `session/created` exactly once for an entered session (with the carrier enter captured). Separate from enter so the caller can yield the detach disposer first (rollback safety — see enter).',
         parameters: [{ name: 'session', description: 'the entered session to announce to listeners.' }],
         throws: ['if the session is not live or its announcement already began, including a reentrant call from a creation listener.'],
+      },
+      {
+        signature: 'publish(session: Session): void',
+        description: 'Commit a SessionEnterOptions.deferPublication deferred entry\'s publication: appends from this call emit `session/event` and reach live consumers. The owner must have flushed the silent pre-commit window through its own durable path BEFORE this call — the store does not replay held appends.',
+        parameters: [{ name: 'session', description: 'the entered, announced session to publish.' }],
+        throws: ['if the session is not live in this store, its creation announcement has not run, or it was already published (entries entered without `deferPublication` publish at enter and never call this).'],
       },
       {
         signature: 'async flush(session: Session): Promise<boolean>',
@@ -3609,6 +3640,14 @@ export const EVENT_API: readonly EventApiEntry[] = [
     parameters: [{ name: 'payload', description: '.signal - the current turn\'s explicit abort signal. Scope-filtered dispatch (`@deepseek-ai/dsh-scope`): agent-scoped listeners receive only that agent.' }],
   },
   {
+    name: 'agents/harnesses-changed',
+    mode: 'emit',
+    signature: '\'agents/harnesses-changed\'(): void',
+    summary: 'The mounted agent-harness set changed: a harness registered with or left the registry.',
+    description: 'The mounted agent-harness set changed: a harness registered with or left the registry. Consumers that enumerate `ctx.agents.harnesses()` re-read it.',
+    parameters: [],
+  },
+  {
     name: 'api-session/activity',
     mode: 'emit',
     signature: '\'api-session/activity\'(sessionId: SessionId, updatedAt: number): void',
@@ -3901,7 +3940,7 @@ export const EVENT_API: readonly EventApiEntry[] = [
     mode: 'emit',
     signature: '\'session/event\'(this: Scoped<Session>, session: Session, event: SessionEvent): void',
     summary: 'Post-commit, fire-and-forget append feed.',
-    description: 'Post-commit, fire-and-forget append feed. The listener snapshot resolves before the log push, but callbacks run after it; observer failures are logged and contained without making the committed append fail. Scope-filtered dispatch (`@deepseek-ai/dsh-scope`): agent-scoped listeners receive only events from sessions entered through that agent\'s context.',
+    description: 'Post-commit, fire-and-forget append feed. The listener snapshot resolves before the log push, but callbacks run after it; observer failures are logged and contained without making the committed append fail. An entry entered with SessionEnterOptions.deferPublication appends silently — its owner flushes that window itself — until SessionStore.publish commits it. Scope-filtered dispatch (`@deepseek-ai/dsh-scope`): agent-scoped listeners receive only events from sessions entered through that agent\'s context.',
     parameters: [{ name: 'session', description: 'the session whose log grew.' }, { name: 'event', description: 'the appended event, exactly as recorded.' }],
   },
   {
@@ -4359,6 +4398,14 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   {
     name: 'BrandedNumber',
     declaration: 'export type BrandedNumber<B extends string> = number & {\n    readonly [BRAND]: B;\n};',
+  },
+  {
+    name: 'BridgedCompletion',
+    declaration: 'export interface BridgedCompletion {\n    readonly name: string;\n    readonly argumentsJson: string;\n    readonly meta?: JsonValue;\n}',
+  },
+  {
+    name: 'BridgeMcpEndpoint',
+    declaration: 'export interface BridgeMcpEndpoint {\n    readonly name: string;\n    readonly url: string;\n    readonly headers: readonly {\n        name: string;\n        value: string;\n    }[];\n    close(): Promise<void>;\n}',
   },
   {
     name: 'BrowserUseProviderName',
@@ -5889,6 +5936,10 @@ export const TYPE_API: readonly TypeApiEntry[] = [
     declaration: 'export interface SessionCreateValue {\n    readonly sessionId: SessionId;\n    readonly agentPreset?: string;\n}',
   },
   {
+    name: 'SessionEnterOptions',
+    declaration: 'export interface SessionEnterOptions {\n    readonly deferPublication?: boolean;\n}',
+  },
+  {
     name: 'SessionEvent',
     declaration: 'export type SessionEvent<T extends SessionEventType = SessionEventType> = {\n    [K in SessionEventType]: {\n        type: K;\n        seq: SessionSeq;\n        time: number;\n        data: SessionEventMap[K];\n        ignorable?: true;\n    } & (K extends SurfaceEventType ? SurfaceIntent<K> : {\n        surfaceOp?: never;\n        sourceEventSeqs?: never;\n    });\n}[T];',
   },
@@ -6474,7 +6525,7 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   },
   {
     name: 'SpawnTeammateRequest',
-    declaration: 'export interface SpawnTeammateRequest {\n    readonly name: string;\n    readonly description: string;\n    readonly prompt: ContentBlock[];\n    readonly context: \'fresh\' | \'fork\';\n    readonly provider: string;\n    readonly signal: AbortSignal;\n}',
+    declaration: 'export interface SpawnTeammateRequest {\n    readonly name: string;\n    readonly description: string;\n    readonly prompt: ContentBlock[];\n    readonly context: \'fresh\' | \'fork\';\n    readonly provider: string;\n    readonly harness?: HarnessId;\n    readonly agentOptions?: AgentOptions;\n    readonly signal: AbortSignal;\n}',
   },
   {
     name: 'SpawnTeammateResult',
@@ -6518,7 +6569,7 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   },
   {
     name: 'SubagentCapabilities',
-    declaration: 'export interface SubagentCapabilities {\n    readonly agentOptions: boolean;\n    readonly outputSchema: boolean;\n    readonly depthLimit: boolean;\n    readonly toolFilter: boolean;\n    readonly persona: boolean;\n}',
+    declaration: 'export interface SubagentCapabilities {\n    readonly agentOptions: boolean;\n    readonly outputSchema: boolean;\n    readonly depthLimit: boolean;\n    readonly toolFilter: boolean;\n    readonly persona: boolean;\n    readonly harness: boolean;\n}',
   },
   {
     name: 'SubagentCatalog',
@@ -6590,7 +6641,7 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   },
   {
     name: 'SubagentStartRequest',
-    declaration: 'export interface SubagentStartRequest {\n    readonly label?: string;\n    readonly prompt: ContentBlock[];\n    readonly parent: Agent;\n    readonly signal: AbortSignal;\n    readonly agentOptions?: AgentOptions;\n    readonly outputSchema?: ObjectJsonSchema;\n    readonly maxDepth?: number;\n    readonly toolFilter?: ToolRestriction;\n    readonly persona?: string;\n}',
+    declaration: 'export interface SubagentStartRequest {\n    readonly label?: string;\n    readonly prompt: ContentBlock[];\n    readonly parent: Agent;\n    readonly signal: AbortSignal;\n    readonly harness?: HarnessId;\n    readonly agentOptions?: AgentOptions;\n    readonly outputSchema?: ObjectJsonSchema;\n    readonly maxDepth?: number;\n    readonly toolFilter?: ToolRestriction;\n    readonly persona?: string;\n}',
   },
   {
     name: 'SubagentStopReason',

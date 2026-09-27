@@ -9,7 +9,7 @@ kind: "package-reference"
 
 ## 概述
 
-让 agent（智能体）会话运行在 Codex 上而不是进程内循环上。一个插件实例可驱动一个或多个 Codex 实例，每个实例拥有自己的 `codex app-server` 进程、`CODEX_HOME`、凭据、agent 注册表身份，以及自己在模型选择器中的路由；每个会话绑定自己的 Codex 线程并拥有持久线程 id。驱动器通过 JSON-RPC 转发每个轮次，把 Codex 条目投影为 `assistant/message`、`tool/call` 与 `tool/result` 事件，把 Codex 审批请求路由进 dsh 审批 seam，并暴露设置界面所驱动的账号操作。Codex 保有循环、提示词、工具、MCP 服务器与配置；dsh 保有会话、transcript（文本记录）、审批、通知与模型选择器。
+让 agent（智能体）会话运行在 Codex 上而不是进程内循环上。一个插件实例可驱动一个或多个 Codex 实例，每个实例拥有自己的 `codex app-server` 进程、`CODEX_HOME`、凭据，以及自己在模型选择器中的路由；每个会话绑定自己的 Codex 线程。驱动器通过 JSON-RPC 转发每个轮次，把 Codex 条目投影为会话事件，把 Codex 审批请求路由进 dsh 审批 seam，并暴露账号操作。挂载 `agentToolBridge` 后，会话的 dsh 工具会以一个经过认证的回环 MCP 端点的形式借给线程。Codex 保有循环、提示词、工具与配置；dsh 保有会话、transcript（文本记录）、审批与模型选择器。
 
 ## 目录
 
@@ -91,6 +91,10 @@ kind: "package-reference"
 
 `bind()` 加入所属实例的连接、证明账号已认证，然后恢复已记录的线程或启动新线程，全部发生在会话发布之前。全新的 `thread/start` 以 `ephemeral: false` 运行并追加 `agent-codex/thread`；已记录的线程以 `excludeTurns: true` 恢复。若 Codex 对一个从未收到提示词的线程返回 `-32600 no rollout found`，驱动器会记录警告并启动新线程；其他任何拒绝都保持致命，而恢复出的 id 与记录值不一致属于协议错误。`unbind()` 在该实例进程仍然存活时发送 `thread/unsubscribe`。
 
+### 桥接的 dsh 工具
+
+当部署挂载了 [`ctx.agentToolBridge`](../agent-tool-bridge/README.zh.md) 时，`bind()` 为该 agent 打开一个经过认证的回环 MCP 端点，并以 `mcp_servers.<name>` 配置覆盖的形式——携带其 URL 与 `Authorization` bearer 请求头——同时传给 `thread/start` 与 `thread/resume`，使 Codex 在其自身的 MCP 集成下加载该会话的 dsh 工具。Codex 以 `mcp__<name>__<tool>` 上报每次桥接调用；共享投影器通过桥解析该名称并把调用记录为 dsh 工具名；当工具声明了 `presentationMeta` 时，其结果携带该执行的 `meta`。`thread/resume` 没有 `dynamicTools` 成员，因此端点经由两个请求都接受的 `config` 覆盖传入，而不使用实验性的动态工具 API。持久的 `agent-tool-bridge/exposed` 事件记录的是一次端点凭证的签发以及端点打开时的工具列表——即使绑定随后回滚、该端点从未服务过任何线程，这条记录也会留下。每次绑定都打开一个带全新凭证的新端点；`unbind()`——或回滚的绑定——将其关闭并吊销该 token。未挂载桥时，线程请求不携带 `config` 成员。
+
 ### 轮次驱动
 
 一个 Codex 轮次就是一个持久 dsh 步骤。`turn/start` 携带已认领的输入、`clientUserMessageId`、生效的审批策略与沙箱策略，以及选定的 `model`/`effort`；通知通过 `ExternalTurnProjector` 流式进入。轮次 id 在 `turn/started` 或 `turn/start` 响应提交它之前都是临时的，先到达的帧会被缓冲并重放。`turn/completed` 把 `completed` 映射为已完成轮次、`interrupted` 映射为已中止轮次，把 `failed` 映射为 `max-tokens` 或由 Codex 失败类别推导出的错误码。被中断或失败的轮次仍会结算其未完成的工具条目与 assistant 流，因此不会有悬空的 `tool/call` 残留。
@@ -113,7 +117,7 @@ Codex 的命令、文件变更与权限请求通过 `ctx.approval` 路由；`ite
 |---|---|
 | [`src/index.ts`](src/index.ts) | `codexAppServer` 服务：逐条目的运行时、宿主、目录路由与账号 Remote |
 | [`src/config.ts`](src/config.ts) | 实例条目、静态 Config schema 与默认值解析 |
-| [`src/agent.ts`](src/agent.ts) | `CodexAgent`：线程生命周期、轮次驱动、条目投影、审批 |
+| [`src/agent.ts`](src/agent.ts) | `CodexAgent`：线程生命周期、轮次驱动、条目投影、审批、工具桥接端点 |
 | [`src/host.ts`](src/host.ts) | `CodexAgentHost`：注册一个实例并把其运行时绑定进每个 agent |
 | [`src/runtime.ts`](src/runtime.ts) | `CodexAppServerRuntime`：单个实例的进程、连接、线程路由、账号调用与 `model/list` |
 | [`src/connection.ts`](src/connection.ts) | `CodexAppServerConnection`：行传输、握手、请求/通知分派 |
@@ -121,7 +125,7 @@ Codex 的命令、文件变更与权限请求通过 `ctx.approval` 路由；`ite
 | [`src/catalog.ts`](src/catalog.ts) | `CodexCatalogAdapter`：单个实例 id 的仅目录路由 |
 | [`src/thread-state.ts`](src/thread-state.ts) | `agent-codex/thread` 事件及其投影 |
 | [`src/types.ts`](src/types.ts) | 客户端安全的账号载荷与 Remote 错误码 |
-| [`tests/agent-codex.spec.ts`](tests/agent-codex.spec.ts) | 基于 mock app-server 的轮次、线程、审批与账号行为 |
+| [`tests/agent-codex.spec.ts`](tests/agent-codex.spec.ts) | 基于 mock app-server 的轮次、线程、审批、账号与工具桥行为 |
 | [`tests/multi-instance.spec.ts`](tests/multi-instance.spec.ts) | 一个插件中的多个实例：路由、home、恢复、账号范围与处置 |
 | [`tests/config.spec.ts`](tests/config.spec.ts) | 条目默认值，以及无法挂载的实例列表所引发的明确拒绝 |
 | [`tests/service.spec.ts`](tests/service.spec.ts) | 已挂载的实例身份，以及 Remote 的范围与错误归一化 |
@@ -151,11 +155,11 @@ Codex 的命令、文件变更与权限请求通过 `ctx.approval` 路由；`ite
 
 #### 模型看到什么
 
-已认领的用户输入以 Codex `UserInput` 条目的形式转发：文本块原样通过，带可解析附件路径的图片变成 `localImage`，文件变成其确定性句柄文本。模型看到的其余内容——Codex 的系统提示词、更早的轮次与其工具定义——都属于 Codex 进程，而不属于 dsh。
+已认领的用户输入以 Codex `UserInput` 条目的形式转发：文本块原样通过，带可解析附件路径的图片变成 `localImage`，文件变成其确定性句柄文本。模型看到的其余内容——Codex 的系统提示词、更早的轮次与其工具定义——都属于 Codex 进程，而不属于 dsh；已挂载的 `agentToolBridge` 会把该会话的 dsh 工具作为一台 MCP 服务器的条目加进来。
 
 #### token 影响
 
-dsh 每个轮次只贡献新的用户输入；Codex 为自己的提示词、历史与工具 schema 付费。驱动器无法转发的输入块会让该轮次以 `agent-codex: Codex sessions cannot forward ... input blocks` 错误失败，而不是被静默丢弃。
+dsh 每个轮次只贡献新的用户输入；Codex 为其提示词、历史与它向模型提供的工具 schema 付费，桥接的 dsh 工具也在其中。驱动器无法转发的输入块会让该轮次以 `agent-codex: Codex sessions cannot forward ... input blocks` 错误失败，而不是被静默丢弃。
 
 #### KV 缓存影响
 
@@ -183,7 +187,8 @@ Codex 拥有请求前缀，因此 dsh 既无法保证也无法度量复用。在
 
 - **`dsh-web-codex` bundle 让其 profile 只运行 Codex**——它禁用了 `agent-loop` 行。驱动器自身不需要这种排除：多 harness 的 profile 会把它与循环以及各 ACP harness 一起挂载。
 - **多个 Codex 账号需要多个条目**——挂载两个 id 不同的 `harnesses` 条目，即可让同一个 `codex` CLI 的两个实例并行；每个条目拥有自己的进程、`codexHome`、`credentialRef` 与目录路由，因此一次 `codex login` 或一个 API key 只作用于声明它的那个实例。
-- **Codex 拥有轮次，dsh 拥有外壳**——循环、提示词、工具、MCP 服务器与配置都住在 Codex 里。DSH 保有持久会话、transcript、审批、通知与模型选择器；驱动器按轮次转发模型选择，并报告 harness 自身当前使用的模型，在 Codex 从未报告时回退到 `agent-default`。
+- **Codex 拥有轮次，dsh 拥有外壳**——循环、提示词、工具、MCP 服务器与配置都住在 Codex 里，而已挂载的 `agentToolBridge` 会把该会话的 dsh 工具作为又一台这样的 MCP 服务器借给线程。DSH 保有持久会话、transcript、审批、通知与模型选择器；驱动器按轮次转发模型选择，并报告 harness 自身当前使用的模型，在 Codex 从未报告时回退到 `agent-default`。
+- **`config.toml` 中的 `[mcp_servers.dsh]` 会被遮蔽**——绑定时下发的 `mcp_servers.<name>` 配置覆盖对每个已绑定会话生效，实例 `config.toml` 中以桥所用名字声明的 MCP 服务器会被覆盖；为 `agentToolBridge` 配置另一个 `serverName` 即可让两者并存。
 - **Codex 账号是必需项，本包不提供**——会话需要带有已完成 `codex login` 的 `CODEX_HOME`，或为 API-key 路径提供 `credentialRef`；dsh 既不存储也不配置 Codex 凭据。
 - **模型目录依赖该 CLI**——选择器的每次读取都通过该实例的 app-server 遍历 `model/list`，因此不可达、损坏或缓慢的 `codex` 二进制会让该实例的路由没有条目。
 - **没有 rollout 的线程会被替换**——已绑定但从未收到提示词的会话持有一个没有已存 rollout 的 Codex 线程；下一次绑定会记录警告并启动新线程，而不是恢复它。

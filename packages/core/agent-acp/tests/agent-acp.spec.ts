@@ -173,17 +173,25 @@ describe('agent-acp driver', () => {
     })
     expect(order).toEqual([
       'text',
+      // Each call first commits its standalone tool-call advertisement.
+      'text',
       'call c1 {"command":"ls"}',
       'result c1',
+      'text',
       'call c2 {}',
       // The thought streamed after c2, before c3.
       'text',
+      'text',
       'call c3 {}',
       'result c3',
+      'text',
       'call c4 {"command":"rm x"}',
+      'text',
       'call c5 {}',
+      'text',
       'call c6 {}',
       // The plan streamed after c6, before c7.
+      'text',
       'text',
       'call c7 {}',
       // Calls with no terminal update close at settlement, before the final text.
@@ -228,10 +236,71 @@ describe('agent-acp driver', () => {
       return []
     })
     expect(steps).toEqual([
-      'step 1', 'text', 'call a', 'text', 'result',
-      'step 2', 'call b', 'call c', 'result', 'result',
+      // Each call's standalone advertisement precedes its `tool/call`.
+      'step 1', 'text', 'text', 'call a', 'text', 'result',
+      'step 2', 'text', 'call b', 'text', 'call c', 'result', 'result',
       'step 3', 'text', 'text',
     ])
+  }, TEST_TIMEOUT)
+
+  it('interleaves text, a tool call, and post-call text in one turn', async () => {
+    bench = await setup({ MOCK_TOOL: '1', MOCK_INTERLEAVED: 'before tool ', MOCK_TEXT: 'after tool' })
+    const { agent } = await bench.ctx.agents.create({ sessionId: SessionId('s4i'), agentOptions: {} })
+    send(agent, 'run a tool')
+    await agent.whenIdle()
+
+    const log = events(agent)
+    const sequence = log.map(event => event.type)
+    // The call's announcement commits the streamed text first; its settled
+    // input lands on a standalone advertisement right before the `tool/call`.
+    const messages = sequence.flatMap((type, index) => type === 'assistant/message' ? [index] : [])
+    expect(messages).toHaveLength(3)
+    const callIndex = sequence.indexOf('tool/call')
+    const resultIndex = sequence.indexOf('tool/result')
+    expect(messages[0]! < messages[1]! && messages[1]! < callIndex
+      && callIndex < resultIndex && resultIndex < messages[2]!).toBe(true)
+
+    const first = log[messages[0]!]
+    expect(first!.type === 'assistant/message' && first!.data['message']).toMatchObject({
+      content: [{ type: 'text', text: 'before tool ' }],
+    })
+    const advert = log[messages[1]!]
+    expect(advert!.type === 'assistant/message' && advert!.data['message']).toMatchObject({
+      content: [
+        { type: 'tool-call', id: 'mock-tool-1', name: 'mock tool', arguments: '{"command":"true"}' },
+      ],
+    })
+    const second = log[messages[2]!]
+    expect(second!.type === 'assistant/message' && second!.data['message']).toMatchObject({
+      content: [{ type: 'text', text: 'after tool' }],
+    })
+    expect(turnEndKind(agent)).toBe('completed')
+  }, TEST_TIMEOUT)
+
+  it('settles an ad-closed stream lane without reopening when no more text arrives', async () => {
+    bench = await setup({ MOCK_TOOL: '1', MOCK_INTERLEAVED: 'before tool ', MOCK_TEXT: '' })
+    const { agent } = await bench.ctx.agents.create({ sessionId: SessionId('s4j'), agentOptions: {} })
+    send(agent, 'run a tool')
+    await agent.whenIdle()
+
+    const log = events(agent)
+    const sequence = log.map(event => event.type)
+    // The pre-call text message and the standalone advertisement are the only
+    // assistant messages; settlement commits no third, empty message.
+    const messages = sequence.flatMap((type, index) => type === 'assistant/message' ? [index] : [])
+    expect(messages).toHaveLength(2)
+    expect(messages[0]! < messages[1]! && messages[1]! < sequence.indexOf('tool/call')).toBe(true)
+    const first = log[messages[0]!]
+    expect(first!.type === 'assistant/message' && first!.data['message']).toMatchObject({
+      content: [{ type: 'text', text: 'before tool ' }],
+    })
+    const advert = log[messages[1]!]
+    expect(advert!.type === 'assistant/message' && advert!.data['message']).toMatchObject({
+      content: [
+        { type: 'tool-call', id: 'mock-tool-1', name: 'mock tool', arguments: '{"command":"true"}' },
+      ],
+    })
+    expect(turnEndKind(agent)).toBe('completed')
   }, TEST_TIMEOUT)
 
   it('closes an open tool call as an error result at turn settlement', async () => {

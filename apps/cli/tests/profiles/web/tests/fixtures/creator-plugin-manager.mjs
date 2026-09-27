@@ -21,7 +21,7 @@ export function apply(ctx, config) {
       return Promise.resolve(answer)
     }, { prepend: true })
     const make = async id => {
-      const handle = await ctx.agents.create({ sessionId: id, cwd: process.cwd(),
+      const handle = await ctx.agents.create({ sessionId: id, cwd: process.cwd(), harness: 'dsh',
         setup: scope => ctx.agentPresets.mount(scope, 'cordis').then(() => undefined) })
       handles.push(handle)
       return handle.agent

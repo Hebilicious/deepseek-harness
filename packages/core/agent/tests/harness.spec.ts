@@ -7,9 +7,10 @@ import AgentRegistry, {
   agentHarnessOf,
   agentHarnessProjectionDefinition,
   harnessOwning,
+  harnessesServing,
   recordedHarness,
 } from '@deepseek-ai/dsh-agent'
-import type { Agent, AgentFactory } from '@deepseek-ai/dsh-agent'
+import type { Agent, AgentFactory, AgentHarness } from '@deepseek-ai/dsh-agent'
 import SessionStore, { SessionId } from '@deepseek-ai/dsh-session'
 import type { SessionEvent } from '@deepseek-ai/dsh-session'
 import SessionProjectionRegistry from '@deepseek-ai/dsh-session-projection'
@@ -91,6 +92,34 @@ describe('AgentRegistry harnesses', () => {
     await ctx.fiber.dispose()
   })
 
+  it('commits a registration even when a harnesses-changed listener throws', async () => {
+    const ctx = new Context()
+    await ctx.plugin(AgentRegistry)
+    const { factory } = recordingFactory()
+    let failing = true
+    ctx.on('agents/harnesses-changed', () => {
+      if (failing) throw new Error('listener exploded')
+    })
+
+    // The listener's failure surfaces to the registrant, but the registration
+    // already committed with a live disposer: the harness stays mounted and
+    // its id stays owned rather than stranding without a cleanup path.
+    const owner = await ctx.plugin(Object.assign((inner: Context) => {
+      expect(() => inner.agents.registerHarness({ id: HarnessId('dsh'), name: 'DeepSeek Harness', factory }))
+        .toThrow('listener exploded')
+    }, { inject: ['agents'] }))
+    expect(ctx.agents.harnesses().map(entry => entry.id)).toEqual([HarnessId('dsh')])
+    failing = false
+    expect(() => ctx.agents.registerHarness({ id: HarnessId('dsh'), name: 'Other', factory }))
+      .toThrow('agent harness "dsh" is already registered')
+
+    // The orphaned call still left a working effect: unloading the registering
+    // fiber removes the harness.
+    await owner.dispose()
+    expect(ctx.agents.harnesses()).toEqual([])
+    await ctx.fiber.dispose()
+  })
+
   it('removes a harness with the fiber that registered it (HMR)', async () => {
     const ctx = new Context()
     await ctx.plugin(AgentRegistry)
@@ -149,6 +178,17 @@ describe('AgentRegistry harnesses', () => {
     await ctx.agents.create({ sessionId: SessionId('last') })
     expect(codex.calls).toEqual(['create:codex', 'resume:sole', 'create:sole'])
     await ctx.fiber.dispose()
+  })
+
+  it('routes an owned provider to its declaring harness and unowned routes to provider-less harnesses', () => {
+    const harnesses: AgentHarness[] = [
+      { id: HarnessId('dsh'), name: 'DeepSeek Harness' },
+      { id: HarnessId('codex'), name: 'Codex', modelProvider: 'codex' },
+      { id: HarnessId('acp'), name: 'ACP' },
+    ]
+
+    expect(harnessesServing(harnesses, 'codex')).toEqual([HarnessId('codex')])
+    expect(harnessesServing(harnesses, 'deepseek')).toEqual([HarnessId('dsh'), HarnessId('acp')])
   })
 
   it('registers the built-in dsh harness through setFactory', async () => {

@@ -26,7 +26,7 @@ The [publint runner tests](../../../../scripts/publint-all.spec.ts) pass the act
 
 The [ACP disconnect tests](../../../../packages/acp/acp/tests/dispose.spec.ts) await the real session handle disposer for both EOF and transport failure. A barrier holds disposal pending while the test checks ownership, then releases it before awaiting completion and checking both registries. Neither case invokes plugin disposal to trigger the behavior under test. The independent teardown hook releases the barrier before disposing the captured Context, including when the test body times out.
 
-The [subagent teardown decision](2026-09-07-subagent-teardown-test-budgets.md) owns lifecycle cleanup budgets. The [persistent PowerShell decision](2026-09-07-pwsh-ci-observable-completion.md) owns exact versus inferred terminal readiness; a one-shot process's completion promise has different semantics.
+The [subagent teardown decision](../../archived/testing/2026-09-07-subagent-teardown-test-budgets.md) owns lifecycle cleanup budgets. The [persistent PowerShell decision](2026-09-07-pwsh-ci-observable-completion.md) owns exact versus inferred terminal readiness; a one-shot process's completion promise has different semantics.
 
 The [sandboxed Node decision](../architecture/2026-09-11-sandboxed-node-ptc-runtime.md) supersedes worker active-time accounting. The [Node runtime suite](../../../../packages/ptc-runtime/ptc-runtime-node/tests/runtime.spec.ts) exercises the replacement elapsed deadline through real managed processes. The other completion observations and fixture lifecycle rules in this note remain in force.
 

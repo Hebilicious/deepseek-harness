@@ -54,7 +54,7 @@ The sandbox Agent Note's original cross-family sketch put fs enforcement on the 
 ### Out of scope
 
 - **Network policy for `ctx.web`** — `SandboxMode` claims file effects only; a web-only network knob while bash `curl` runs free would be a false boundary. Revisit when a bash backend enforces network (bwrap `--unshare-net`, Landlock ABI v4+).
-- **The `subagent-acp` consumer** — unchanged deferred phase of the sandbox RFC.
+- **The `subagent-dsh-sdk` consumer** — unchanged deferred phase of the sandbox RFC.
 - **Additional writable roots inside one session** — the resolved policy carries one primary `SessionHeader.cwd`; ACP `additionalDirectories` remains a separate bridge and policy design.
 - **A uniform per-tool sandbox runtime** — remains rejected for the reasons in the sandbox RFC.
 

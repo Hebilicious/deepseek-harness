@@ -20,7 +20,7 @@ export * from './types.ts'
 export type * from './projection.ts'
 export * from './consumed-work.ts'
 export * from './harness.ts'
-import { agentHarnessProjectionDefinition } from './harness.ts'
+import { agentHarnessProjectionDefinition, LOOP_HARNESS_ID } from './harness.ts'
 export * from './model-selection.ts'
 export { agentCarrier, agentEvents, assembleContextFor, emitAgentEvent } from './dispatch.ts'
 export type { AgentEventDispatch, AgentSubjectEvent } from './dispatch.ts'
@@ -223,7 +223,7 @@ export interface AgentFactory {
 /** Thrown when create/resume is called before an agent factory is registered. */
 const NO_FACTORY_MESSAGE = 'no agent factory registered (load an agent-loop plugin)'
 /** Harness id {@link AgentRegistry.setFactory} registers its single factory under. */
-const DEFAULT_HARNESS_ID = 'dsh'
+const DEFAULT_HARNESS_ID = LOOP_HARNESS_ID
 /** Display name of the {@link DEFAULT_HARNESS_ID} harness. */
 const DEFAULT_HARNESS_NAME = 'DeepSeek Harness'
 const NO_INITIATOR_MESSAGE = 'no initiating agent is active'
@@ -407,8 +407,15 @@ export class AgentRegistry extends Service {
       // registration under this id throws while the slot is present, and this
       // effect's disposer is single-shot, so no stale disposer can run after a
       // replacement.
-      return () => { this.factories.delete(id) }
+      return () => {
+        this.factories.delete(id)
+        this.ctx.emit('agents/harnesses-changed')
+      }
     }, `agents.registerHarness(${id})`)
+    // Emitted after `ctx.effect` returns, not inside its body: `emit`
+    // propagates a synchronous listener exception, which would escape before
+    // the disposer is collected and strand the committed registration.
+    this.ctx.emit('agents/harnesses-changed')
     // The exact cordis effect disposer (the agents.register() convention): a
     // caller's composite effect can yield it for in-order teardown; the
     // driver's constructor effect returns it directly, identity-nesting the
@@ -426,7 +433,7 @@ export class AgentRegistry extends Service {
    * @returns the disposer that removes the harness.
    */
   setFactory(factory: AgentFactory): () => void {
-    return this.registerHarness({ id: HarnessId(DEFAULT_HARNESS_ID), name: DEFAULT_HARNESS_NAME, factory })
+    return this.registerHarness({ id: DEFAULT_HARNESS_ID, name: DEFAULT_HARNESS_NAME, factory })
   }
 
   /**
@@ -449,7 +456,7 @@ export class AgentRegistry extends Service {
    * @returns the mounted `dsh` loop harness id, or `undefined` without one.
    */
   harnessForUnrecordedSession(): HarnessId | undefined {
-    return this.factories.get(HarnessId(DEFAULT_HARNESS_ID))?.harness.id
+    return this.factories.get(DEFAULT_HARNESS_ID)?.harness.id
   }
 
   /**

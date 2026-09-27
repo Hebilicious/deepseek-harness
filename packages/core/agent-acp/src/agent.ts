@@ -27,10 +27,12 @@ import type { Session, SessionId, TurnEndReason } from '@deepseek-ai/dsh-session
 import type { SandboxMode } from '@deepseek-ai/dsh-sandbox'
 import type { ToolCallId } from '@deepseek-ai/dsh-llm'
 import type {
+  AgentCapabilities,
   ContentBlock as AcpContentBlock,
   CreateElicitationRequest,
   CreateElicitationResponse,
   ElicitationSchema,
+  McpServer,
   RequestPermissionRequest,
   RequestPermissionResponse,
   SessionConfigOption,
@@ -39,10 +41,13 @@ import type {
   ToolCallUpdate,
 } from '@agentclientprotocol/sdk'
 import { RequestError } from '@agentclientprotocol/sdk'
+import type {} from '@deepseek-ai/dsh-agent-tool-bridge'
+import type { BridgeMcpEndpoint } from '@deepseek-ai/dsh-agent-tool-bridge/types'
 import type { AcpClientConnection, AcpSessionPeer } from './connection.ts'
 import {
   acpAdvertisedModels,
   acpBlockToContent,
+  acpMetaToolName,
   acpModeOption,
   acpModelOption,
   acpPermissionOutcome,
@@ -79,7 +84,8 @@ export interface AcpAgentConfig {
 
 /** One assistant stream's block bookkeeping for a single ACP messageId. */
 interface StreamLane {
-  readonly attempt: AssistantStreamAttempt
+  /** The live attempt; replaced when a tool-call advertisement settles it mid-stream. */
+  attempt: AssistantStreamAttempt
   /** Index of the open text block, or -1 before the first text delta. */
   textIndex: number
   /** Index of the open reasoning block, or -1 before the first thought delta. */
@@ -100,7 +106,7 @@ interface ActiveTurn {
    * announcement order: an agent may announce a call before its input has
    * streamed (Claude Code sends `{}` and refines it with `tool_call_update`).
    */
-  readonly pendingToolCalls: Map<string, { readonly name: string; input: unknown }>
+  readonly pendingToolCalls: Map<string, { readonly name: string; input: unknown; readonly alias?: string }>
   /** Tool calls committed in the current durable step. */
   stepToolCalls: number
   /** The model sent on this turn, recorded on the committed assistant message. */
@@ -127,6 +133,8 @@ export class AcpAgent extends ExternalAgent implements AcpSessionPeer {
    */
   private modeSync: Promise<void> = Promise.resolve()
   private connection: AcpClientConnection | undefined
+  /** This agent's tool-bridge endpoint while the ACP session lives. */
+  private bridgeEndpoint: BridgeMcpEndpoint | undefined
   private active: ActiveTurn | undefined
   /** The session's reported config options (model/mode mirrors). */
   private configOptions: readonly SessionConfigOption[] = []
@@ -166,19 +174,69 @@ export class AcpAgent extends ExternalAgent implements AcpSessionPeer {
     this.closeSupported = capabilities?.sessionCapabilities?.close !== undefined
     const cwd = this.session.header.cwd ?? this.driverConfig.cwd ?? process.cwd()
     const existing = acpSessionOf(this.ctx.sessionProjections, this.session)
-    const sessionId = existing === undefined
-      ? await this.startSession(connection, cwd, signal)
-      : await this.loadSession(connection, existing, cwd, signal, capabilities?.loadSession === true)
-    this.acpSessionId = sessionId
-    this.detachSession = this.runtime.registerSession(sessionId, this)
-    // The harness asks for every tool call its mode does not cover, and a
-    // `never` policy rejects each ask, so a permission change made mid-turn
-    // reaches the harness now rather than at the next turn.
-    this.stopModeSync = this.ctx.on('session/event', (session, event) => {
-      const type: string = event.type
-      if (session !== this.session || (type !== 'approval/policy' && type !== 'sandbox/mode')) return
-      this.modeSync = this.modeSync.then(() => this.syncMode())
-    })
+    const mcpServers = await this.bridgeServers(capabilities)
+    try {
+      const sessionId = existing === undefined
+        ? await this.startSession(connection, cwd, signal, mcpServers)
+        : await this.loadSession(connection, existing, cwd, signal, capabilities?.loadSession === true, mcpServers)
+      // The harness asks for every tool call its mode does not cover, and a
+      // `never` policy rejects each ask, so a permission change made mid-turn
+      // reaches the harness now rather than at the next turn.
+      this.stopModeSync = this.ctx.on('session/event', (session, event) => {
+        const type: string = event.type
+        if (session !== this.session || (type !== 'approval/policy' && type !== 'sandbox/mode')) return
+        this.modeSync = this.modeSync.then(() => this.syncMode())
+      })
+      this.detachSession = this.runtime.registerSession(sessionId, this)
+    } catch (error: unknown) {
+      // A rolled-back bind never announces the agent, so no agent/disposed
+      // arrives to unwind it; undo each step that landed. The harness-side
+      // session belongs to nobody either — close it when the agent
+      // advertised session/close.
+      this.stopModeSync?.()
+      this.stopModeSync = undefined
+      const orphan = this.acpSessionId
+      this.acpSessionId = undefined
+      if (orphan !== undefined && this.closeSupported) {
+        try {
+          await connection.request('session/close', { sessionId: orphan })
+        } catch (closeError: unknown) {
+          this.ctx.logger.warn(`${this.prefix}: session/close during bind rollback failed: ${errorChain(closeError)}`)
+        }
+      }
+      await this.bridgeEndpoint?.close()
+      this.bridgeEndpoint = undefined
+      throw error
+    }
+  }
+
+  /**
+   * Open this agent's tool-bridge endpoint when the deployment mounts the
+   * `agentToolBridge` service and the harness accepts MCP over HTTP. Without
+   * HTTP support the session runs without bridged tools and one warning names
+   * the harness. ACP carries `mcpServers` only at session open, so the
+   * endpoint is opened before `session/new`/`session/load` and closed in
+   * {@link unbind}.
+   * @param capabilities - the capabilities `initialize` returned.
+   * @returns the `mcpServers` entry list for the session request.
+   */
+  private async bridgeServers(capabilities: AgentCapabilities | undefined): Promise<McpServer[]> {
+    const bridge = this.ctx.get('agentToolBridge')
+    if (bridge === undefined) return []
+    if (capabilities?.mcpCapabilities?.http !== true) {
+      this.ctx.logger.warn(
+        `${this.prefix}: dsh-agent-tool-bridge is mounted but the harness does not advertise MCP http support; the session runs without bridged tools`,
+      )
+      return []
+    }
+    const endpoint = await bridge.openMcpEndpoint(this)
+    this.bridgeEndpoint = endpoint
+    return [{
+      type: 'http',
+      name: endpoint.name,
+      url: endpoint.url,
+      headers: [...endpoint.headers],
+    }]
   }
 
   /**
@@ -213,6 +271,7 @@ export class AcpAgent extends ExternalAgent implements AcpSessionPeer {
    * @param cwd - the session working directory.
    * @param signal - fused caller/lifecycle cancellation.
    * @param loadable - whether the agent advertises `loadSession`.
+   * @param mcpServers - the `mcpServers` session/new and session/load share.
    * @returns the ACP session id this session is now bound to.
    */
   private async loadSession(
@@ -221,25 +280,29 @@ export class AcpAgent extends ExternalAgent implements AcpSessionPeer {
     cwd: string,
     signal: AbortSignal,
     loadable: boolean,
+    mcpServers: McpServer[],
   ): Promise<string> {
     if (!loadable) {
       throw new AcpProtocolError(
         `${this.prefix}: session "${existing}" cannot resume: the agent does not advertise loadSession`,
       )
     }
+    // Publish the id as soon as the harness session might exist so bind's
+    // rollback can close it on any later failure.
+    this.acpSessionId = existing
     let response: AcpSessionAdvert
     try {
       // session/load replays history as session/update notifications; the peer
       // registers only after the response so replayed frames never double-commit.
       response = await connection.request<AcpSessionAdvert>(
         'session/load',
-        { sessionId: existing, cwd, mcpServers: [] },
+        { sessionId: existing, cwd, mcpServers },
         signal,
       )
     } catch (error: unknown) {
       if (!isResourceNotFound(error) || this.ranTurn()) throw error
       this.ctx.logger.info(`${this.prefix}: session "${existing}" ran no turn and is gone; starting a new one`)
-      return await this.startSession(connection, cwd, signal)
+      return await this.startSession(connection, cwd, signal, mcpServers)
     }
     this.adoptAdvert(response)
     return existing
@@ -250,18 +313,27 @@ export class AcpAgent extends ExternalAgent implements AcpSessionPeer {
    * @param connection - the harness's shared connection.
    * @param cwd - the session working directory.
    * @param signal - fused caller/lifecycle cancellation.
+   * @param mcpServers - the `mcpServers` session/new and session/load share.
    * @returns the new ACP session id.
    */
-  private async startSession(connection: AcpClientConnection, cwd: string, signal: AbortSignal): Promise<string> {
+  private async startSession(
+    connection: AcpClientConnection,
+    cwd: string,
+    signal: AbortSignal,
+    mcpServers: McpServer[],
+  ): Promise<string> {
     const response = await connection.request<AcpSessionAdvert & { sessionId?: string }>(
       'session/new',
-      { cwd, mcpServers: [] },
+      { cwd, mcpServers },
       signal,
     )
     const sessionId = response.sessionId
     if (typeof sessionId !== 'string' || sessionId.length === 0) {
       throw new AcpProtocolError(`${this.prefix}: session/new returned no session id`)
     }
+    // Publish the id before the durable append so bind's rollback can close
+    // the harness session if the append fails.
+    this.acpSessionId = sessionId
     this.session.append('agent-acp/session', { sessionId })
     this.adoptAdvert(response)
     return sessionId
@@ -304,6 +376,15 @@ export class AcpAgent extends ExternalAgent implements AcpSessionPeer {
     }
     this.stopModeSync?.()
     this.stopModeSync = undefined
+    const bridgeEndpoint = this.bridgeEndpoint
+    this.bridgeEndpoint = undefined
+    if (bridgeEndpoint !== undefined) {
+      try {
+        await bridgeEndpoint.close()
+      } catch (error: unknown) {
+        this.ctx.logger.warn(`${this.prefix}: tool-bridge endpoint close failed: ${errorChain(error)}`)
+      }
+    }
     detach?.()
     this.detachSession = undefined
     this.connection = undefined
@@ -450,7 +531,13 @@ export class AcpAgent extends ExternalAgent implements AcpSessionPeer {
         this.commitText(active)
         this.commitPendingToolCalls(active)
         const name = optionalString(update.name) ?? optionalString(update.title) ?? 'tool'
-        active.pendingToolCalls.set(callId, { name, input: update.rawInput })
+        // Devin keeps the canonical `mcp__<server>__<tool>` name in `_meta`
+        // while `title` is display text; the projector resolves either.
+        const alias = acpMetaToolName(update._meta)
+        active.pendingToolCalls.set(
+          callId,
+          alias === undefined ? { name, input: update.rawInput } : { name, input: update.rawInput, alias },
+        )
         if (hasInput(update.rawInput)) this.commitToolCall(active, callId)
         return
       }
@@ -735,6 +822,8 @@ export class AcpAgent extends ExternalAgent implements AcpSessionPeer {
     active.openToolCalls.clear()
     const interrupted = ending.kind !== 'completed'
     for (const lane of active.attempts.values()) {
+      // An attempt a tool-call advertisement already settled needs nothing.
+      if (lane.attempt.ended) continue
       try {
         if (lane.nextIndex > 0) {
           lane.attempt.push({
@@ -797,7 +886,12 @@ export class AcpAgent extends ExternalAgent implements AcpSessionPeer {
     active.pendingToolCalls.delete(callId)
     active.openToolCalls.add(callId)
     active.stepToolCalls += 1
-    active.drive.projector.toolCall(callId, pending.name, pending.input === undefined ? '{}' : JSON.stringify(pending.input))
+    active.drive.projector.toolCall(
+      callId,
+      pending.name,
+      pending.input === undefined ? '{}' : JSON.stringify(pending.input),
+      pending.alias === undefined ? {} : { alias: pending.alias },
+    )
   }
 
   /**
@@ -823,11 +917,16 @@ export class AcpAgent extends ExternalAgent implements AcpSessionPeer {
 
   /**
    * Commit every assistant lane that streamed content, so the log keeps the
-   * order the agent produced text and tool calls in. A later chunk with the
-   * same message id opens a new lane.
+   * order the agent produced text and tool calls in. A lane whose attempt a
+   * tool-call advertisement settled already committed its content; it retires
+   * with the attempt. A later chunk with the same message id opens a new lane.
    */
   private commitText(active: ActiveTurn): void {
     for (const [messageId, lane] of active.attempts) {
+      if (lane.attempt.ended) {
+        active.attempts.delete(messageId)
+        continue
+      }
       if (lane.nextIndex === 0) continue
       lane.attempt.push({ type: 'finish', reason: { kind: 'stop' } })
       active.drive.projector.commitAssistant(lane.attempt, { provider: this.driverConfig.harness.id, model: active.model })
@@ -835,7 +934,12 @@ export class AcpAgent extends ExternalAgent implements AcpSessionPeer {
     }
   }
 
-  /** Open or fetch the assistant stream lane for one ACP message id. */
+  /**
+   * Open or fetch the assistant stream lane for one ACP message id. When a
+   * tool-call advertisement settled the lane's attempt mid-stream, a fresh
+   * attempt carries the lane's later chunks — the settled attempt already
+   * committed its prefix as an `assistant/message`.
+   */
   private ensureAttempt(active: ActiveTurn, messageId: string): StreamLane {
     let lane = active.attempts.get(messageId)
     if (lane === undefined) {
@@ -846,6 +950,11 @@ export class AcpAgent extends ExternalAgent implements AcpSessionPeer {
         nextIndex: 0,
       }
       active.attempts.set(messageId, lane)
+    } else if (lane.attempt.ended) {
+      lane.attempt = active.drive.projector.beginAssistant()
+      lane.textIndex = -1
+      lane.reasoningIndex = -1
+      lane.nextIndex = 0
     }
     return lane
   }

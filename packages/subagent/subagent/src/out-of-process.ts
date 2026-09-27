@@ -51,8 +51,10 @@ function normalizeSubagentDiagnostic(result: SubagentResult): SubagentResult {
 /**
  * The capability advertisement of an out-of-process backend: NONE. A child in
  * another process cannot honor parent-enforced start features
- * (`agentOptions`/`outputSchema`/`maxDepth`/`toolFilter`/`persona`), so the service rejects a
- * request needing any of them before `start` runs — never accepted-then-ignored.
+ * (`agentOptions`/`outputSchema`/`maxDepth`/`toolFilter`/`persona`), and it is
+ * not a mounted harness the Agent registry can create, so `harness` stays
+ * `false` too: the service rejects a request needing any of them before
+ * `start` runs — never accepted-then-ignored.
  */
 export const NO_START_CAPABILITIES: SubagentCapabilities = Object.freeze({
   agentOptions: false,
@@ -60,12 +62,13 @@ export const NO_START_CAPABILITIES: SubagentCapabilities = Object.freeze({
   depthLimit: false,
   toolFilter: false,
   persona: false,
+  harness: false,
 })
 
 /**
  * Assert a configured timing bound is a positive finite number (it bounds a
  * teardown or shutdown wait; zero, negative, or NaN would skip or wedge it).
- * @param prefix - the consuming plugin's diagnostic prefix (e.g. `subagent-acp`).
+ * @param prefix - the consuming plugin's diagnostic prefix (e.g. `subagent-dsh-sdk`).
  * @param name - the config field name, for the diagnostic.
  * @param value - the configured value.
  */

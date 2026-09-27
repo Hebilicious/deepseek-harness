@@ -304,6 +304,39 @@ export type PresetTrust = 'system' | 'user'
 
 来源：[`packages/preset/agent-presets/src/preset.ts:52`](../packages/preset/agent-presets/src/preset.ts)
 
+<a id="deepseek-aidsh-agent-tool-bridge"></a>
+
+## `@deepseek-ai/dsh-agent-tool-bridge`
+
+需要：`tools`
+
+```ts config-catalog
+/** Plugin config. Omitted fields take the defaults named on each member. */
+export interface Config {
+  /** Tool names withheld from every bridged agent (default none). */
+  exclude?: string[]
+  /** Loopback interface the shared listener binds (default `127.0.0.1`). */
+  host?: string
+  /** TCP port the shared listener binds; `0` (default) asks the OS for one. */
+  port?: number
+  /**
+   * MCP server identity presented to clients (default `dsh`). It joins the
+   * harness-visible tool name `mcp__<serverName>__<tool>` and Codex's
+   * `mcp_servers.<serverName>` config key, so empty strings, `.`, and `__`
+   * are rejected.
+   */
+  serverName?: string
+  /**
+   * Settled bridged calls retained per agent so a harness-reported
+   * `tool/result` can pick up the dsh execution's `meta` (default 100). The
+   * oldest entry is dropped once the limit is reached.
+   */
+  correlationLimit?: number
+}
+```
+
+来源：[`packages/core/agent-tool-bridge/src/types.ts:73`](../packages/core/agent-tool-bridge/src/types.ts)
+
 <a id="deepseek-aidsh-agent-tool-presentation"></a>
 
 ## `@deepseek-ai/dsh-agent-tool-presentation`
@@ -744,7 +777,7 @@ export interface Config {
 }
 ```
 
-来源：[`packages/experimental/agent-team/src/types.ts:130`](../packages/experimental/agent-team/src/types.ts)
+来源：[`packages/experimental/agent-team/src/types.ts:131`](../packages/experimental/agent-team/src/types.ts)
 
 <a id="deepseek-aidsh-experimental-browser-use-chrome-devtools-mcp"></a>
 
@@ -2871,134 +2904,7 @@ export interface Config {
 }
 ```
 
-来源： [`packages/subagent/subagent/src/index.ts:190`](../packages/subagent/subagent/src/index.ts)
-
-<a id="deepseek-aidsh-subagent-acp"></a>
-
-## `@deepseek-ai/dsh-subagent-acp`
-
-需要：`subagents` · `subprocess`
-
-```ts config-catalog
-/** Config: how to spawn and drive the child ACP agent process. */
-export interface Config {
-  /** Provider name on `ctx.subagents` (default `acp`). */
-  providerName: string
-  /** The executable to spawn for each run (the child ACP agent). */
-  command: string
-  /** Arguments passed to {@link command}. */
-  args: string[]
-  /**
-   * Working directory override for the child process and its ACP session.
-   * Must be non-empty; a relative path resolves against the harness launch
-   * directory at load, and the result must be an existing directory. When
-   * omitted, each child inherits its delegating parent session's cwd — and
-   * starting one from a parent session that has no cwd fails.
-   */
-  cwd?: string
-  /**
-   * How to auto-answer the child's `session/request_permission` prompts:
-   * `reject` (default — decline every prompt) or `allow` (approve via the first
-   * `allow_once` or `allow_always` option). No prompt is surfaced to a human.
-   */
-  permission: PermissionPolicy
-  /**
-   * Extra environment variables for the child process — e.g. the child
-   * harness's own `DEEPSEEK_API_KEY`. Forwarded on top of a credential-scrubbed
-   * copy of the parent env, so an explicit key here reaches the child while
-   * ambient secrets do not leak implicitly.
-   */
-  env: Record<string, string>
-  /**
-   * Grace period (ms) for the child's EOF-driven quiesce on dispose — its
-   * window to flush persistence and tear down its own nested subprocesses
-   * before the parent escalates to a signal. Must not exceed
-   * `MAX_TIMER_DELAY_MS`.
-   */
-  disposeEofGraceMs?: number
-  /** Failure-observation and termination-escalation grace (ms); must not exceed `MAX_TIMER_DELAY_MS`. */
-  disposeGraceMs?: number
-}
-
-/** Fixed response to child permission requests: reject by default, or select the first allow option. */
-export type PermissionPolicy = 'allow' | 'reject'
-```
-
-来源：[`packages/subagent/subagent-acp/src/index.ts:27`](../packages/subagent/subagent-acp/src/index.ts)
-
-<a id="deepseek-aidsh-subagent-claude-code"></a>
-
-## `@deepseek-ai/dsh-subagent-claude-code`
-
-需要：`subagents` · `subprocess`
-
-```ts config-catalog
-/** Deployment-owned model, permission, environment, and process-release settings. */
-export interface Config {
-  /** Provider name on `ctx.subagents` (default `claude-code`). */
-  providerName?: string
-  /** Native Claude model fixed for this instance; omitted to inherit Claude settings. */
-  model?: string
-  /**
-   * Explicit environment entries layered over the subprocess seam's
-   * credential-scrubbed parent environment.
-   */
-  env?: Record<string, string>
-  /**
-   * Native non-interactive mode fixed for this Provider instance. Defaults to
-   * `dontAsk`; `acceptEdits` accepts edits, `auto` uses the native classifier,
-   * `plan` returns a plan without approving execution, and
-   * `bypassPermissions` explicitly skips permission checks.
-   */
-  permissionMode?: ClaudeCodePermissionMode
-  /** Grace in milliseconds between Claude Code managed-range termination tiers. */
-  disposeGraceMs?: number
-}
-
-/** Profile-selectable non-interactive Claude Code permission mode. */
-export type ClaudeCodePermissionMode = typeof CLAUDE_CODE_PERMISSION_MODES[number]
-```
-
-来源：[`packages/subagent/subagent-claude-code/src/index.ts:38`](../packages/subagent/subagent-claude-code/src/index.ts)
-
-<a id="deepseek-aidsh-subagent-codex"></a>
-
-## `@deepseek-ai/dsh-subagent-codex`
-
-需要：`subagents` · `subprocess`
-
-```ts config-catalog
-/** Deployment-owned model, reasoning, permission, environment, and process-release settings. */
-export interface Config {
-  /** Provider name on `ctx.subagents` (default `codex`). */
-  providerName?: string
-  /** Native Codex model fixed for this instance; omitted to inherit Codex settings. */
-  model?: string
-  /**
-   * Reasoning effort fixed for every turn from this instance, as the model
-   * advertises it (`low`, `medium`, `high`, `xhigh`, `max` for `gpt-6-astra`);
-   * omitted to inherit the effort Codex resolves from its own configuration.
-   */
-  reasoningEffort?: string
-  /**
-   * Explicit environment entries layered over the subprocess seam's
-   * credential-scrubbed parent environment.
-   */
-  env?: Record<string, string>
-  /** Native non-interactive permission mode fixed for this Provider instance. */
-  permissionMode?: CodexPermissionMode
-  /** Grace in milliseconds between app-server managed-range termination tiers. */
-  disposeGraceMs?: number
-}
-
-/** Profile-selectable non-interactive Codex permission mode. */
-export type CodexPermissionMode =
-  | 'never'
-  | 'approve-for-me'
-  | 'dangerously-bypass-approvals-and-sandbox'
-```
-
-来源：[`packages/subagent/subagent-codex/src/index.ts:36`](../packages/subagent/subagent-codex/src/index.ts)
+来源： [`packages/subagent/subagent/src/index.ts:198`](../packages/subagent/subagent/src/index.ts)
 
 <a id="deepseek-aidsh-subagent-dsh-sdk"></a>
 
@@ -3526,7 +3432,7 @@ export interface Config {
 ```ts config-catalog
 /** Config: which registered provider this tool delegates to, plus child defaults. */
 export interface Config {
-  /** The `ctx.subagents` provider name to start runs on (e.g. `spawn`, `acp`). */
+  /** The `ctx.subagents` provider name to start runs on (e.g. `spawn`, `dsh-sdk`). */
   provider: string
   /**
    * Model-facing tool name (default `subagent`). Each loaded instance must use
@@ -3571,6 +3477,15 @@ export interface Config {
     deny?: string[]
   }
   /**
+   * Agent-runtime allowlist for the model-facing `harness` parameter. When the
+   * provider supports harness selection, the parameter offers the mounted
+   * harnesses in this list (default: every mounted harness). Requires the
+   * provider's `harness` capability. Configured ids that never mount are
+   * warned about at tool registration; a call naming an unlisted runtime
+   * rejects at execution.
+   */
+  harnesses?: string[]
+  /**
    * Maximum child depth: a non-negative safe integer (`0` forbids delegation),
    * or `'provider-managed'` to send no cap. A numeric cap
    * requires the provider's `depthLimit` capability (mount fails loud
@@ -3586,7 +3501,7 @@ export interface Config {
 
 Depends on: [`AgentOptions`](subsystems/core.zh.md)
 
-来源：[`packages/subagent/tool-subagent/src/index.ts:48`](../packages/subagent/tool-subagent/src/index.ts)
+来源：[`packages/subagent/tool-subagent/src/index.ts:49`](../packages/subagent/tool-subagent/src/index.ts)
 
 <a id="deepseek-aidsh-tool-terminal"></a>
 

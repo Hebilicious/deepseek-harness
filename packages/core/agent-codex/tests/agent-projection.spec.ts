@@ -370,8 +370,13 @@ describe('item projection details', () => {
     const results = toolResults(agent)
     expect(results.map(result => result.isError)).toEqual(new Array(13).fill(false))
     expect(results[0]!.text).toContain('imageView')
-    // The assistant message carries no text, so the turn still completes.
-    expect(eventsOf(agent, 'assistant/message')).toHaveLength(1)
+    // Every call committed its own advertisement message; the lone
+    // text-bearing message is the turn's empty-text answer.
+    const messages = eventsOf(agent, 'assistant/message')
+    expect(messages.filter(event =>
+      event.type === 'assistant/message'
+      && event.data.message.content.some(block => block.type === 'text'))).toHaveLength(1)
+    expect(messages).toHaveLength(14)
     expect(turnEndKind(agent)).toBe('completed')
   }, TEST_TIMEOUT)
 

@@ -153,7 +153,6 @@ const processBoundTests = [
   'packages/core/agent-acp/tests/loader-composition.spec.ts',
   'packages/core/agent-codex/tests/agent-codex.spec.ts',
   'packages/core/agent-codex/tests/loader-composition.spec.ts',
-  'packages/subagent/subagent-acp/tests/subagent-acp.spec.ts',
   'packages/subprocess/subprocess-local/tests/process-exit.spec.ts',
   'packages/subprocess/subprocess-local/tests/spawn.spec.ts',
   'packages/context/time-context/tests/time-context.spec.ts',

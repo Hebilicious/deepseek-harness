@@ -16,10 +16,6 @@ npm keeps its configured persistent cache, normally `$HOME/.npm` on POSIX, witho
 
 The [release rehearsal decision](../process/2026-09-06-release-rehearsal-selfhosted.md) applies the same lifetime rule to release consumers. The [failover runbook](../process/2026-07-26-ci-failover-runbook.md) continues to own runner selection and shared-host capacity. This change does not retarget jobs, reduce concurrency, retry tests, weaken assertions, or modify master-only CI.
 
-## Recorded ACP completion order
-
-The [ACP diagnostic scenario](../../../../snapshots/session/subagent-acp-diagnostic/cordis.snapshot.yml) holds its scripted background response until `job_output` owns the completion wait. Without that synchronization, a fast child can publish a legitimate job notice between the recorded parent steps. A scenario-local wrapper releases the child after the jobs service registers the completion waiter; the mock watches an exclusive marker in the private test workspace and closes the watcher after release. The fixture restores the wrapped method on disposal. The recorded Session bytes and production job-notice behavior stay unchanged.
-
 ## Workspace-grant fixture placement
 
 The headless `session-sandbox-root` fixture declares `workspace.parent: outside-temp`, not a home-filesystem dependency. Its allocator uses a sibling of the canonical platform temp root where the parent is writable and avoids system temporary grants, otherwise home, and rejects a cwd already covered by automatic temporary write grants. On the failover runner this keeps the test on the data volume without making its write succeed through a temporary-directory exemption. The filesystem-sandbox containment tests use the same allocator for their workspace and denied sibling; they register cleanup immediately after successful acquisition. Atomic workspace allocation, recorded Session bytes, and the independent expected file remain unchanged.

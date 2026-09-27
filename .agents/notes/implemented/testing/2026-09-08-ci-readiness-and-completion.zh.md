@@ -26,7 +26,7 @@ Windows 覆盖率运行 (run 34324325375, job 102377982193)报告了 SDK 子进�
 
 [ACP 断连测试](../../../../packages/acp/acp/tests/dispose.spec.ts)在 EOF 和传输失败两种情况下等待真实 Session handle 的 disposer。屏障阻塞处置，供测试检查所有权，然后释放屏障，等待完成并检查两个注册表。两个用例都不调用插件处置来触发待验证行为。独立的 teardown hook 在处置捕获的 Context 前释放屏障，包括测试体超时的情况。
 
-[子 Agent 拆卸决策](2026-09-07-subagent-teardown-test-budgets.zh.md)负责生命周期清理预算。[持久 PowerShell 决策](2026-09-07-pwsh-ci-observable-completion.zh.md)负责精确与推断的终端就绪状态；一次性进程的完成 Promise 具有不同语义。
+[子 Agent 拆卸决策](../../archived/testing/2026-09-07-subagent-teardown-test-budgets.md)负责生命周期清理预算。[持久 PowerShell 决策](2026-09-07-pwsh-ci-observable-completion.zh.md)负责精确与推断的终端就绪状态；一次性进程的完成 Promise 具有不同语义。
 
 [沙箱 Node 决策](../architecture/2026-09-11-sandboxed-node-ptc-runtime.zh.md)取代 worker 活跃时间计量。[Node 运行时套件](../../../../packages/ptc-runtime/ptc-runtime-node/tests/runtime.spec.ts)通过真实受管进程验证替代的经过时间截止。本说明中其他完成观测与测试生命周期规则保持有效。
 

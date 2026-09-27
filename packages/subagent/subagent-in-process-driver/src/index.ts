@@ -14,7 +14,7 @@
 import { randomUUID } from 'node:crypto'
 import type { Context } from '@deepseek-ai/cordis'
 import { brandString } from '@deepseek-ai/dsh-brand'
-import { foldConsumedWork, harnessOwning } from '@deepseek-ai/dsh-agent'
+import { foldConsumedWork } from '@deepseek-ai/dsh-agent'
 import type { Agent, AgentHandle } from '@deepseek-ai/dsh-agent'
 import { SessionLogOffset } from '@deepseek-ai/dsh-session'
 import type { SessionEvent, SessionId, SessionLogOffset as SessionLogOffsetType, TurnEndReason } from '@deepseek-ai/dsh-session'
@@ -22,12 +22,15 @@ import { createUserMessage, type ContentBlock } from '@deepseek-ai/dsh-llm'
 import {
   appendDelegatedPolicyOverrides,
   applyChildComposition,
+  assertSeededChildHarness,
   assertSubagentMaxDepth,
   captureDelegatedPolicyOverrides,
   childSessionMeta,
+  dropCrossHarnessInheritedRoute,
   finalAssistantOutput,
   resolveChildAgentOptions,
   resolveChildDepth,
+  resolveChildHarness,
 } from '@deepseek-ai/dsh-subagent'
 import type {
   ResolvedSubagentStartRequest,
@@ -96,8 +99,8 @@ function attachDescriptorAppend(childCtx: Context, descriptor: SubagentDescripto
  * and disposal work through the returned run. Rejection means the agent
  * factory's unpublished creation transaction reached quiescence without
  * publishing a child. Every start appends its resolved descriptor inside the
- * child's initial turn. The child is created under the harness that owns the
- * parent's session, so a deployment mounting several still resolves it.
+ * child's initial turn. The child runs under the request's `harness` choice or,
+ * absent one, the harness that owns the parent's session.
  * @param request - the trusted typed start request, including its required signal.
  * @param options - the optional fork seed.
  * @returns a published holder-owned run.
@@ -118,34 +121,50 @@ export async function startInProcessRun(
   // Capture before the first await: a later parent switch belongs to the
   // parent's future.
   const inherited = captureDelegatedPolicyOverrides(parent)
-  // A child never chooses a harness of its own: it belongs to the harness that
-  // owns the parent's session, which is what a deployment mounting several
-  // needs to resolve the create. A parent recording none (a session predating
-  // the record, or one created outside this repository) leaves the host to
-  // resolve its sole mounted harness or refuse with its own message.
-  const harness = harnessOwning(parent.ctx, parent.session)
+  const childOptions = resolveChildAgentOptions(parent, request.agentOptions, childDepth)
+  // An explicit cross-harness choice makes the parent's inherited route
+  // unservable; an unnamed route falls back to the chosen harness's default.
+  dropCrossHarnessInheritedRoute(parent.ctx, parent, request.harness, childOptions, request.agentOptions)
+  // An explicit `harness` wins; omission keeps the harness that owns the
+  // parent's session. A parent recording none (a session predating the record,
+  // or one created outside this repository) leaves the host to resolve its
+  // sole mounted harness or refuse with its own message.
+  const resolvedHarness = resolveChildHarness(parent.ctx, parent, request.harness, {
+    agentOptions: childOptions,
+    persona: request.persona,
+    toolFilter: request.toolFilter,
+    outputSchema: request.outputSchema,
+  })
+  assertSeededChildHarness(parent.ctx, parent, seed, request.harness)
 
   let structured: StructuredAttachment | undefined
   const setup = (childCtx: Context, child: Agent): void => {
     appendDelegatedPolicyOverrides(child.session, inherited)
-    applyChildComposition(childCtx, parent, {
-      persona: request.persona,
-      toolFilter: request.toolFilter,
-    })
-    if (request.outputSchema !== undefined) {
-      structured = attachStructuredRuntime(childCtx, request.outputSchema)
+    if (resolvedHarness.isLoop) {
+      applyChildComposition(childCtx, parent, {
+        persona: request.persona,
+        toolFilter: request.toolFilter,
+      })
+      if (request.outputSchema !== undefined) {
+        structured = attachStructuredRuntime(childCtx, request.outputSchema)
+      }
+      attachDescriptorAppend(childCtx, request.descriptor)
+      return
     }
-    attachDescriptorAppend(childCtx, request.descriptor)
+    // A non-loop harness emits no `agent/pre-step`, so its child records the
+    // descriptor in the unpublished creation window instead of inside the
+    // first turn.
+    child.session.append('subagent/descriptor', request.descriptor)
   }
 
   const handle = await parent.ctx.agents.create({
     sessionId: childId,
-    ...harness === undefined ? {} : { harness },
+    ...resolvedHarness.harness === undefined ? {} : { harness: resolvedHarness.harness },
     parentAgent: parent,
     meta: childSessionMeta(parent, childDepth, seed !== undefined),
     ...seed !== undefined ? { seed } : {},
     ...seed === undefined ? {} : { inheritedEventCount: activationBoundary },
-    agentOptions: resolveChildAgentOptions(parent, request.agentOptions, childDepth),
+    agentOptions: childOptions,
     signal: request.signal,
     setup,
   })

@@ -9,7 +9,7 @@ kind: "package-reference"
 
 ## 概述
 
-使用 `dsh-subagent` 把工作委派给具名子 agent、收集结果，并跨轮次继续受支持的子级对话。一个组合可以并排提供进程内、ACP（Agent Client Protocol）、SDK、Codex 或 Claude Code 子级。需要单个结果时选择一次性子级；需要后续消息与中断能力时选择可继续子级。你还可以检查可用子级及其模式、活动状态与谱系，而无需加载或恢复它们。启用时需要至少一个受支持的子级后端和一个委派工具。
+使用 `dsh-subagent` 把工作委派给具名子 agent、收集结果，并跨轮次继续受支持的子级对话。一个组合可以并排提供进程内子级、在任意已挂载 agent harness 下运行的子级，以及一个进程隔离的 SDK 子级。需要单个结果时选择一次性子级；需要后续消息与中断能力时选择可继续子级。你还可以检查可用子级及其模式、活动状态与谱系，而无需加载或恢复它们。启用时需要至少一个受支持的子级后端和一个委派工具。
 
 ## 目录
 
@@ -102,11 +102,11 @@ kind: "package-reference"
 
 ### 一次性流程
 
-请求先对照提供方声明的能力进行校验，随后对持久化描述符做快照，再由提供方构建子 agent。两个进程内提供方都声明 `agentOptions`：创建子级时把请求字段叠加到父级最新已记录请求的提供方、模型与推理强度之上；父级还没有请求时回退到创建选项，并保留配置的 token 上限。它们还会在第一次 await 前快照委派权限状态：Auto 或 Full access 父级让子级获得相同的 `permission/preset` 身份，而既有沙箱覆盖与审批策略固定仍然生效；同时记录这两个身份可防止 fork 中更早的同旋钮组合身份胜出。Auto 随后会独立审查 child 的每个受支持调用：普通项目内工作为低风险并直接允许；中风险工作必须在既有创建 prompt 或已核验的 human／直接父级消息中获得动作、准确目标和范围的明确授权，且不与 human 限制冲突；高风险工作始终拒绝。reviewer 从 `parentSession` 与既有消息派生这份上下文；委派不会新增父 call metadata、委派记录、review receipt 或 Session format。更改路由而不显式指定推理强度时，会清除继承的路由自有强度，使所选模型解析自己的默认值。DSH SDK 也声明 `agentOptions`，但会运行独立子运行时，因此不继承 Auto；ACP、Codex 与 Claude Code 同样在父级委派调用通过审查后保留各自的权限系统。成功时运行被发布、所有权转移给调用方；失败时提供方回滚每个尚未发布的资源。结果携带子 agent 的最终输出、可选的结构化值、停止原因与可选的安全诊断。
+请求先对照提供方声明的能力进行校验，随后对持久化描述符做快照，再由提供方构建子 agent。可选的 `harness` 指定子 agent 运行所用的已挂载 agent harness——spawn 声明该能力并在其下创建子级，而 fork 与进程外提供方会拒绝它，因为它们的父历史种子数据只在父级所属 harness 下才有意义；省略时继承父级的 harness，在非 loop harness 上请求 `persona`、`toolFilter` 或 `outputSchema` 会在创建前被拒绝。两个进程内提供方都声明 `agentOptions`：创建子级时把请求字段叠加到父级最新已记录请求的提供方、模型与推理强度之上；父级还没有请求时回退到创建选项，并保留配置的 token 上限。它们还会在第一次 await 前快照委派权限状态：Auto 或 Full access 父级让子级获得相同的 `permission/preset` 身份，而既有沙箱覆盖与审批策略固定仍然生效；同时记录这两个身份可防止 fork 中更早的同旋钮组合身份胜出。Auto 随后会独立审查 child 的每个受支持调用：普通项目内工作为低风险并直接允许；中风险工作必须在既有创建 prompt 或已核验的 human／直接父级消息中获得动作、准确目标和范围的明确授权，且不与 human 限制冲突；高风险工作始终拒绝。reviewer 从 `parentSession` 与既有消息派生这份上下文；委派不会新增父 call metadata、委派记录、review receipt 或 Session format。更改路由而不显式指定推理强度时，会清除继承的路由自有强度，使所选模型解析自己的默认值。DSH SDK 也声明 `agentOptions`，但会运行独立子运行时，因此不继承 Auto；harness 选择的子级同样在所选 harness 自己的权限组合下运行，而不经过父级的 Auto 审查。成功时运行被发布、所有权转移给调用方；失败时提供方回滚每个尚未发布的资源。结果携带子 agent 的最终输出、可选的结构化值、停止原因与可选的安全诊断。
 
 ### 可继续流程
 
-管理器预留 child 身份、解析持久化描述符、创建（或冷恢复）child、把它安装进 Activation 并提交提示词。模型编写的消息通过固定 Steer 调度跨一条 parent/child 边；浏览器人类 prompt 通过内部适配器选择 Queue 或 best-effort Steer，其他 host 协议仍可保留 Queue 以创建独立轮次。Session queue command 仅根据 child 自身的 continuable descriptor 准入在线 subagent-owned Agent。Settlement 会等待 Agent 活动结束、Inbox 为空且没有所拥有子级，再在准入开放时 flush 最终 Session 状态。管理器随后在 child lock 内重新验证 wake generation、Session 序号、Inbox 与所拥有子级；`Agent.runMaintenance()` 的同步 task 入口会占用 idle 阶段，并在同一个 JavaScript turn 内关闭私有 subagent Inbox，然后才释放句柄。直接 child 不存在 Activation 时会从持久化会话冷恢复。当驻留 Activation 结算时，管理器会在 parent 自身的轮次流中告知该 child 的直接 parent。
+管理器预留 child 身份、解析持久化描述符、创建（或冷恢复）child、把它安装进 Activation 并提交提示词。模型编写的消息通过固定 Steer 调度跨一条 parent/child 边；浏览器人类 prompt 通过内部适配器选择 Queue 或 best-effort Steer，其他 host 协议仍可保留 Queue 以创建独立轮次。Session queue command 仅根据 child 自身的 continuable descriptor 准入在线 subagent-owned Agent。Settlement 会等待 Agent 活动结束、Inbox 为空且没有所拥有子级，再在准入开放时 flush 最终 Session 状态。管理器随后在 child lock 内重新验证 wake generation、Session 序号、Inbox 与所拥有子级；`Agent.runMaintenance()` 的同步 task 入口会占用 idle 阶段，并在同一个 JavaScript turn 内关闭私有 subagent Inbox，然后才释放句柄。直接 child 不存在 Activation 时会按 child 自身记录的 `agent/harness`（而非 parent 的）从持久化会话冷恢复，并在该 harness 不再挂载时拒绝。当驻留 Activation 结算时，管理器会在 parent 自身的轮次流中告知该 child 的直接 parent。
 
 本地子级创建成功时，父 Session 追加一条 `subagent/catalog` 事实。一次性创建在提供方返回后记录；可继续创建在初始 inbox 准入后、返回子级 id 前记录。失败会释放子级，不发布补偿性目录事件。一次性目录追加失败时会处理 run 的结果拒绝，并保留目录错误；资源释放失败会单独记录。`subagentCatalog` projection 排除 fork 继承的事实，通过 Session 观察和客户端快照中的 `projections.values.subagentCatalog` 暴露直接子级列表。无效的自身 catalog payload（包括不支持的版本）会使 projection 恢复失败。其不可变存储和检查点校验使用 [`dsh-chunked-list`](../../util/chunked-list/README.zh.md)。其视图对 D 条事实以 O(D) 时间保留父目录事件顺序。[父目录决策](../../../.agents/notes/implemented/architecture/2026-09-01-parent-owned-subagent-catalog.zh.md) 说明排序、持久化成本和替代方案。
 
@@ -131,7 +131,7 @@ kind: "package-reference"
 - [可继续的 subagent](../../../.agents/notes/implemented/feature/2026-07-28-continuable-subagent-conversations.zh.md)——接受后续轮次的持久子级。
 - [进程内 spawn 后端](../subagent-spawn-in-process/README.zh.md)——最容易组合的提供方。
 - [Auto review](../../experimental/auto-review/README.zh.md)——只有进程内 DSH 子级继承的当前会话授权模式。
-- [进程外 ACP 后端](../subagent-acp/README.zh.md)——经 Agent Client Protocol 拥有自有运行时的子级。
+- [进程隔离 SDK 后端](../subagent-dsh-sdk/README.zh.md)——经 TypeScript SDK 在独立进程中运行的子级。
 - [tool-subagent-control README](../tool-subagent-control/README.zh.md)——后续消息、中断与列举面。
 
 -----
@@ -180,7 +180,8 @@ You are a delegated subagent: your permission scope was fixed when you were star
 
 这些限制说明该 seam 何时不合适，或何时需要特别的运维注意。它们是当前包约束，不是通用委派对比或任务积压。
 
-- **ACP 子级仍为一次性，且无法通过追踪枚举**——ACP 运行在父级会话语料中没有本地子会话，远程提供方需要 Activation 所有权约定才能支持可继续子级。
+- **仅 loop 可用的选项在非 loop harness 上被拒绝**——`persona`、`toolFilter` 与 `outputSchema` 通过进程内 loop 的作用域服务安装，因此当 `harness` 选择解析到另一个已挂载 harness 时，这些选项在创建前被拒绝。
+- **冷恢复要求挂载子级记录的 harness**——缺失的直接子级 Activation 按子级自己的 `agent/harness` 记录恢复；当该 harness 不再挂载时，恢复会拒绝，而不是回退到父级的 harness。
 - **仅允许相邻模型消息**——`sendMessage()` 要求确切在线 sender；每个 sender 都可以指定直接可继续 child，只有具备驻留可继续 Activation 的 sender 可以指定自己的直接 parent。浏览器提示使用独立的人类 Queue 或 Steer 控制路径。
 - **child 到 parent 的投递要求直接 parent 保持在线**——服务没有持久 parent mailbox；parent 缺失时会拒绝消息，而非接受无法唤醒的工作。
 - **取消收敛期间存在唤醒缺口**——中断信号发出后、driver 进入 idle 前被接受的后续消息会保持排队，直到另一条唤醒发送到达。
@@ -200,7 +201,7 @@ You are a delegated subagent: your permission scope was fixed when you were star
 本开发备注是维护者的工作上下文：开放问题与尚未决定的探索方向。它明确不具权威性——已交付的行为与限制以上文和包代码为准。
 
 - **跨进程继续执行**——持久化邮箱与租约协议可让两个 harness 进程共享一个持久化存储。
-- **可继续 ACP 子级**——需要持久化远程会话 id 与逐子级的继续执行能力声明。
+- **harness 子级的审批路由**——外部 harness 子级的审批请求留在该 harness 自己的组合中；把它们路由到父级会话仍是延期工作。
 - **host-user 投递**——未来的 host 适配器需要具体的经认证交互，该 seam 才能获得用户投递能力。
 
 </details>

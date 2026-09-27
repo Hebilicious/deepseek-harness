@@ -22,6 +22,9 @@ import type { AcpHarnessEntry } from '@deepseek-ai/dsh-agent-acp'
 import TypertRegistry from '@deepseek-ai/dsh-typert-registry'
 import ApprovalService, { type ApprovalOutcome } from '@deepseek-ai/dsh-user-approval'
 import SandboxPolicy from '@deepseek-ai/dsh-sandbox-policy'
+import SystemPrompt from '@deepseek-ai/dsh-system-prompt'
+import ToolRuntime from '@deepseek-ai/dsh-tools'
+import AgentToolBridge, { type Config as BridgeConfig } from '@deepseek-ai/dsh-agent-tool-bridge'
 import { AcpHarness } from '../src/index.ts'
 
 export const mockAgent = fileURLToPath(new URL('./mock-acp-agent.ts', import.meta.url))
@@ -171,6 +174,8 @@ export interface BenchOptions {
   questions?: boolean
   attachments?: boolean
   sandboxPolicy?: boolean
+  /** Mount the tool registry and `agentToolBridge` with this config (true = defaults). */
+  bridge?: boolean | BridgeConfig
   /** Overrides merged into the default `devin` entry. */
   config?: Partial<AcpHarnessEntry>
   /** Extra harness entries mounted beside the default `devin` entry. */
@@ -199,6 +204,11 @@ export async function setup(
   if (options.questions === true) await ctx.plugin(FakeQuestions)
   if (options.attachments === true) await ctx.plugin(FakeAttachments)
   if (options.sandboxPolicy === true) await ctx.plugin(SandboxPolicy)
+  if (options.bridge !== undefined && options.bridge !== false) {
+    await ctx.plugin(SystemPrompt)
+    await ctx.plugin(ToolRuntime)
+    await ctx.plugin(AgentToolBridge, options.bridge === true ? {} : options.bridge)
+  }
   await ctx.plugin(AcpHarness, {
     harnesses: [
       {

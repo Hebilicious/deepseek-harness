@@ -1,12 +1,12 @@
 /** Shared projection of the live LLM registry into the browser model catalog. */
 
 import type { Context } from '@deepseek-ai/cordis'
+import { harnessesServing } from '@deepseek-ai/dsh-agent'
 import type {
   ModelCatalog,
   ModelReasoning,
   ModelSelection,
 } from './types.ts'
-import { harnessesServing } from './harness-models.ts'
 
 /**
  * Build the browser model catalog without requiring a Session.

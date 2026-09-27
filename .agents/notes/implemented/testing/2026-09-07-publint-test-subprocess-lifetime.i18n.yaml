@@ -2,5 +2,5 @@
 # side as of the last confirmed-consistent state. Both languages carry equal authority;
 # after editing either side, bring the other along and re-record with:
 #   pnpm run verify-translation-pairing --write .agents/notes/implemented/testing/2026-09-07-publint-test-subprocess-lifetime.md
-2026-09-07-publint-test-subprocess-lifetime.md: f8b0e0455f44e6cfc7dd1ce120b0edc07e88180a
-2026-09-07-publint-test-subprocess-lifetime.zh.md: dd0533752b13f337e5f2453f01ca87f17d6ec3b2
+2026-09-07-publint-test-subprocess-lifetime.md: 510e1448d9674941fe01ca399ac494e5009637a6
+2026-09-07-publint-test-subprocess-lifetime.zh.md: 9af12f8b1c9206b662c30b3cbb9c2e4098405a21

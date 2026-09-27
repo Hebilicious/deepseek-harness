@@ -75,6 +75,51 @@ function mountForeignHarness(ctx: Context): string[] {
   return calls
 }
 
+/**
+ * Mount a second harness whose create builds a bare external-style Agent on a
+ * real Session: no loop services and no `agent/pre-step`, so the child's log
+ * is the evidence that the driver reached the foreign factory.
+ */
+function mountWorkingForeignHarness(
+  ctx: Context,
+  options: { id?: string; modelProvider?: string } = {},
+): { calls: string[]; id: HarnessId } {
+  const id = HarnessId(options.id ?? 'foreign')
+  const calls: string[] = []
+  const factory: AgentFactory = {
+    async createAgent(ownerCtx, createOptions) {
+      calls.push('create')
+      const sessions = ownerCtx.get('sessions')
+      if (sessions === undefined) throw new Error('test harness requires the sessions service')
+      const session = sessions.create(createOptions.sessionId, {
+        meta: createOptions.meta ?? {},
+      })
+      session.append('agent/harness', { harness: id })
+      const agent = {
+        id: createOptions.sessionId,
+        session,
+        ctx: ownerCtx,
+        options: createOptions.agentOptions ?? {},
+        status: 'idle',
+        followup: () => {},
+        whenIdle: () => Promise.resolve(),
+        cancel: () => {},
+      } as unknown as Agent
+      const commit = await createOptions.setup?.(ownerCtx, agent)
+      commit?.commit()
+      return { agent, dispose: () => Promise.resolve() }
+    },
+    resume: () => Promise.reject(new Error('the foreign harness must not resume')),
+  }
+  ctx.agents.registerHarness({
+    id,
+    name: 'Foreign',
+    ...options.modelProvider === undefined ? {} : { modelProvider: options.modelProvider },
+    factory,
+  })
+  return { calls, id }
+}
+
 describe('startInProcessRun', () => {
   it('creates the child of a recorded parent under that parent harness', async () => {
     const { ctx, parent } = await setup([textResponse('driver answer')])
@@ -86,6 +131,128 @@ describe('startInProcessRun', () => {
     expect(agentHarnessOf(ctx.sessionProjections, ctx.agents.get(run.id)!.session)).toBe('dsh')
     await expect(run.result).resolves.toMatchObject({ stopReason: 'completed' })
     expect(foreign).toEqual([])
+    await run.dispose()
+  })
+
+  it('creates a fresh child under the explicitly chosen harness', async () => {
+    const { ctx, parent } = await setup([])
+    const foreign = mountWorkingForeignHarness(ctx)
+
+    const run = await startInProcessRun({ ...request(parent), harness: foreign.id }, {})
+
+    expect(foreign.calls).toEqual(['create'])
+    const child = run.localAgent!
+    expect(agentHarnessOf(ctx.sessionProjections, child.session)).toBe('foreign')
+    // A non-loop child records its descriptor in the unpublished creation
+    // window: no `agent/pre-step` exists to defer it into the first turn.
+    expect(child.session.snapshotEvents().map(event => event.type)).toContain('subagent/descriptor')
+    await run.result
+    await run.dispose()
+  })
+
+  it('runs an explicitly chosen harness under its own default route instead of the unservable inherited one', async () => {
+    const { ctx, parent } = await setup([])
+    // `foreign-llm` owns the foreign catalog alone, so the parent's inherited
+    // `mock` route cannot serve a foreign child.
+    const foreign = mountWorkingForeignHarness(ctx, { modelProvider: 'foreign-llm' })
+
+    const run = await startInProcessRun({ ...request(parent), harness: foreign.id }, {})
+
+    expect(foreign.calls).toEqual(['create'])
+    const child = run.localAgent!
+    expect(child.options).toMatchObject({ subagentDepth: 1 })
+    expect(child.options.provider).toBeUndefined()
+    expect(child.options.model).toBeUndefined()
+    await run.result
+    await run.dispose()
+  })
+
+  it('keeps an explicitly chosen route for resolveChildHarness to reject', async () => {
+    const { ctx, parent } = await setup([])
+    const foreign = mountWorkingForeignHarness(ctx, { modelProvider: 'foreign-llm' })
+
+    await expect(startInProcessRun(
+      { ...request(parent), harness: foreign.id, agentOptions: { provider: 'mock', model: 'mock' } },
+      {},
+    )).rejects.toThrow('provider "mock" does not serve agent harness "foreign"')
+    expect(foreign.calls).toEqual([])
+  })
+
+  it('forwards a named model without the unservable inherited provider', async () => {
+    const { ctx, parent } = await setup([])
+    const foreign = mountWorkingForeignHarness(ctx, { modelProvider: 'foreign-llm' })
+
+    const run = await startInProcessRun(
+      { ...request(parent), harness: foreign.id, agentOptions: { model: 'mock' } },
+      {},
+    )
+
+    expect(foreign.calls).toEqual(['create'])
+    const child = run.localAgent!
+    expect(child.options.provider).toBeUndefined()
+    expect(child.options.model).toBe('mock')
+    await run.result
+    await run.dispose()
+  })
+
+  it('rejects an explicit harness that differs from the seed-owning parent harness', async () => {
+    const { ctx, parent } = await setup([])
+    const foreign = mountWorkingForeignHarness(ctx)
+
+    await expect(startInProcessRun(
+      { ...request(parent), harness: foreign.id },
+      { seed: parent.session.snapshotEvents() },
+    )).rejects.toThrow('must run under its parent session\'s harness "dsh"')
+    expect(foreign.calls).toEqual([])
+  })
+
+  it.each([
+    ['persona', { persona: 'reviewer' }],
+    ['toolFilter', { toolFilter: { deny: ['bash'] } }],
+    ['outputSchema', { outputSchema: { type: 'object', properties: {} } }],
+  ] as const)('rejects loop-only %s when the child resolves to a non-loop harness', async (_option, override) => {
+    const { ctx, parent } = await setup([])
+    const foreign = mountWorkingForeignHarness(ctx)
+
+    await expect(startInProcessRun({ ...request(parent), ...override, harness: foreign.id }, {}))
+      .rejects.toThrow('require the "dsh" loop harness')
+    expect(foreign.calls).toEqual([])
+  })
+
+  it('rejects a child model route the chosen harness does not serve', async () => {
+    const { ctx, parent } = await setup([])
+    const foreign = mountWorkingForeignHarness(ctx, { modelProvider: 'foreign-llm' })
+
+    await expect(startInProcessRun({
+      ...request(parent),
+      harness: foreign.id,
+      agentOptions: { provider: 'mock', model: 'mock' },
+    }, {})).rejects.toThrow('provider "mock" does not serve agent harness "foreign"')
+    expect(foreign.calls).toEqual([])
+  })
+
+  it('runs a dsh loop child of an external parent with the loop composition', async () => {
+    const { ctx } = await setup([textResponse('driver answer')])
+    const foreign = mountWorkingForeignHarness(ctx)
+    // An external parent: a live session the foreign harness owns, registered
+    // as an Agent but created outside the loop.
+    const session = ctx.sessions.create(SessionId('foreign-parent'), { meta: { cwd: process.cwd() } })
+    session.append('agent/harness', { harness: 'foreign' })
+    const foreignParent = {
+      id: session.id,
+      session,
+      status: 'idle',
+      options: { provider: 'mock', model: 'mock' },
+      ctx,
+    } as unknown as Agent
+    await ctx.agents.register(foreignParent)
+
+    const run = await startInProcessRun({ ...request(foreignParent), harness: HarnessId('dsh') }, {})
+
+    expect(foreign.calls).toEqual([])
+    const result = await run.result
+    expect(result.stopReason).toBe('completed')
+    expect(text(result.output)).toBe('driver answer')
     await run.dispose()
   })
 

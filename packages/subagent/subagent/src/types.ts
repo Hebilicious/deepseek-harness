@@ -9,7 +9,7 @@
  * @module @deepseek-ai/dsh-subagent/types
  */
 
-import type { Agent, AgentOptions } from '@deepseek-ai/dsh-agent'
+import type { Agent, AgentOptions, HarnessId } from '@deepseek-ai/dsh-agent'
 import type { Branded } from '@deepseek-ai/dsh-brand'
 import type { ContentBlock, MessageId } from '@deepseek-ai/dsh-llm'
 import type { SessionEvent, SessionId } from '@deepseek-ai/dsh-session'
@@ -133,6 +133,15 @@ export interface SubagentCapabilities {
   readonly depthLimit: boolean
   readonly toolFilter: boolean
   readonly persona: boolean
+  /**
+   * Whether a caller may name the child's agent harness (`harness`). Providers
+   * that seed the child with parent history advertise `false`: the seed only
+   * makes sense under the harness that owns the parent session, so the choice
+   * would be silently meaningless. Unlike the other flags this one is also
+   * checked on continuable starts, because a continuable provider's seed
+   * contribution has the same constraint.
+   */
+  readonly harness: boolean
 }
 
 /**
@@ -149,8 +158,9 @@ export interface SubagentStartRequest {
   readonly prompt: ContentBlock[]
   /**
    * The spawning agent. In-process providers derive workspace, lineage, and
-   * delegation depth from its durable session state. ACP reads only its cwd,
-   * and only when no deployment `cwd` override is configured.
+   * delegation depth from its durable session state. The DSH SDK provider
+   * reads only its cwd, and only when no deployment `cwd` override is
+   * configured.
    */
   readonly parent: Agent
   /**
@@ -161,6 +171,15 @@ export interface SubagentStartRequest {
    * remaining turn work when it fires afterward.
    */
   readonly signal: AbortSignal
+  /**
+   * Optional agent harness the child runs under. Requires
+   * {@link SubagentCapabilities.harness}; rejected at start otherwise.
+   * Omission keeps the harness that owns the parent's session. The id must be
+   * mounted on the deployment's Agent registry, and options that only the
+   * in-process loop honors (`persona`, `toolFilter`, `outputSchema`) are
+   * rejected when it resolves to another harness.
+   */
+  readonly harness?: HarnessId
   /**
    * Optional host-Agent provider, model, reasoning-effort, and output-token
    * overrides. Requires {@link SubagentCapabilities.agentOptions}; in-process
@@ -342,7 +361,7 @@ export interface SubagentRun {
  * settlement or cleanup to a sibling.
  */
 export interface SubagentProvider {
-  /** Unique registry name (e.g. `spawn`, `fork`, `acp`). */
+  /** Unique registry name (e.g. `spawn`, `fork`, `dsh-sdk`). */
   readonly name: string
   /** The start-time features this provider supports (see {@link SubagentCapabilities}). */
   readonly capabilities: SubagentCapabilities

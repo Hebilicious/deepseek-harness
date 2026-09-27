@@ -12,7 +12,8 @@ import type { Context } from '@deepseek-ai/cordis'
 import z from '@deepseek-ai/schemastery'
 import { scopeChainOf, scopeOf } from '@deepseek-ai/dsh-scope'
 import { defineTool } from '@deepseek-ai/dsh-tools'
-import type { Agent, AgentOptions } from '@deepseek-ai/dsh-agent'
+import { HarnessId } from '@deepseek-ai/dsh-agent'
+import type { Agent, AgentHarness, AgentOptions } from '@deepseek-ai/dsh-agent'
 import { ReasoningEffortId } from '@deepseek-ai/dsh-llm'
 import type { ContentBlock } from '@deepseek-ai/dsh-llm'
 import type { JsonValue } from '@deepseek-ai/dsh-util-values'
@@ -46,7 +47,7 @@ export const inject = ['tools', 'subagents', 'systemPrompt', 'sessionProjections
 
 /** Config: which registered provider this tool delegates to, plus child defaults. */
 export interface Config {
-  /** The `ctx.subagents` provider name to start runs on (e.g. `spawn`, `acp`). */
+  /** The `ctx.subagents` provider name to start runs on (e.g. `spawn`, `dsh-sdk`). */
   provider: string
   /**
    * Model-facing tool name (default `subagent`). Each loaded instance must use
@@ -91,6 +92,15 @@ export interface Config {
     deny?: string[]
   }
   /**
+   * Agent-runtime allowlist for the model-facing `harness` parameter. When the
+   * provider supports harness selection, the parameter offers the mounted
+   * harnesses in this list (default: every mounted harness). Requires the
+   * provider's `harness` capability. Configured ids that never mount are
+   * warned about at tool registration; a call naming an unlisted runtime
+   * rejects at execution.
+   */
+  harnesses?: string[]
+  /**
    * Maximum child depth: a non-negative safe integer (`0` forbids delegation),
    * or `'provider-managed'` to send no cap. A numeric cap
    * requires the provider's `depthLimit` capability (mount fails loud
@@ -127,8 +137,24 @@ export const Config: z<Config> = z.object({
     allow: z.array(z.string()).default(undefined as unknown as string[]),
     deny: z.array(z.string()).default(undefined as unknown as string[]),
   }).default(undefined as unknown as { allow: string[]; deny: string[] }),
+  // Preserve omission; an absent allowlist means every mounted harness.
+  harnesses: z.array(z.string()).default(undefined as unknown as string[]),
   maxDepth: z.union([z.natural().max(Number.MAX_SAFE_INTEGER), z.const('provider-managed' as const)]),
 })
+
+/**
+ * The mounted agent harnesses this tool instance may offer the model: every
+ * mounted harness, or the configured `harnesses` allowlist intersected with it.
+ * @param ctx - context the mounted harness list is read from.
+ * @param config - this tool instance's configuration.
+ * @returns the offerable harnesses in registration order.
+ */
+function allowedHarnesses(ctx: Context, config: Config): AgentHarness[] {
+  const mounted = ctx.get('agents')?.harnesses() ?? []
+  const allowlist = config.harnesses
+  if (allowlist === undefined) return [...mounted]
+  return mounted.filter(entry => allowlist.includes(entry.id))
+}
 
 /** Render text blocks from the canonical JSON block array without trusting arbitrary values. */
 function outputValueText(values: JsonValue[]): string {
@@ -319,6 +345,10 @@ export function apply(ctx: Context, config: Config, session?: Session): void {
   if (config.toolFilter !== undefined && config.toolFilter.allow === undefined && config.toolFilter.deny === undefined) {
     throw new Error('tool-subagent: `toolFilter` is configured but names neither `allow` nor `deny` — remove the key or fill the filter')
   }
+  // An empty allowlist would leave the harness parameter permanently empty.
+  if (config.harnesses !== undefined && config.harnesses.length === 0) {
+    throw new Error('tool-subagent: `harnesses` is configured but empty — remove the key or list mounted harness ids')
+  }
   const backgroundEnabled = config.enableRunInBackground !== false
   const continuable = (config.backgroundMode ?? 'one-shot') === 'continuable'
   const toolName = config.toolName ?? 'subagent'
@@ -348,6 +378,11 @@ export function apply(ctx: Context, config: Config, session?: Session): void {
         `tool-subagent: provider "${subagentProvider.name}" does not support \`backgroundMode: continuable\``,
       )
     }
+    if (config.harnesses !== undefined && !subagentProvider.capabilities.harness) {
+      throw new Error(
+        `tool-subagent: provider "${subagentProvider.name}" does not support harness selection; remove the \`harnesses\` allowlist`,
+      )
+    }
   }
 
   // Validate provider-owned config outside the optional LLM binding so an
@@ -358,14 +393,41 @@ export function apply(ctx: Context, config: Config, session?: Session): void {
   const initialProvider = ctx.subagents.getProvider(config.provider)
   if (initialProvider !== undefined) assertSubagentProviderConfiguration(initialProvider)
 
+  // The allowlist typo warning is a load-time diagnostic: it fires once here,
+  // not on every remount that re-reads the mounted set.
+  if (config.harnesses !== undefined) {
+    const mountedHarnesses = ctx.get('agents')?.harnesses() ?? []
+    const unmounted = config.harnesses.filter(id => !mountedHarnesses.some(entry => entry.id === id))
+    if (unmounted.length > 0) {
+      ctx.logger.warn(
+        `tool-subagent: \`harnesses\` names agent runtime(s) that are not mounted: ${unmounted.join(', ')}`,
+      )
+    }
+  }
+
   const install = (runtimeCtx: Context, modelSelectionPolicy: ModelSelectionPolicy | undefined): void => {
     const modelSelectionEnabled = modelSelectionPolicy !== undefined
     if (modelSelectionPolicy !== undefined) registerListSubagentModels(runtimeCtx, modelSelectionPolicy)
     // Load order and HMR replacement can change provider availability while
     // this fiber remains active.
-    let mounted: { subagentProvider: SubagentProvider; disposeTool: () => void } | undefined
+    let mounted: { subagentProvider: SubagentProvider; disposeTool: () => void; harnessOffer: string } | undefined
+    // A provider whose schema rebuild failed is retried on the next harness
+    // change; `provider-removed` clears it.
+    let remountFailedFor: SubagentProvider | undefined
+    // Harness plugins can apply after this tool's provider mounts, so the
+    // offerable set is re-read on every `agents/harnesses-changed` remount.
+    const offerableHarnesses = (subagentProvider: SubagentProvider): AgentHarness[] =>
+      subagentProvider.capabilities.harness ? allowedHarnesses(runtimeCtx, config) : []
+    // The schema fingerprint of one provider's `harness` offer: only a change
+    // here justifies a remount's `tools/change` churn.
+    const offerKey = (subagentProvider: SubagentProvider): string =>
+      JSON.stringify(
+        offerableHarnesses(subagentProvider)
+          .map(entry => [entry.id, entry.name, entry.description ?? null]),
+      )
     const mount = (subagentProvider: SubagentProvider): void => {
       assertSubagentProviderConfiguration(subagentProvider)
+      const harnessChoices = offerableHarnesses(subagentProvider)
       const wording = providerWording(subagentProvider.inheritsParentContext)
       const providerRouteDefaults = subagentProvider.agentRouteDefaults
       const selectionDescription = providerRouteDefaults !== undefined
@@ -416,6 +478,16 @@ export function apply(ctx: Context, config: Config, session?: Session): void {
               description: providerRouteDefaults !== undefined
                 ? 'Adapter-owned reasoning effort for the effective child route. Omit to use a compatible configured effort or the selected model\'s default.'
                 : 'Adapter-owned reasoning effort for the effective child route. Omit to inherit a compatible configured/parent effort or use a newly selected model\'s default.',
+            },
+          } : {},
+          // With zero or one offerable runtime the choice is already made, so
+          // the parameter stays out of the schema entirely.
+          ...harnessChoices.length > 1 ? {
+            harness: {
+              type: 'string' as const,
+              description: `Which agent runtime runs the subagent. Omit to keep this agent's runtime. Available runtimes: ${harnessChoices.map(entry => `"${entry.id}" (${entry.name}${entry.description === undefined ? '' : ` — ${entry.description}`})`).join(', ')}.` + (modelSelectionEnabled
+                ? ' A runtime that owns its own model route requires also selecting that route via `provider` and `model`.'
+                : ' A runtime that owns its own model route only accepts a child already configured for that route.'),
             },
           } : {},
           ...backgroundEnabled ? {
@@ -477,6 +549,21 @@ export function apply(ctx: Context, config: Config, session?: Session): void {
           }
 
           const modelRequest = args as DelegationModelRequest
+          // The validator permits undeclared keys, so the harness choice is
+          // re-enforced against the live allowlist here, not only by the schema.
+          const requestedHarness = (args as { harness?: unknown }).harness
+          let harness: HarnessId | undefined
+          if (requestedHarness !== undefined) {
+            if (!subagentProvider.capabilities.harness) {
+              throw new Error(`subagent provider "${subagentProvider.name}" does not support choosing the child's agent runtime`)
+            }
+            const allowed = allowedHarnesses(runtimeCtx, config)
+            if (typeof requestedHarness !== 'string' || !allowed.some(entry => entry.id === requestedHarness)) {
+              const shown = typeof requestedHarness === 'string' ? `"${requestedHarness}"` : JSON.stringify(requestedHarness)
+              throw new Error(`agent runtime ${shown} is not available for this tool (available: ${allowed.map(entry => entry.id).join(', ') || 'none'})`)
+            }
+            harness = HarnessId(requestedHarness)
+          }
           const parentOptions = parentAgentOptionsForDelegation(parent)
           const requiresRoutePreflight = hasDelegationModelRequest(modelRequest)
             || hasConfiguredLlmSelection(config.agentOptions)
@@ -517,6 +604,7 @@ export function apply(ctx: Context, config: Config, session?: Session): void {
             label: args.description,
             prompt: [{ type: 'text', text: args.prompt }] as ContentBlock[],
             parent,
+            ...harness !== undefined ? { harness } : {},
             ...requestedChildAgentOptions !== undefined ? { agentOptions: requestedChildAgentOptions } : {},
             ...config.persona !== undefined ? { persona: config.persona } : {},
             ...config.toolFilter !== undefined ? { toolFilter: config.toolFilter } : {},
@@ -568,7 +656,7 @@ export function apply(ctx: Context, config: Config, session?: Session): void {
           return settleForegroundRun(run)
         },
       }))
-      mounted = { subagentProvider, disposeTool }
+      mounted = { subagentProvider, disposeTool, harnessOffer: offerKey(subagentProvider) }
     }
 
     // Register listeners before checking presence so no synchronous change is missed.
@@ -578,12 +666,46 @@ export function apply(ctx: Context, config: Config, session?: Session): void {
     // their prompt-section name during apply() and fail earlier. Add an intent
     // registry if the late one-shot collision occurs in a shipped composition.
     runtimeCtx.on('subagent/provider-added', (subagentProvider) => {
-      if (subagentProvider.name === config.provider && mounted === undefined) mount(subagentProvider)
+      if (subagentProvider.name === config.provider && mounted === undefined) {
+        remountFailedFor = undefined
+        mount(subagentProvider)
+      }
     })
     runtimeCtx.on('subagent/provider-removed', (name) => {
-      if (name !== config.provider || mounted === undefined) return
+      if (name !== config.provider) return
+      remountFailedFor = undefined
+      if (mounted === undefined) return
       mounted.disposeTool()
       mounted = undefined
+    })
+    // Harness plugins may apply after this tool registers; rebuild the schema
+    // so the `harness` parameter reflects the currently mounted set. A change
+    // that cannot alter this provider's offer (no harness-selection
+    // capability, or a runtime outside the configured allowlist) leaves the
+    // registered definition identical, so it is skipped rather than emitting a
+    // `tools/change` rebuild for every agent holding the tool.
+    runtimeCtx.on('agents/harnesses-changed', () => {
+      const subagentProvider = mounted?.subagentProvider ?? remountFailedFor
+      if (subagentProvider === undefined) return
+      try {
+        const offer = offerKey(subagentProvider)
+        if (mounted !== undefined && offer === mounted.harnessOffer) return
+        // Revalidate before teardown so a provider/config failure leaves the
+        // live registration serving the previous schema.
+        assertSubagentProviderConfiguration(subagentProvider)
+        mounted?.disposeTool()
+        mounted = undefined
+        remountFailedFor = undefined
+        mount(subagentProvider)
+      } catch (error: unknown) {
+        // `emit` propagates listener exceptions, so this failure is contained
+        // here: the registry's registration still completes, and the provider
+        // is kept so the next change retries the remount.
+        remountFailedFor = subagentProvider
+        runtimeCtx.logger.warn(
+          `tool-subagent: rebuilding the "${toolName}" tool after an agent runtime change failed: ${String(error)}`,
+        )
+      }
     })
     const present = runtimeCtx.subagents.getProvider(config.provider)
     if (present !== undefined) {

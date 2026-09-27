@@ -15,7 +15,6 @@
     "src/commands.ts",
     "src/control.ts",
     "src/file-references.ts",
-    "src/harness-models.ts",
     "src/history.ts",
     "src/list.ts",
     "src/media-references.ts",
