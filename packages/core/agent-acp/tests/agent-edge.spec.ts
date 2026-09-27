@@ -6,6 +6,7 @@
  * driver against the scripted mock `devin acp` child.
  */
 
+import { writeFileSync } from 'node:fs'
 import { mkdtemp } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -192,6 +193,102 @@ describe('ACP update variants', () => {
     expect(eventsOf(agent, 'user/message')).toHaveLength(2)
     const prompts = await paramsOf(bench.recordFile, 'session/prompt')
     expect(prompts).toHaveLength(2)
+  }, TEST_TIMEOUT)
+
+  it('keeps a harness cycle that arrives during config selection on the prompt turn', async () => {
+    bench = await setup({
+      MOCK_OVERLAP_WAKE: '1',
+      MOCK_CONFIG_OPTIONS: JSON.stringify([{
+        id: 'mode',
+        name: 'Session Mode',
+        type: 'select',
+        currentValue: 'accept-edits',
+        options: [
+          { value: 'accept-edits', name: 'Code' },
+          { value: 'ask', name: 'Ask' },
+        ],
+      }]),
+    }, { config: { sandbox: 'read-only' } })
+    const { agent } = await bench.ctx.agents.create({ sessionId: SessionId('e6d'), agentOptions: {} })
+    send(agent, 'overlap')
+    await agent.whenIdle()
+
+    expect(eventsOf(agent, 'turn/start')).toHaveLength(1)
+    const overlap = eventsOf(agent, 'assistant/message')
+      .map(event => JSON.stringify(event.data))
+      .filter(data => data.includes('overlap message'))
+    expect(overlap.length).toBeGreaterThan(0)
+    expect(overlap.every(data => data.includes('"turn":1'))).toBe(true)
+    expect(turnEndKind(agent)).toBe('completed')
+  }, TEST_TIMEOUT)
+
+  it('leaves a quiet inject queued until the harness cycle closes', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'agent-acp-idle-inject-'))
+    const marker = join(dir, 'sent')
+    const release = join(dir, 'release')
+    bench = await setup({
+      MOCK_IDLE_UPDATE_FILE: marker,
+      MOCK_IDLE_RELEASE_FILE: release,
+    })
+    const { agent } = await bench.ctx.agents.create({ sessionId: SessionId('e6e'), agentOptions: {} })
+    send(agent, 'wake then inject')
+    await agent.whenIdle()
+    await waitForFile(marker, TEST_TIMEOUT - 5000)
+    await vi.waitFor(() => {
+      expect(eventsOf(agent, 'turn/start')).toHaveLength(2)
+    })
+
+    agent.inject(createUserMessage({
+      content: [{ type: 'text', text: 'job done' }],
+      source: { kind: 'user' },
+    }))
+    await Promise.resolve()
+    writeFileSync(release, 'go')
+    await agent.whenIdle()
+
+    const methods = (await recordedCalls(bench.recordFile)).map(call => call.method)
+    const closeAt = methods.indexOf('idle-closed')
+    const prompts = methods.flatMap((method, index) => method === 'session/prompt' ? [index] : [])
+    expect(prompts).toHaveLength(2)
+    expect(closeAt).toBeGreaterThan(-1)
+    expect(closeAt).toBeLessThan(prompts[1] ?? -1)
+    const wake = eventsOf(agent, 'assistant/message')
+      .map(event => JSON.stringify(event.data))
+      .filter(data => data.includes('late message') || data.includes('still in the wake'))
+    expect(wake.length).toBeGreaterThan(0)
+    expect(wake.every(data => data.includes('"turn":2'))).toBe(true)
+    const log = agent.session.snapshotEvents()
+    const lateAt = log.findIndex(event =>
+      event.type === 'assistant/message' && JSON.stringify(event.data).includes('late message'))
+    const noticeAt = log.findIndex(event =>
+      event.type === 'user/message' && JSON.stringify(event.data).includes('job done'))
+    expect(lateAt).toBeGreaterThan(-1)
+    expect(noticeAt).toBeGreaterThan(lateAt)
+    const startsBefore = (index: number): number =>
+      log.slice(0, index).filter(event => event.type === 'turn/start').length
+    expect(startsBefore(lateAt)).toBe(2)
+    expect(startsBefore(noticeAt)).toBe(3)
+  }, TEST_TIMEOUT)
+
+  it('lets a steer preempt an open harness cycle', async () => {
+    const marker = join(await mkdtemp(join(tmpdir(), 'agent-acp-idle-steer-')), 'sent')
+    bench = await setup({ MOCK_IDLE_UPDATE_FILE: marker, MOCK_IDLE_HANG: '1' })
+    const { agent } = await bench.ctx.agents.create({ sessionId: SessionId('e6f'), agentOptions: {} })
+    send(agent, 'hang the wake')
+    await agent.whenIdle()
+    await waitForFile(marker, TEST_TIMEOUT - 5000)
+    await vi.waitFor(() => {
+      expect(eventsOf(agent, 'turn/start')).toHaveLength(2)
+    })
+
+    agent.steer(createUserMessage({
+      content: [{ type: 'text', text: 'steer now' }],
+      source: { kind: 'user' },
+    }))
+    await agent.whenIdle()
+
+    expect(eventsOf(agent, 'turn/start')).toHaveLength(3)
+    expect(await paramsOf(bench.recordFile, 'session/prompt')).toHaveLength(2)
   }, TEST_TIMEOUT)
 })
 

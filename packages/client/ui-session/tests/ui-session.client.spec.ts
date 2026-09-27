@@ -583,15 +583,18 @@ describe('UiSession status', () => {
     expect(service.sessionStatus.getSnapshot().has(id)).toBe(false)
   })
 
-  it('notifies a hidden tab when a session stops, and asks once while permission is undecided', async () => {
+  it('notifies a hidden tab when permission is granted, and asks on the next visible gesture', async () => {
     const created: string[] = []
-    const requestPermission = vi.fn(() => Promise.resolve('granted' as NotificationPermission))
+    const requestPermission = vi.fn(() => {
+      NotificationMock.permission = 'granted'
+      return Promise.resolve('granted' as NotificationPermission)
+    })
     class NotificationMock {
       static permission: NotificationPermission = 'granted'
       static requestPermission = requestPermission
       constructor(title: string) { created.push(title) }
     }
-    const doc = { visibilityState: 'hidden' as DocumentVisibilityState }
+    const doc = fakeDocument('hidden')
     vi.stubGlobal('document', doc)
     try {
       const ctx = new Context()
@@ -622,32 +625,163 @@ describe('UiSession status', () => {
       expect(requestPermission).not.toHaveBeenCalled()
 
       NotificationMock.permission = 'default'
+      const other = sessionId('also-hidden')
+      bench.binding(other)
       bench.emitStatus(id, true)
       bench.emitStatus(id, false)
-      await vi.waitFor(() => { expect(created).toEqual([id, id]) })
+      bench.emitStatus(other, true)
+      bench.emitStatus(other, false)
+      doc.dispatch('pointerdown')
+      expect(requestPermission).not.toHaveBeenCalled()
+
+      doc.visibilityState = 'visible'
+      doc.dispatch('pointerdown')
+      await vi.waitFor(() => { expect(created).toEqual([id, id, other]) })
       expect(requestPermission).toHaveBeenCalledOnce()
 
+      doc.visibilityState = 'hidden'
       bench.emitStatus(id, true)
       bench.emitStatus(id, false)
+      expect(created).toEqual([id, id, other, id])
       expect(requestPermission).toHaveBeenCalledOnce()
 
       bench.list.update((draft) => { draft.byId[id]!.displayTitle = '' })
-      NotificationMock.permission = 'granted'
       bench.emitStatus(id, true)
       bench.emitStatus(id, false)
-      expect(created).toEqual([id, id])
+      expect(created).toEqual([id, id, other, id])
     } finally {
       vi.unstubAllGlobals()
     }
   })
 
-  it('ignores a notification the browser rejects, and a permission request that fails', async () => {
+  it('shows every hidden stop that lands before permission is granted', async () => {
+    const created: string[] = []
+    let resolvePermission: (permission: NotificationPermission) => void = () => {}
+    class NotificationMock {
+      static permission: NotificationPermission = 'default'
+      static requestPermission = vi.fn(() => new Promise<NotificationPermission>((resolve) => {
+        resolvePermission = resolve
+      }))
+      constructor(title: string) { created.push(title) }
+    }
+    const doc = fakeDocument('hidden')
+    vi.stubGlobal('document', doc)
+    vi.stubGlobal('Notification', NotificationMock)
+    try {
+      const ctx = new Context()
+      const bench = createSessionsBench(ctx)
+      const first = sessionId('first')
+      const second = sessionId('second')
+      bench.binding(first)
+      bench.binding(second)
+      createUiSession(ctx, bench)
+      bench.emitStatus(first, true)
+      bench.emitStatus(first, false)
+      doc.visibilityState = 'visible'
+      doc.dispatch('keydown')
+      await vi.waitFor(() => { expect(NotificationMock.requestPermission).toHaveBeenCalledOnce() })
+
+      doc.visibilityState = 'hidden'
+      bench.emitStatus(second, true)
+      bench.emitStatus(second, false)
+      doc.visibilityState = 'visible'
+      doc.dispatch('pointerdown')
+      expect(NotificationMock.requestPermission).toHaveBeenCalledOnce()
+
+      NotificationMock.permission = 'granted'
+      resolvePermission('granted')
+      await vi.waitFor(() => { expect(created).toEqual([first, second]) })
+    } finally {
+      vi.unstubAllGlobals()
+    }
+  })
+
+  it('asks again after a rejected permission request and skips a gesture once permission is decided', async () => {
+    const created: string[] = []
     class NotificationMock {
       static permission: NotificationPermission = 'granted'
       static requestPermission = vi.fn(() => Promise.reject(new Error('hidden tab')))
+      constructor(title: string) { created.push(title) }
+    }
+    const doc = fakeDocument('hidden')
+    vi.stubGlobal('document', doc)
+    vi.stubGlobal('Notification', NotificationMock)
+    try {
+      const ctx = new Context()
+      const bench = createSessionsBench(ctx)
+      const id = sessionId('rejected')
+      bench.binding(id)
+      createUiSession(ctx, bench)
+      bench.emitStatus(id, true)
+      bench.emitStatus(id, false)
+      expect(created).toEqual([id])
+
+      NotificationMock.permission = 'default'
+      bench.emitStatus(id, true)
+      bench.emitStatus(id, false)
+      doc.visibilityState = 'visible'
+      doc.dispatch('keydown')
+      await vi.waitFor(() => { expect(NotificationMock.requestPermission).toHaveBeenCalledOnce() })
+      await Promise.resolve()
+      doc.dispatch('keydown')
+      await vi.waitFor(() => { expect(NotificationMock.requestPermission).toHaveBeenCalledTimes(2) })
+      await Promise.resolve()
+
+      NotificationMock.permission = 'default'
+      NotificationMock.requestPermission.mockClear()
+      doc.visibilityState = 'hidden'
+      bench.emitStatus(id, true)
+      bench.emitStatus(id, false)
+      NotificationMock.permission = 'granted'
+      doc.visibilityState = 'visible'
+      doc.dispatch('pointerdown')
+      expect(NotificationMock.requestPermission).not.toHaveBeenCalled()
+      expect(created).toEqual([id, id, id])
+
+      created.length = 0
+      NotificationMock.permission = 'default'
+      doc.visibilityState = 'hidden'
+      bench.emitStatus(id, true)
+      bench.emitStatus(id, false)
+      NotificationMock.permission = 'denied'
+      doc.visibilityState = 'visible'
+      doc.dispatch('pointerdown')
+      expect(NotificationMock.requestPermission).not.toHaveBeenCalled()
+      expect(created).toEqual([])
+
+      NotificationMock.permission = 'default'
+      vi.stubGlobal('Notification', NotificationMock)
+      doc.visibilityState = 'hidden'
+      bench.emitStatus(id, true)
+      bench.emitStatus(id, false)
+      vi.stubGlobal('Notification', undefined)
+      doc.visibilityState = 'visible'
+      doc.dispatch('pointerdown')
+      expect(created).toEqual([])
+
+      NotificationMock.permission = 'default'
+      NotificationMock.requestPermission.mockImplementation(() => Promise.reject(new Error('document gone')))
+      vi.stubGlobal('Notification', NotificationMock)
+      doc.visibilityState = 'hidden'
+      bench.emitStatus(id, true)
+      bench.emitStatus(id, false)
+      doc.visibilityState = 'visible'
+      doc.dispatch('pointerdown')
+      vi.unstubAllGlobals()
+      await Promise.resolve()
+    } finally {
+      vi.unstubAllGlobals()
+    }
+  })
+
+  it('ignores a notification the browser rejects, and a permission answer of denied', async () => {
+    class NotificationMock {
+      static permission: NotificationPermission = 'granted'
+      static requestPermission = vi.fn(() => Promise.resolve('granted' as NotificationPermission))
       constructor(_title: string) { throw new Error('no gesture') }
     }
-    vi.stubGlobal('document', { visibilityState: 'hidden' })
+    const doc = fakeDocument('hidden')
+    vi.stubGlobal('document', doc)
     vi.stubGlobal('Notification', NotificationMock)
     try {
       const ctx = new Context()
@@ -658,17 +792,12 @@ describe('UiSession status', () => {
       bench.emitStatus(id, true)
       bench.emitStatus(id, false)
 
-      NotificationMock.permission = 'default'
-      const other = sessionId('undecided')
-      bench.binding(other)
-      bench.emitStatus(other, true)
-      bench.emitStatus(other, false)
-      await vi.waitFor(() => { expect(NotificationMock.requestPermission).toHaveBeenCalledOnce() })
-      await Promise.resolve()
-
       class DeclinedNotification {
         static permission: NotificationPermission = 'default'
-        static requestPermission = vi.fn(() => Promise.resolve('denied' as NotificationPermission))
+        static requestPermission = vi.fn(() => {
+          DeclinedNotification.permission = 'denied'
+          return Promise.resolve('denied' as NotificationPermission)
+        })
         constructor(_title: string) { throw new Error('should not construct') }
       }
       vi.stubGlobal('Notification', DeclinedNotification)
@@ -677,18 +806,48 @@ describe('UiSession status', () => {
       const missing = sessionId('missing')
       const present = sessionId('declined')
       declinedBench.binding(present)
+      const declinedDoc = fakeDocument('hidden')
+      vi.stubGlobal('document', declinedDoc)
       createUiSession(declined, declinedBench)
       declinedBench.emitStatus(missing, true)
       declinedBench.emitStatus(missing, false)
       declinedBench.emitStatus(present, true)
       declinedBench.emitStatus(present, false)
+      declinedDoc.visibilityState = 'visible'
+      declinedDoc.dispatch('pointerdown')
       await vi.waitFor(() => { expect(DeclinedNotification.requestPermission).toHaveBeenCalledOnce() })
       await Promise.resolve()
+      declinedDoc.dispatch('pointerdown')
+      expect(DeclinedNotification.requestPermission).toHaveBeenCalledOnce()
     } finally {
       vi.unstubAllGlobals()
     }
   })
 })
+
+/** Document stub with click and key listeners the notification gesture uses. */
+function fakeDocument(initial: DocumentVisibilityState): {
+  visibilityState: DocumentVisibilityState
+  addEventListener: (type: string, listener: () => void) => void
+  removeEventListener: (type: string, listener: () => void) => void
+  dispatch: (type: string) => void
+} {
+  const listeners = new Map<string, Set<() => void>>()
+  return {
+    visibilityState: initial,
+    addEventListener(type, listener) {
+      const set = listeners.get(type) ?? new Set<() => void>()
+      set.add(listener)
+      listeners.set(type, set)
+    },
+    removeEventListener(type, listener) {
+      listeners.get(type)?.delete(listener)
+    },
+    dispatch(type) {
+      for (const listener of [...(listeners.get(type) ?? [])]) listener()
+    },
+  }
+}
 
 describe('UiSession pending interactions', () => {
   it('publishes the highest-precedence exact object and removes each source independently', async () => {

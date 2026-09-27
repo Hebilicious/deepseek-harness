@@ -8,7 +8,7 @@ English | [中文](README.zh.md)
 
 ## Summary
 
-Use this package to expose Session catalog, retain information, and unified UI status through standard Slot hooks. It materializes per-`SessionBinding` hooks and props, while `SessionProvider` can inherit an outer binding or bind an explicit `SessionReference`. It owns process-local pending-interaction and completion-reminder policy without owning Controller transport, history, or references. A session that stops running while the browser tab is hidden raises one notification titled with that session's display title when notification permission is already granted, and asks for permission once when it is still undecided.
+Use this package to expose Session catalog, retain information, and unified UI status through standard Slot hooks. It materializes per-`SessionBinding` hooks and props, while `SessionProvider` can inherit an outer binding or bind an explicit `SessionReference`. It owns process-local pending-interaction and completion-reminder policy without owning Controller transport, history, or references. A session that stops running while the browser tab is hidden raises one notification titled with that session's display title when notification permission is already granted. When permission is still undecided, the package asks on the next click or keypress after the tab is visible, shows every such stop once permission is granted, and asks again on a later gesture if the browser rejects the request.
 
 ## Table of Contents
 

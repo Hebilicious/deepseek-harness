@@ -71,6 +71,11 @@ export abstract class ManagedAgent implements Agent {
 
   /** Fused dispatcher, built once in the constructor so hot-path dispatches never allocate. */
   protected readonly dispatch: AgentEventDispatch
+  /**
+   * Next-step message ids queued with a wake. A quiet inject is absent, so an
+   * unprompted harness turn can leave it for the following turn.
+   */
+  private readonly wakingStepIds = new Set<UserMessage['id']>()
 
   constructor(
     /** The factory service's context: session projection reads and initiator scoping. */
@@ -108,6 +113,7 @@ export abstract class ManagedAgent implements Agent {
     const wakingAfterAbort = wakeup && this.phase.kind !== 'idle' && this.phase.abort.signal.aborted
     const resolvedTarget = wakingAfterAbort ? 'next-turn' : target
     this.inbox.splice(resolvedTarget, Infinity, 0, [message])
+    if (wakeup && resolvedTarget === 'next-step') this.wakingStepIds.add(message.id)
     if (wakeup) this.wakeDriver(wakingAfterAbort)
   }
 
@@ -238,8 +244,9 @@ export abstract class ManagedAgent implements Agent {
       /* v8 ignore next -- kick owns a running phase until this driver boundary */
       if (this.phase.kind === 'running') {
         const { turn, wakeRequested } = this.phase
+        const pendingWake = this.inbox.hasPending || this.hasUnpromptedHarnessWork()
         this.setPhase({ kind: 'idle', lastTurn: turn })
-        if (wakeRequested && this.inbox.hasPending) this.wakeDriver()
+        if (wakeRequested && pendingWake) this.wakeDriver()
       }
     }
   }
@@ -330,11 +337,31 @@ export abstract class ManagedAgent implements Agent {
   }
 
   /**
-   * Start the driver while idle. A running or maintenance activity latches the
-   * wake the same way {@link send} does.
+   * Start the driver while idle. A running activity latches the wake so the
+   * driver opens another turn after it goes idle. A maintenance activity
+   * latches its own wake and replays it when the activity ends.
    */
   protected wakeIdleDriver(): void {
+    if (this.phase.kind === 'running') {
+      const reason = this.phase.abort.signal.reason as AgentCancelCause | undefined
+      if (reason?.kind !== 'disposed') this.phase.wakeRequested = true
+      return
+    }
     this.wakeDriver()
+  }
+
+  /**
+   * Whether next-step holds a waking steer. An unprompted harness turn claims
+   * that steer first and leaves a quiet inject queued.
+   * @returns whether the next claim must take next-step input ahead of harness output.
+   */
+  protected hasWakingStepInput(): boolean {
+    return this.inbox.nextStep.some(message => this.wakingStepIds.has(message.id))
+  }
+
+  /** Drop wake marks for next-step input this turn claimed or left behind. */
+  protected noteInboxClaimed(): void {
+    this.wakingStepIds.clear()
   }
 
   /**

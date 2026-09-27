@@ -723,6 +723,66 @@ describe('ExternalAgent turn drive', () => {
     expect(agent.driven).toHaveLength(0)
   })
 
+  it('does not latch a harness wake onto a disposed activity', async () => {
+    bench = await harness()
+    const { agent } = await create(bench.ctx)
+    agent.driveImpl = (_messages, drive) => new Promise((_resolve, reject) => {
+      drive.signal.addEventListener('abort', () => {
+        agent.beginUnprompted()
+        reject(drive.signal.reason)
+      }, { once: true })
+    })
+
+    send(agent, 'one')
+    await vi.waitFor(() => { expect(agent.driven).toHaveLength(1) })
+    agent.cancel({ kind: 'disposed' })
+    await agent.whenIdle()
+
+    expect(agent.adoptedTurns).toEqual([])
+    expect(agent.status).toBe('idle')
+  })
+
+  it('replays harness output that arrives as the driver goes idle', async () => {
+    bench = await harness()
+    const { agent } = await create(bench.ctx)
+    let armed = true
+    const original = agent.session.append.bind(agent.session)
+    vi.spyOn(agent.session, 'append').mockImplementation(((type: string, ...rest: unknown[]) => {
+      const result = (original as (type: string, ...args: unknown[]) => unknown)(type, ...rest)
+      if (type === 'turn/end' && armed) {
+        armed = false
+        queueMicrotask(() => { agent.beginUnprompted() })
+      }
+      return result
+    }) as never)
+
+    send(agent, 'one')
+    await agent.whenIdle()
+
+    expect(agent.driven).toHaveLength(1)
+    expect(agent.adoptedTurns).toEqual([2])
+    expect(turnEndKinds(agent)).toEqual(['completed', 'completed'])
+  })
+
+  it('runs a harness cycle before a quiet inject that was already queued', async () => {
+    bench = await harness()
+    const { agent } = await create(bench.ctx)
+    const notice = msg('job done')
+
+    agent.inject(notice)
+    agent.beginUnprompted()
+    await agent.whenIdle()
+
+    expect(agent.adoptedTurns).toEqual([1])
+    expect(agent.driven).toHaveLength(1)
+    expect(agent.driven[0]?.map(textOf)).toEqual(['job done'])
+    expect(turnEndKinds(agent)).toEqual(['completed', 'completed'])
+    const userTurns = agent.session.snapshotEvents()
+      .filter(event => event.type === 'user/message')
+      .map(event => event.data)
+    expect(userTurns).toHaveLength(1)
+  })
+
   it('does not replay a maintenance wake whose inbox was cleared', async () => {
     bench = await harness()
     const { agent } = await create(bench.ctx)

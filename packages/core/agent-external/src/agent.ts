@@ -109,7 +109,13 @@ export abstract class ExternalAgent extends ManagedAgent {
     phase: RunningAgentPhase,
   ): Promise<TurnBodyOutcome> {
     signal.throwIfAborted()
-    const claimed = this.inbox.claim('next-turn', turn)
+    // A quiet inject stays queued so the harness cycle can finish; a waking
+    // steer or a queued turn is claimed and driven as the prompt.
+    const deferHarness = this.inbox.nextTurn.length === 0
+      && !this.hasWakingStepInput()
+      && this.hasUnpromptedHarnessWork()
+    const claimed = deferHarness ? [] : this.inbox.claim('next-turn', turn)
+    if (!deferHarness) this.noteInboxClaimed()
     const unprompted = claimed.length === 0 && this.hasUnpromptedHarnessWork()
     // A bare wake (cleared or consumed input) still owns its turn boundary
     // but spends no harness call, unless idle harness output is waiting.

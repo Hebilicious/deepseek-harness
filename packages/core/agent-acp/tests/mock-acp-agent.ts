@@ -52,6 +52,13 @@
  *                         and elicitation, then touch this file.
  * - `MOCK_IDLE_HANG`    — with `MOCK_IDLE_UPDATE_FILE`, emit only the late text
  *                         and touch the file, leaving the cycle open.
+ * - `MOCK_IDLE_DELAY_MS` — wait this long after the prompt before the idle
+ *                         cycle (default 150).
+ * - `MOCK_IDLE_RELEASE_FILE` — after the late text, touch the marker and wait
+ *                         until this file exists before the rest of the cycle.
+ * - `MOCK_OVERLAP_WAKE` — during the first `session/set_config_option`, emit a
+ *                         message chunk and a terminal `task-notification`
+ *                         `usage_update` before resolving.
  * - `MOCK_IDLE_ORIGIN_KIND` — `kind` on the terminal idle `usage_update`.
  * - `MOCK_MESSAGE_ID`   — stream the message chunk under that ACP messageId.
  * - `MOCK_TEXT_IMAGE`   — stream the assistant chunk as an image block, which
@@ -108,7 +115,7 @@
  */
 
 import { randomUUID } from 'node:crypto'
-import { appendFileSync, writeFileSync } from 'node:fs'
+import { accessSync, appendFileSync, writeFileSync } from 'node:fs'
 import { Readable, Writable } from 'node:stream'
 import {
   agent as createAcpAgentApp,
@@ -265,6 +272,20 @@ record('process', { cwd: process.cwd(), args: process.argv.slice(2) })
  * The trailing requests prove the client dispatched them after that turn
  * closed. `MOCK_IDLE_HANG` stops after the late text.
  */
+/** Poll until the test creates `path`. The miss is the wait, not a failure. */
+async function waitForRelease(path: string): Promise<void> {
+  for (;;) {
+    try {
+      accessSync(path)
+      return
+    } catch (error: unknown) {
+      // The release file is absent until the test creates it.
+      void error
+      await new Promise<void>((resolve) => { setTimeout(resolve, 15) })
+    }
+  }
+}
+
 async function emitIdleUpdates(conn: AgentContext, sessionId: string, marker: string): Promise<void> {
   const update = (payload: SessionNotification['update']): Promise<void> =>
     conn.notify(methods.client.session.update, { sessionId, update: payload })
@@ -275,6 +296,11 @@ async function emitIdleUpdates(conn: AgentContext, sessionId: string, marker: st
     _meta: { '_claude/origin': { kind: 'task-notification' } },
   })
   await update({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'late message' } })
+  const release = process.env.MOCK_IDLE_RELEASE_FILE
+  if (release !== undefined) {
+    writeFileSync(marker, 'sent')
+    await waitForRelease(release)
+  }
   if (process.env.MOCK_IDLE_HANG === '1') {
     writeFileSync(marker, 'sent')
     return
@@ -317,6 +343,7 @@ async function emitIdleUpdates(conn: AgentContext, sessionId: string, marker: st
     size: 10,
     _meta: { '_claude/origin': { kind: 1 } },
   })
+  record('idle-closed', { kind: process.env.MOCK_IDLE_ORIGIN_KIND ?? 'task-notification' })
   await update({
     sessionUpdate: 'usage_update',
     used: 3,
@@ -347,6 +374,7 @@ function makeAgent() {
   // prompt with `cancelled`.
   let resolveCancel: ((reason: StopReason) => void) | undefined
   let prompts = 0
+  let overlapSent = false
   // The mock keeps the advertised options mutable so set_config_option echoes
   // the caller's write — like a real harness updating its current selection.
   const configOptions = CONFIG_OPTIONS.map(option => ({ ...option }))
@@ -408,7 +436,10 @@ function makeAgent() {
       if (CLOSE_ERROR) return Promise.reject(new Error('mock close failed'))
       return Promise.resolve({})
     },
-    setConfigOption(params: SetSessionConfigOptionRequest): Promise<SetSessionConfigOptionResponse> {
+    async setConfigOption(
+      params: SetSessionConfigOptionRequest,
+      conn: AgentContext,
+    ): Promise<SetSessionConfigOptionResponse> {
       record('session/set_config_option', params)
       if (params.value === process.env.MOCK_SET_OPTION_FAIL) return Promise.reject(new Error(`refused ${params.value}`))
       for (const option of configOptions) {
@@ -416,9 +447,21 @@ function makeAgent() {
           option.currentValue = params.value
         }
       }
+      if (process.env.MOCK_OVERLAP_WAKE === '1' && !overlapSent) {
+        overlapSent = true
+        const notify = (payload: SessionNotification['update']): Promise<void> =>
+          conn.notify(methods.client.session.update, { sessionId: params.sessionId, update: payload })
+        await notify({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'overlap message' } })
+        await notify({
+          sessionUpdate: 'usage_update',
+          used: 1,
+          size: 10,
+          _meta: { '_claude/origin': { kind: 'task-notification' } },
+        })
+      }
       // The SDK's response type requires the field; SET_OPTION_EMPTY models a
       // server that omits it, which is the case the driver tolerates.
-      return Promise.resolve(SET_OPTION_EMPTY ? {} as SetSessionConfigOptionResponse : { configOptions })
+      return SET_OPTION_EMPTY ? {} as SetSessionConfigOptionResponse : { configOptions }
     },
     authenticate(params: AuthenticateRequest): Promise<Record<string, never>> {
       record('authenticate', params)
@@ -639,7 +682,8 @@ function makeAgent() {
         }
       }
       if (IDLE_UPDATE_FILE !== undefined && prompts === 1) {
-        setTimeout(() => { void emitIdleUpdates(conn, params.sessionId, IDLE_UPDATE_FILE) }, 150)
+        const idleDelay = Number(process.env.MOCK_IDLE_DELAY_MS ?? '150')
+        setTimeout(() => { void emitIdleUpdates(conn, params.sessionId, IDLE_UPDATE_FILE) }, idleDelay)
       }
       if (CRASH_AFTER_CHUNK) {
         await new Promise<void>((resolve) => { setImmediate(resolve) })
@@ -674,7 +718,7 @@ const app = createAcpAgentApp({ name: 'dsh-agent-acp-test-agent' })
   .onRequest(methods.agent.session.load, ({ params }) => implementation.loadSession(params))
   .onRequest(methods.agent.session.close, ({ params }) => implementation.closeSession(params))
   .onRequest(methods.agent.session.delete, ({ params }) => implementation.deleteSession(params))
-  .onRequest(methods.agent.session.setConfigOption, ({ params }) => implementation.setConfigOption(params))
+  .onRequest(methods.agent.session.setConfigOption, ({ params, client }) => implementation.setConfigOption(params, client))
   .onRequest(methods.agent.session.prompt, ({ params, client }) => implementation.prompt(params, client))
   .onNotification(methods.agent.session.cancel, ({ params }) => implementation.cancel(params))
 // Real Devin serves no `logout` method, so the fixture registers one only

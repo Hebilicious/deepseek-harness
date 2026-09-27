@@ -329,6 +329,7 @@ export class UiSession extends Service {
         disposeStatus()
         disposeRemoteStatus()
         this.disposeMainRetain()
+        this.disarmNotificationGesture()
         const records = [...this.bindings.values]
         this.bindings.clear()
         for (const record of records) record.release()
@@ -480,6 +481,10 @@ export class UiSession extends Service {
   }
 
   private askedNotificationPermission = false
+  /** Titles of hidden stops waiting for a granted permission. */
+  private pendingNotificationTitles: string[] = []
+  /** Click or key handler waiting for a visible tab, when one is armed. */
+  private notificationGesture: (() => void) | undefined
 
   private observeRunning(sessionId: SessionId, running: boolean): void {
     const previous = this.running.get(sessionId)
@@ -494,8 +499,9 @@ export class UiSession extends Service {
 
   /**
    * Raise one browser notification when a session stops while this tab is
-   * hidden. The title is the session's display title. Permission is requested
-   * once when it is still undecided; a later stop notifies only after a grant.
+   * hidden. The title is the session's display title. A grant shows it
+   * immediately. Undecided permission waits for the next click or keypress
+   * after the tab is visible, and a rejected request can be asked again.
    * @param sessionId - the session that just stopped running.
    */
   private notifyHiddenTab(sessionId: SessionId): void {
@@ -504,27 +510,82 @@ export class UiSession extends Service {
     if (typeof Notification === 'undefined') return
     const title = this.sessions.list.getSnapshot().byId[sessionId]?.displayTitle
     if (title === undefined || title.length === 0) return
-    const show = (): void => {
-      try {
-        new Notification(title)
-      } catch (error: unknown) {
-        // The constructor rejects when permission changed or the browser
-        // requires a user gesture. The completion reminder still stands.
-        void error
-      }
-    }
     if (Notification.permission === 'granted') {
-      show()
+      this.showNotification(title)
       return
     }
-    if (Notification.permission !== 'default' || this.askedNotificationPermission) return
+    if (Notification.permission !== 'default') return
+    this.pendingNotificationTitles.push(title)
+    this.armNotificationGesture()
+  }
+
+  /** Show one notification. A constructor failure leaves the completion reminder in place. */
+  private showNotification(title: string): void {
+    try {
+      new Notification(title)
+    } catch (error: unknown) {
+      // The constructor rejects when permission changed or the browser
+      // requires a user gesture. The completion reminder still stands.
+      void error
+    }
+  }
+
+  /** Listen for the next click or keypress that can ask for notification permission. */
+  private armNotificationGesture(): void {
+    if (this.notificationGesture !== undefined || typeof document === 'undefined') return
+    const ask = (): void => {
+      if (document.visibilityState === 'hidden') return
+      this.disarmNotificationGesture()
+      this.requestNotificationPermission()
+    }
+    this.notificationGesture = ask
+    document.addEventListener('pointerdown', ask)
+    document.addEventListener('keydown', ask)
+  }
+
+  /** Drop the gesture listener. Safe when none is armed or the document is gone. */
+  private disarmNotificationGesture(): void {
+    const ask = this.notificationGesture
+    this.notificationGesture = undefined
+    if (ask === undefined || typeof document === 'undefined') return
+    document.removeEventListener('pointerdown', ask)
+    document.removeEventListener('keydown', ask)
+  }
+
+  /**
+   * Ask for notification permission from a visible user gesture and show every
+   * title collected while the tab was hidden. A rejection clears the latch so
+   * a later gesture can ask again.
+   */
+  private requestNotificationPermission(): void {
+    if (typeof Notification === 'undefined') {
+      this.pendingNotificationTitles = []
+      return
+    }
+    if (Notification.permission === 'granted') {
+      this.flushNotificationTitles()
+      return
+    }
+    if (Notification.permission !== 'default' || this.askedNotificationPermission) {
+      if (Notification.permission !== 'default') this.pendingNotificationTitles = []
+      return
+    }
     this.askedNotificationPermission = true
     void Notification.requestPermission().then((permission) => {
-      if (permission === 'granted') show()
+      if (permission === 'granted') this.flushNotificationTitles()
+      else this.pendingNotificationTitles = []
     }).catch((error: unknown) => {
-      // A hidden tab may refuse the request. Leave permission undecided for a later gesture.
+      // The browser rejected the call. Permission stays undecided, so a later gesture may ask.
       void error
+      this.askedNotificationPermission = false
+      this.armNotificationGesture()
     })
+  }
+
+  /** Show every title queued for a hidden stop, including ones that arrived during the request. */
+  private flushNotificationTitles(): void {
+    const titles = this.pendingNotificationTitles.splice(0)
+    for (const title of titles) this.showNotification(title)
   }
 
   private reconcileStatus(): void {

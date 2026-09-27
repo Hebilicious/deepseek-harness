@@ -104,8 +104,11 @@ interface ActiveTurn {
   readonly pendingToolCalls: Map<string, { readonly name: string; input: unknown }>
   /** Tool calls committed in the current durable step. */
   stepToolCalls: number
-  /** The model sent on this turn, recorded on the committed assistant message. */
-  readonly model: string
+  /**
+   * The model sent on this turn, recorded on the committed assistant message.
+   * Config selection may replace the preliminary value before the first commit.
+   */
+  model: string
 }
 
 function optionalString(value: unknown): string | undefined {
@@ -349,34 +352,40 @@ export class AcpAgent extends ExternalAgent implements AcpSessionPeer {
     const chosenEffort = picked !== '' && selection.reasoningEffort !== undefined
       ? selection.reasoningEffort
       : this.driverConfig.reasoningEffort
-    await this.applyConfigSelection(connection, sessionId, chosen, chosenEffort, drive.signal)
-    // Post-apply `currentValue` is the agent's own report of what will run;
-    // when no model option exists the harness's model is opaque to DSH.
-    const reported = acpModelOption(this.configOptions)?.currentValue
-    const model = typeof reported === 'string' && reported !== ''
-      ? reported
-      : chosen ?? HARNESS_DEFAULT_MODEL
-    drive.projector.noteRoute({
-      provider: this.driverConfig.harness.id,
-      model,
-      ...picked !== '' && selection.reasoningEffort !== undefined
-        ? { reasoningEffort: selection.reasoningEffort }
-        : {},
-    })
-    const prompt: AcpContentBlock[] = messages.flatMap(
-      message => toAcpPromptBlocks(message, attachment => this.attachmentHostPath(attachment)),
-    )
+    // Reserve the turn before the first await. Updates that arrive during
+    // config selection belong to this prompt, including a harness cycle that
+    // overlaps the next session/prompt.
     const active: ActiveTurn = {
       drive,
       attempts: new Map(),
       openToolCalls: new Set(),
       pendingToolCalls: new Map(),
       stepToolCalls: 0,
-      model,
+      model: chosen ?? HARNESS_DEFAULT_MODEL,
     }
     this.active = active
+    this.unprompted = false
+    this.drainOutOfBand(active)
     let ending: TurnEndReason = { kind: 'error', error: { message: 'turn ended without a response', code: 'NO_RESPONSE' } }
     try {
+      await this.applyConfigSelection(connection, sessionId, chosen, chosenEffort, drive.signal)
+      // Post-apply `currentValue` is the agent's own report of what will run;
+      // when no model option exists the harness's model is opaque to DSH.
+      const reported = acpModelOption(this.configOptions)?.currentValue
+      const model = typeof reported === 'string' && reported !== ''
+        ? reported
+        : chosen ?? HARNESS_DEFAULT_MODEL
+      active.model = model
+      drive.projector.noteRoute({
+        provider: this.driverConfig.harness.id,
+        model,
+        ...picked !== '' && selection.reasoningEffort !== undefined
+          ? { reasoningEffort: selection.reasoningEffort }
+          : {},
+      })
+      const prompt: AcpContentBlock[] = messages.flatMap(
+        message => toAcpPromptBlocks(message, attachment => this.attachmentHostPath(attachment)),
+      )
       const response = await raceAbort(
         connection.request<{ stopReason?: StopReason }>(
           'session/prompt',
@@ -425,25 +434,26 @@ export class AcpAgent extends ExternalAgent implements AcpSessionPeer {
   }
 
   /**
-   * Queue input, and wake an adopted harness cycle that is waiting so a user
-   * message preempts it instead of sitting until the cycle's own end marker.
+   * Queue input. A waking send preempts an adopted harness cycle; a quiet
+   * inject stays queued until that cycle's own end marker.
    * @param message - the user message to queue.
    * @param target - which inbox lane receives it.
    * @param wakeup - whether the driver should run.
    */
   override send(message: UserMessage, target: InboxTarget, wakeup: boolean): void {
     super.send(message, target, wakeup)
-    if (this.unprompted) this.pokeOutOfBand()
+    if (wakeup && this.unprompted) this.pokeOutOfBand()
   }
 
   /**
    * Project one harness cycle that started after `session/prompt` returned.
    * The Claude Code adapter emits that cycle — a task notification (a finished
    * background command, a Monitor line, or a scheduled wakeup) or a peer,
-   * coordinator, or observer message — as ordinary `session/update`s, and
-   * closes it with a `usage_update` whose `_meta._claude/origin.kind` names
-   * that origin. Output that arrives while a prompt is in flight stays on
-   * that prompt's turn.
+   * coordinator, observer, or observer-activity message — as ordinary
+   * `session/update`s, and closes it with a `usage_update` whose
+   * `_meta._claude/origin.kind` names that origin. A waking follow-up or steer
+   * ends the cycle first. A quiet inject stays queued for the next turn.
+   * Output that arrives while a prompt is reserved stays on that prompt's turn.
    * @param drive - the open turn, its abort signal, and its projector.
    * @returns the durable turn ending. Abort settles the partial output as interrupted.
    */
@@ -467,7 +477,7 @@ export class AcpAgent extends ExternalAgent implements AcpSessionPeer {
     try {
       while (!drive.signal.aborted) {
         if (this.drainOutOfBand(active)) break
-        if (this.inbox.hasPending) break
+        if (this.inbox.nextTurn.length > 0 || this.hasWakingStepInput()) break
         await raceAbort(this.outOfBandWait.promise, drive.signal, this.id)
       }
       return finish()
@@ -501,7 +511,9 @@ export class AcpAgent extends ExternalAgent implements AcpSessionPeer {
     if (isAutonomousCycleEnd(update)) {
       if (this.adopted === undefined && this.outOfBand.length === 0 && !this.unprompted) return
       this.outOfBand.push(update)
+      this.unprompted = true
       this.pokeOutOfBand()
+      this.wakeIdleDriver()
       return
     }
     if (!isProjectedUpdate(update)) return
@@ -525,7 +537,7 @@ export class AcpAgent extends ExternalAgent implements AcpSessionPeer {
     const batch = this.outOfBand.splice(0)
     for (const update of batch) {
       if (isAutonomousCycleEnd(update)) ended = true
-      else if (isProjectedUpdate(update)) this.projectUpdate(active, update)
+      else this.projectUpdate(active, update)
     }
     return ended
   }
