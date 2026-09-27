@@ -1,7 +1,8 @@
 /**
  * Driver edge-case tests: ACP update variants the happy path never sends,
  * attachment prompt blocks, approval and elicitation refusals, session-level
- * permission overrides, and the no-active-turn arms. Each case runs the real
+ * permission overrides, and harness cycles that arrive with no prompt open.
+ * Each case runs the real
  * driver against the scripted mock `devin acp` child.
  */
 
@@ -119,21 +120,78 @@ describe('ACP update variants', () => {
     expect(turnEndKind(agent)).toBe('completed')
   }, TEST_TIMEOUT)
 
-  it('ignores every update kind once the turn is over', async () => {
+  it('records a harness cycle that arrives after the prompt as its own turn', async () => {
     const marker = join(await mkdtemp(join(tmpdir(), 'agent-acp-idle-')), 'sent')
     bench = await setup({ MOCK_IDLE_UPDATE_FILE: marker }, { questions: true })
     const { agent } = await bench.ctx.agents.create({ sessionId: SessionId('e6'), agentOptions: {} })
     send(agent, 'late updates')
     await agent.whenIdle()
     // The marker lands only after the child's probe requests round-tripped, so
-    // every late notification was dispatched before it appears.
+    // the wake turn has closed and the probes saw no live turn.
     await waitForFile(marker, TEST_TIMEOUT - 5000)
+    await agent.whenIdle()
 
     const calls = await recordedCalls(bench.recordFile)
     const byMethod = new Map(calls.map(call => [call.method, call.params]))
     expect(byMethod.get('idle-permission')).toEqual({ outcome: { outcome: 'cancelled' } })
     expect(byMethod.get('idle-elicitation')).toEqual({ action: 'decline' })
-    expect(eventsOf(agent, 'assistant/message')).toHaveLength(1)
+    expect(eventsOf(agent, 'user/message')).toHaveLength(1)
+    expect(eventsOf(agent, 'turn/start')).toHaveLength(2)
+    const wake = eventsOf(agent, 'assistant/message')
+      .map(event => JSON.stringify(event.data))
+      .filter(data => data.includes('late message') || data.includes('still in the wake'))
+    expect(wake.length).toBeGreaterThan(0)
+    expect(wake.every(data => data.includes('"turn":2'))).toBe(true)
+    expect(eventsOf(agent, 'tool/call').some(event => JSON.stringify(event.data).includes('"turn":2'))).toBe(true)
+  }, TEST_TIMEOUT)
+
+  it('aborts an open harness cycle when the session is cancelled', async () => {
+    const marker = join(await mkdtemp(join(tmpdir(), 'agent-acp-idle-hang-')), 'sent')
+    bench = await setup({
+      MOCK_IDLE_UPDATE_FILE: marker,
+      MOCK_IDLE_HANG: '1',
+      MOCK_CONFIG_OPTIONS: JSON.stringify([{
+        id: 'model',
+        name: 'Model',
+        type: 'select',
+        currentValue: 'claude-opus',
+        options: [{ value: 'claude-opus', name: 'Opus' }],
+      }]),
+    })
+    const { agent } = await bench.ctx.agents.create({ sessionId: SessionId('e6b'), agentOptions: {} })
+    send(agent, 'hang the wake')
+    await agent.whenIdle()
+    await waitForFile(marker, TEST_TIMEOUT - 5000)
+    await vi.waitFor(() => {
+      expect(eventsOf(agent, 'turn/start')).toHaveLength(2)
+    })
+
+    agent.cancel({ kind: 'user' })
+    await agent.whenIdle()
+
+    const endings = eventsOf(agent, 'turn/end').map(event => JSON.stringify(event.data))
+    expect(endings[0]).toContain('"kind":"completed"')
+    expect(endings[1]).toContain('"kind":"aborted"')
+  }, TEST_TIMEOUT)
+
+  it('lets a user message preempt an open harness cycle', async () => {
+    const marker = join(await mkdtemp(join(tmpdir(), 'agent-acp-idle-preempt-')), 'sent')
+    bench = await setup({ MOCK_IDLE_UPDATE_FILE: marker, MOCK_IDLE_HANG: '1' })
+    const { agent } = await bench.ctx.agents.create({ sessionId: SessionId('e6c'), agentOptions: {} })
+    send(agent, 'hang the wake')
+    await agent.whenIdle()
+    await waitForFile(marker, TEST_TIMEOUT - 5000)
+    await vi.waitFor(() => {
+      expect(eventsOf(agent, 'turn/start')).toHaveLength(2)
+    })
+
+    send(agent, 'user follows')
+    await agent.whenIdle()
+
+    expect(eventsOf(agent, 'turn/start')).toHaveLength(3)
+    expect(eventsOf(agent, 'user/message')).toHaveLength(2)
+    const prompts = await paramsOf(bench.recordFile, 'session/prompt')
+    expect(prompts).toHaveLength(2)
   }, TEST_TIMEOUT)
 })
 

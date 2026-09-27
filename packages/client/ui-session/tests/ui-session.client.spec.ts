@@ -582,6 +582,112 @@ describe('UiSession status', () => {
     bench.list.update((draft) => { draft.phase = 'ready' })
     expect(service.sessionStatus.getSnapshot().has(id)).toBe(false)
   })
+
+  it('notifies a hidden tab when a session stops, and asks once while permission is undecided', async () => {
+    const created: string[] = []
+    const requestPermission = vi.fn(() => Promise.resolve('granted' as NotificationPermission))
+    class NotificationMock {
+      static permission: NotificationPermission = 'granted'
+      static requestPermission = requestPermission
+      constructor(title: string) { created.push(title) }
+    }
+    const doc = { visibilityState: 'hidden' as DocumentVisibilityState }
+    vi.stubGlobal('document', doc)
+    try {
+      const ctx = new Context()
+      const bench = createSessionsBench(ctx)
+      const id = sessionId('hidden')
+      bench.binding(id)
+      createUiSession(ctx, bench)
+
+      bench.emitStatus(id, true)
+      bench.emitStatus(id, false)
+
+      vi.stubGlobal('Notification', NotificationMock)
+      bench.emitStatus(id, true)
+      bench.emitStatus(id, false)
+      expect(created).toEqual([id])
+      expect(requestPermission).not.toHaveBeenCalled()
+
+      doc.visibilityState = 'visible'
+      bench.emitStatus(id, true)
+      bench.emitStatus(id, false)
+      expect(created).toEqual([id])
+
+      doc.visibilityState = 'hidden'
+      NotificationMock.permission = 'denied'
+      bench.emitStatus(id, true)
+      bench.emitStatus(id, false)
+      expect(created).toEqual([id])
+      expect(requestPermission).not.toHaveBeenCalled()
+
+      NotificationMock.permission = 'default'
+      bench.emitStatus(id, true)
+      bench.emitStatus(id, false)
+      await vi.waitFor(() => { expect(created).toEqual([id, id]) })
+      expect(requestPermission).toHaveBeenCalledOnce()
+
+      bench.emitStatus(id, true)
+      bench.emitStatus(id, false)
+      expect(requestPermission).toHaveBeenCalledOnce()
+
+      bench.list.update((draft) => { draft.byId[id]!.displayTitle = '' })
+      NotificationMock.permission = 'granted'
+      bench.emitStatus(id, true)
+      bench.emitStatus(id, false)
+      expect(created).toEqual([id, id])
+    } finally {
+      vi.unstubAllGlobals()
+    }
+  })
+
+  it('ignores a notification the browser rejects, and a permission request that fails', async () => {
+    class NotificationMock {
+      static permission: NotificationPermission = 'granted'
+      static requestPermission = vi.fn(() => Promise.reject(new Error('hidden tab')))
+      constructor(_title: string) { throw new Error('no gesture') }
+    }
+    vi.stubGlobal('document', { visibilityState: 'hidden' })
+    vi.stubGlobal('Notification', NotificationMock)
+    try {
+      const ctx = new Context()
+      const bench = createSessionsBench(ctx)
+      const id = sessionId('rejected')
+      bench.binding(id)
+      createUiSession(ctx, bench)
+      bench.emitStatus(id, true)
+      bench.emitStatus(id, false)
+
+      NotificationMock.permission = 'default'
+      const other = sessionId('undecided')
+      bench.binding(other)
+      bench.emitStatus(other, true)
+      bench.emitStatus(other, false)
+      await vi.waitFor(() => { expect(NotificationMock.requestPermission).toHaveBeenCalledOnce() })
+      await Promise.resolve()
+
+      class DeclinedNotification {
+        static permission: NotificationPermission = 'default'
+        static requestPermission = vi.fn(() => Promise.resolve('denied' as NotificationPermission))
+        constructor(_title: string) { throw new Error('should not construct') }
+      }
+      vi.stubGlobal('Notification', DeclinedNotification)
+      const declined = new Context()
+      const declinedBench = createSessionsBench(declined)
+      const missing = sessionId('missing')
+      const present = sessionId('declined')
+      declinedBench.binding(present)
+      createUiSession(declined, declinedBench)
+      declinedBench.emitStatus(missing, true)
+      declinedBench.emitStatus(missing, false)
+      declinedBench.emitStatus(present, true)
+      declinedBench.emitStatus(present, false)
+      await vi.waitFor(() => { expect(DeclinedNotification.requestPermission).toHaveBeenCalledOnce() })
+      await Promise.resolve()
+    } finally {
+      vi.unstubAllGlobals()
+    }
+  })
 })
 
 describe('UiSession pending interactions', () => {

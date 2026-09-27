@@ -70,6 +70,9 @@ class FakeAgent extends ExternalAgent {
   readonly steered: UserMessage[] = []
   readonly injected: UserMessage[] = []
   interrupted = 0
+  /** When set, the next empty claim runs {@link driveUnpromptedTurn}. */
+  unprompted = false
+  readonly adoptedTurns: number[] = []
   bindImpl: () => Promise<void> = () => Promise.resolve()
   unbindImpl: () => Promise<void> = () => Promise.resolve()
   driveImpl: (messages: readonly UserMessage[], drive: ExternalTurnDrive) => Promise<TurnEndReason> =
@@ -113,6 +116,23 @@ class FakeAgent extends ExternalAgent {
   protected interruptTurn(drive: ExternalTurnDrive): Promise<void> {
     this.interrupted += 1
     return this.interruptImpl(drive)
+  }
+
+  protected override hasUnpromptedHarnessWork(): boolean {
+    return this.unprompted || super.hasUnpromptedHarnessWork()
+  }
+
+  protected override async driveUnpromptedTurn(drive: ExternalTurnDrive): Promise<TurnEndReason> {
+    this.adoptedTurns.push(drive.turn)
+    const ending = await super.driveUnpromptedTurn(drive)
+    this.unprompted = false
+    return ending
+  }
+
+  /** Queue one harness cycle and wake the driver without a user message. */
+  beginUnprompted(): void {
+    this.unprompted = true
+    this.wakeIdleDriver()
   }
 }
 
@@ -669,6 +689,57 @@ describe('ExternalAgent turn drive', () => {
     expect(agent.driven).toHaveLength(0)
     expect(types(agent)).not.toContain('step/start')
     expect(turnEndKinds(agent)).toEqual(['completed'])
+  })
+
+  it('opens a turn with no user message when the harness has output waiting', async () => {
+    bench = await harness()
+    const { agent } = await create(bench.ctx)
+
+    agent.beginUnprompted()
+    await agent.whenIdle()
+
+    expect(agent.driven).toHaveLength(0)
+    expect(agent.adoptedTurns).toEqual([1])
+    expect(types(agent).filter(type => type === 'user/message')).toHaveLength(0)
+    expect(types(agent)).toContain('step/start')
+    expect(turnEndKinds(agent)).toEqual(['completed'])
+  })
+
+  it('replays harness output that arrived during maintenance', async () => {
+    bench = await harness()
+    const { agent } = await create(bench.ctx)
+    const jobGate = Promise.withResolvers<undefined>()
+    const maintenance = agent.runMaintenance(async () => {
+      await jobGate.promise
+      return 'done'
+    })
+
+    agent.beginUnprompted()
+    jobGate.resolve(undefined)
+    await expect(maintenance).resolves.toBe('done')
+    await agent.whenIdle()
+
+    expect(agent.adoptedTurns).toEqual([1])
+    expect(agent.driven).toHaveLength(0)
+  })
+
+  it('does not replay a maintenance wake whose inbox was cleared', async () => {
+    bench = await harness()
+    const { agent } = await create(bench.ctx)
+    const jobGate = Promise.withResolvers<undefined>()
+    const maintenance = agent.runMaintenance(async () => {
+      await jobGate.promise
+      return 'done'
+    })
+
+    send(agent, 'queued')
+    agent.inbox.clear()
+    jobGate.resolve(undefined)
+    await expect(maintenance).resolves.toBe('done')
+    await agent.whenIdle()
+
+    expect(agent.driven).toHaveLength(0)
+    expect(agent.adoptedTurns).toHaveLength(0)
   })
 
   it('surfaces a turn/end append failure through the agent error channel', async () => {

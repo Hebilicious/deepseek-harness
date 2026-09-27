@@ -44,10 +44,15 @@
  * - `MOCK_UNREGISTERED_REQUEST` — request permission and elicitation for a
  *                         session id this client carries no peer for, plus one
  *                         elicitation with no session id at all.
- * - `MOCK_IDLE_UPDATE_FILE` — after answering the prompt, emit every handled
- *                         update kind and probe the driver with a permission
- *                         and an elicitation request, then touch this file.
- *                         Exercises the no-active-turn arms.
+ * - `MOCK_IDLE_UPDATE_FILE` — after answering the prompt, emit a harness cycle
+ *                         with no client prompt (text, thought, tool, plan, a
+ *                         non-closing `usage_update`, then a terminal
+ *                         `usage_update` whose origin is `MOCK_IDLE_ORIGIN_KIND`,
+ *                         default `task-notification`), then probe permission
+ *                         and elicitation, then touch this file.
+ * - `MOCK_IDLE_HANG`    — with `MOCK_IDLE_UPDATE_FILE`, emit only the late text
+ *                         and touch the file, leaving the cycle open.
+ * - `MOCK_IDLE_ORIGIN_KIND` — `kind` on the terminal idle `usage_update`.
  * - `MOCK_MESSAGE_ID`   — stream the message chunk under that ACP messageId.
  * - `MOCK_TEXT_IMAGE`   — stream the assistant chunk as an image block, which
  *                         the driver has no text for.
@@ -255,15 +260,25 @@ function record(method: string, params: unknown): void {
 record('process', { cwd: process.cwd(), args: process.argv.slice(2) })
 
 /**
- * Emit one of every handled `session/update` kind after the prompt response,
- * exercising the driver's arms for updates that arrive while no turn is
- * active. The trailing request round-trips prove the client dispatched every
- * notification before the marker lands.
+ * Emit one harness cycle after the prompt response. A stray `usage_update`
+ * and a non-autonomous origin must not close it; the terminal origin does.
+ * The trailing requests prove the client dispatched them after that turn
+ * closed. `MOCK_IDLE_HANG` stops after the late text.
  */
 async function emitIdleUpdates(conn: AgentContext, sessionId: string, marker: string): Promise<void> {
   const update = (payload: SessionNotification['update']): Promise<void> =>
     conn.notify(methods.client.session.update, { sessionId, update: payload })
+  await update({
+    sessionUpdate: 'usage_update',
+    used: 1,
+    size: 10,
+    _meta: { '_claude/origin': { kind: 'task-notification' } },
+  })
   await update({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'late message' } })
+  if (process.env.MOCK_IDLE_HANG === '1') {
+    writeFileSync(marker, 'sent')
+    return
+  }
   await update({ sessionUpdate: 'agent_thought_chunk', content: { type: 'text', text: 'late thought' } })
   await update({
     sessionUpdate: 'tool_call',
@@ -277,6 +292,42 @@ async function emitIdleUpdates(conn: AgentContext, sessionId: string, marker: st
     entries: [{ content: 'late step', status: 'pending', priority: 'medium' }],
   })
   await update({ sessionUpdate: 'config_option_update', configOptions: [] })
+  await update({
+    sessionUpdate: 'usage_update',
+    used: 2,
+    size: 10,
+    _meta: { '_claude/origin': { kind: 'auto-continuation' } },
+  })
+  await update({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'still in the wake' } })
+  await update({
+    sessionUpdate: 'usage_update',
+    used: 5,
+    size: 10,
+    _meta: { '_claude/origin': null },
+  })
+  await update({
+    sessionUpdate: 'usage_update',
+    used: 6,
+    size: 10,
+    _meta: { '_claude/origin': { ignored: true } },
+  })
+  await update({
+    sessionUpdate: 'usage_update',
+    used: 7,
+    size: 10,
+    _meta: { '_claude/origin': { kind: 1 } },
+  })
+  await update({
+    sessionUpdate: 'usage_update',
+    used: 3,
+    size: 10,
+    _meta: { '_claude/origin': { kind: process.env.MOCK_IDLE_ORIGIN_KIND ?? 'task-notification' } },
+  })
+  await update({
+    sessionUpdate: 'usage_update',
+    used: 4,
+    size: 10,
+  })
   record('idle-permission', await conn.request(methods.client.session.requestPermission, {
     sessionId,
     toolCall: { toolCallId: 'idle-probe', title: 'idle probe' },
@@ -587,7 +638,7 @@ function makeAgent() {
           })
         }
       }
-      if (IDLE_UPDATE_FILE !== undefined) {
+      if (IDLE_UPDATE_FILE !== undefined && prompts === 1) {
         setTimeout(() => { void emitIdleUpdates(conn, params.sessionId, IDLE_UPDATE_FILE) }, 150)
       }
       if (CRASH_AFTER_CHUNK) {

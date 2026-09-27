@@ -167,7 +167,8 @@ export abstract class ManagedAgent implements Agent {
         // A disposed maintenance activity owes no replay: teardown is about to
         // drop the agent, so pending input must not wake a driver again.
         const cause = maintenance.abort.signal.reason as AgentCancelCause | undefined
-        if (cause?.kind !== 'disposed' && maintenance.wakeRequested && this.inbox.hasPending) this.wakeDriver()
+        const pendingWake = this.inbox.hasPending || this.hasUnpromptedHarnessWork()
+        if (cause?.kind !== 'disposed' && maintenance.wakeRequested && pendingWake) this.wakeDriver()
         done.resolve()
       }
     })()
@@ -287,7 +288,7 @@ export abstract class ManagedAgent implements Agent {
         this.throwError(error)
       }
     }
-    if (!this.inbox.hasPending) return false
+    if (!this.inbox.hasPending && !this.hasUnpromptedHarnessWork()) return false
     phase.abort = new AbortController()
     // A fresh controller makes a latch set on the old one stale: the live driver claims the queue itself.
     phase.wakeRequested = false
@@ -315,6 +316,25 @@ export abstract class ManagedAgent implements Agent {
    */
   protected afterAbortedTurn(phase: RunningAgentPhase, reason: AgentCancelCause): void {
     if (reason.kind !== 'disposed' && this.inbox.hasPending) phase.wakeRequested = true
+  }
+
+  /**
+   * Whether harness output is waiting with no inbox row. An empty claim then
+   * still runs {@link ExternalAgent.driveUnpromptedTurn} instead of stopping.
+   * The default is no such output; a driver that adopts idle harness cycles
+   * overrides this.
+   * @returns whether the next empty claim must open a turn.
+   */
+  protected hasUnpromptedHarnessWork(): boolean {
+    return false
+  }
+
+  /**
+   * Start the driver while idle. A running or maintenance activity latches the
+   * wake the same way {@link send} does.
+   */
+  protected wakeIdleDriver(): void {
+    this.wakeDriver()
   }
 
   /**

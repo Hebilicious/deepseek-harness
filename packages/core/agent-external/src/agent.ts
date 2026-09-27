@@ -94,8 +94,10 @@ export abstract class ExternalAgent extends ManagedAgent {
   /**
    * Drive the claimed batch through one harness call. The turn opens at step
    * 1, the driver advances through {@link ExternalTurnDrive.nextStep}, and the
-   * last step closes when the call settles; an empty claim still opens the
-   * turn boundary.
+   * last step closes when the call settles. An empty claim with no harness
+   * output waiting opens the turn boundary and stops; an empty claim that
+   * {@link hasUnpromptedHarnessWork} accepts runs {@link driveUnpromptedTurn}
+   * and writes no user message.
    * @param turn - the durable turn already appended.
    * @param signal - the live turn's abort signal.
    * @param phase - the running phase the skeleton reserved for this turn.
@@ -108,9 +110,10 @@ export abstract class ExternalAgent extends ManagedAgent {
   ): Promise<TurnBodyOutcome> {
     signal.throwIfAborted()
     const claimed = this.inbox.claim('next-turn', turn)
+    const unprompted = claimed.length === 0 && this.hasUnpromptedHarnessWork()
     // A bare wake (cleared or consumed input) still owns its turn boundary
-    // but spends no harness call.
-    if (claimed.length === 0) return { ends: { kind: 'completed' }, stop: true }
+    // but spends no harness call, unless idle harness output is waiting.
+    if (claimed.length === 0 && !unprompted) return { ends: { kind: 'completed' }, stop: true }
     let step = 1
     this.session.append('step/start', { turn, step })
     phase.step = step
@@ -151,7 +154,10 @@ export abstract class ExternalAgent extends ManagedAgent {
       signal.addEventListener('abort', onAbort)
       this.liveDrive = drive
       try {
-        return { ends: await this.driveTurn(claimed, drive), stop: false }
+        const ends = unprompted
+          ? await this.driveUnpromptedTurn(drive)
+          : await this.driveTurn(claimed, drive)
+        return { ends, stop: false }
       } finally {
         // Accepted live forwards still commit their durable rows inside
         // this turn's boundary; settlement cannot inspect the queue ahead
@@ -242,6 +248,19 @@ export abstract class ExternalAgent extends ManagedAgent {
    * @returns the durable turn ending.
    */
   protected abstract driveTurn(messages: readonly UserMessage[], drive: ExternalTurnDrive): Promise<TurnEndReason>
+
+  /**
+   * Project harness output that arrived with no user message. The turn is
+   * already open and its step is 1; the driver writes no `user/message`.
+   * The default settles the turn immediately. A driver that reports work from
+   * {@link ManagedAgent.hasUnpromptedHarnessWork} overrides this.
+   * @param drive - turn boundary, abort signal, and bound projector.
+   * @returns the durable turn ending.
+   */
+  protected driveUnpromptedTurn(drive: ExternalTurnDrive): Promise<TurnEndReason> {
+    void drive
+    return Promise.resolve({ kind: 'completed' })
+  }
 
   /**
    * Forward one steering message into the live harness turn (Codex

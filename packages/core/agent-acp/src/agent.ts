@@ -11,6 +11,7 @@
 import type {
   AgentHarness,
   AgentOptions,
+  InboxTarget,
 } from '@deepseek-ai/dsh-agent'
 import type { AssistantStreamAttempt } from '@deepseek-ai/dsh-agent-external'
 import {
@@ -23,7 +24,7 @@ import type { Context } from '@deepseek-ai/cordis'
 import type { UserMessage } from '@deepseek-ai/dsh-llm'
 import { errorChain } from '@deepseek-ai/dsh-llm'
 import { brandString } from '@deepseek-ai/dsh-brand'
-import type { Session, SessionId, TurnEndReason } from '@deepseek-ai/dsh-session'
+import type { AgentCancelCause, Session, SessionId, TurnEndReason } from '@deepseek-ai/dsh-session'
 import type { SandboxMode } from '@deepseek-ai/dsh-sandbox'
 import type { ToolCallId } from '@deepseek-ai/dsh-llm'
 import type {
@@ -128,6 +129,18 @@ export class AcpAgent extends ExternalAgent implements AcpSessionPeer {
   private modeSync: Promise<void> = Promise.resolve()
   private connection: AcpClientConnection | undefined
   private active: ActiveTurn | undefined
+  /**
+   * The turn collecting harness output that arrived with no user message, when
+   * that turn is the live one. Distinct from a `session/prompt` turn so a
+   * prompt's updates are not queued behind it.
+   */
+  private adopted: ActiveTurn | undefined
+  /** Projectable updates that arrived before the adopted turn's projector existed. */
+  private readonly outOfBand: SessionNotification['update'][] = []
+  /** Resolves when an adopted turn should drain {@link outOfBand} again. */
+  private outOfBandWait = Promise.withResolvers<void>()
+  /** Whether {@link outOfBand} or an open adopted turn still owes a driver turn. */
+  private unprompted = false
   /** The session's reported config options (model/mode mirrors). */
   private configOptions: readonly SessionConfigOption[] = []
   /** Whether `session/close` is advertised for this agent. */
@@ -403,16 +416,136 @@ export class AcpAgent extends ExternalAgent implements AcpSessionPeer {
   // ---- AcpSessionPeer dispatch ----
 
   /**
+   * Whether a harness cycle is waiting to be projected and no prompt turn is
+   * collecting it. The driver then opens a turn with no user message.
+   * @returns whether {@link driveUnpromptedTurn} must run.
+   */
+  protected override hasUnpromptedHarnessWork(): boolean {
+    return this.unprompted
+  }
+
+  /**
+   * Queue input, and wake an adopted harness cycle that is waiting so a user
+   * message preempts it instead of sitting until the cycle's own end marker.
+   * @param message - the user message to queue.
+   * @param target - which inbox lane receives it.
+   * @param wakeup - whether the driver should run.
+   */
+  override send(message: UserMessage, target: InboxTarget, wakeup: boolean): void {
+    super.send(message, target, wakeup)
+    if (this.unprompted) this.pokeOutOfBand()
+  }
+
+  /**
+   * Project one harness cycle that started after `session/prompt` returned.
+   * The Claude Code adapter emits that cycle — a task notification (a finished
+   * background command, a Monitor line, or a scheduled wakeup) or a peer,
+   * coordinator, or observer message — as ordinary `session/update`s, and
+   * closes it with a `usage_update` whose `_meta._claude/origin.kind` names
+   * that origin. Output that arrives while a prompt is in flight stays on
+   * that prompt's turn.
+   * @param drive - the open turn, its abort signal, and its projector.
+   * @returns the durable turn ending. Abort settles the partial output as interrupted.
+   */
+  protected override async driveUnpromptedTurn(drive: ExternalTurnDrive): Promise<TurnEndReason> {
+    const reported = acpModelOption(this.configOptions)?.currentValue
+    const model = typeof reported === 'string' && reported !== '' ? reported : HARNESS_DEFAULT_MODEL
+    drive.projector.noteRoute({ provider: this.driverConfig.harness.id, model })
+    const active: ActiveTurn = {
+      drive,
+      attempts: new Map(),
+      openToolCalls: new Set(),
+      pendingToolCalls: new Map(),
+      stepToolCalls: 0,
+      model,
+    }
+    this.adopted = active
+    this.active = active
+    const finish = (): TurnEndReason => drive.signal.aborted
+      ? { kind: 'aborted', reason: drive.signal.reason as AgentCancelCause }
+      : { kind: 'completed' }
+    try {
+      while (!drive.signal.aborted) {
+        if (this.drainOutOfBand(active)) break
+        if (this.inbox.hasPending) break
+        await raceAbort(this.outOfBandWait.promise, drive.signal, this.id)
+      }
+      return finish()
+    } finally {
+      this.active = undefined
+      this.adopted = undefined
+      this.settleActive(active, finish())
+      this.unprompted = this.outOfBand.length > 0
+    }
+  }
+
+  /**
    * Consume one `session/update` for the bound session. Replaying history
    * during `session/load` never reaches here: the peer registers only after
-   * the load response.
+   * the load response. A prompt turn projects immediately. A cycle that
+   * arrives with no prompt open is queued until {@link driveUnpromptedTurn}
+   * collects it; a terminal `usage_update` for an autonomous origin closes
+   * that turn. Any other update with no prompt open is ignored, except
+   * `config_option_update`, which refreshes the session's known options.
    * @param update - one ACP session update notification to project.
    */
   update(update: SessionNotification['update']): void {
-    const active = this.active
+    if (update.sessionUpdate === 'config_option_update') {
+      this.configOptions = update.configOptions
+      return
+    }
+    if (this.active !== undefined && this.adopted === undefined) {
+      this.projectUpdate(this.active, update)
+      return
+    }
+    if (isAutonomousCycleEnd(update)) {
+      if (this.adopted === undefined && this.outOfBand.length === 0 && !this.unprompted) return
+      this.outOfBand.push(update)
+      this.pokeOutOfBand()
+      return
+    }
+    if (!isProjectedUpdate(update)) return
+    if (this.adopted !== undefined) {
+      this.projectUpdate(this.adopted, update)
+      return
+    }
+    this.outOfBand.push(update)
+    this.unprompted = true
+    this.pokeOutOfBand()
+    this.wakeIdleDriver()
+  }
+
+  /**
+   * Project the updates queued before this turn's projector existed.
+   * @param active - the adopted turn.
+   * @returns whether a terminal autonomous `usage_update` was in the batch.
+   */
+  private drainOutOfBand(active: ActiveTurn): boolean {
+    let ended = false
+    const batch = this.outOfBand.splice(0)
+    for (const update of batch) {
+      if (isAutonomousCycleEnd(update)) ended = true
+      else if (isProjectedUpdate(update)) this.projectUpdate(active, update)
+    }
+    return ended
+  }
+
+  /** Wake the adopted turn's wait. Replaces the promise so the next wait is fresh. */
+  private pokeOutOfBand(): void {
+    const current = this.outOfBandWait
+    this.outOfBandWait = Promise.withResolvers()
+    current.resolve()
+  }
+
+  /**
+   * Project one session update into the open turn. `usage_update` and other
+   * unprojected kinds are ignored; the caller decides which of those close a turn.
+   * @param active - the prompt turn or the adopted turn.
+   * @param update - one ACP session update.
+   */
+  private projectUpdate(active: ActiveTurn, update: SessionNotification['update']): void {
     switch (update.sessionUpdate) {
       case 'agent_message_chunk': {
-        if (active === undefined) return
         this.commitPendingToolCalls(active)
         this.advanceAfterTools(active)
         const lane = this.ensureAttempt(active, optionalString(update.messageId) ?? 'default')
@@ -426,7 +559,6 @@ export class AcpAgent extends ExternalAgent implements AcpSessionPeer {
         return
       }
       case 'agent_thought_chunk': {
-        if (active === undefined) return
         this.commitPendingToolCalls(active)
         this.advanceAfterTools(active)
         const lane = this.ensureAttempt(active, optionalString(update.messageId) ?? 'default')
@@ -440,7 +572,6 @@ export class AcpAgent extends ExternalAgent implements AcpSessionPeer {
         return
       }
       case 'tool_call': {
-        if (active === undefined) return
         const callId = update.toolCallId
         if (callId.length === 0) return
         // A call after every earlier call has its result opens a new model
@@ -455,16 +586,10 @@ export class AcpAgent extends ExternalAgent implements AcpSessionPeer {
         return
       }
       case 'tool_call_update': {
-        if (active === undefined) return
         this.toolUpdate(active, update)
         return
       }
-      case 'config_option_update': {
-        this.configOptions = update.configOptions
-        return
-      }
       case 'plan': {
-        if (active === undefined) return
         this.commitPendingToolCalls(active)
         this.advanceAfterTools(active)
         const lines = update.entries.flatMap((entry) => {
@@ -487,8 +612,9 @@ export class AcpAgent extends ExternalAgent implements AcpSessionPeer {
 
   /**
    * Answer one `session/request_permission` through the DSH approval seam.
-   * The request only arrives while `session/prompt` is in flight, so the
-   * durable turn is open and the audit pair can commit.
+   * The request arrives while a prompt or an adopted harness cycle is in
+   * flight, so the durable turn is open and the audit pair can commit.
+   * With no live turn, or no approval service, the outcome is cancelled.
    */
   async requestPermission(params: RequestPermissionRequest): Promise<RequestPermissionResponse> {
     const active = this.active
@@ -872,6 +998,44 @@ export class AcpAgent extends ExternalAgent implements AcpSessionPeer {
       this.ctx.logger.warn(`${this.prefix}: attachment path resolution failed: ${errorChain(error)}`)
       return undefined
     }
+  }
+}
+
+/**
+ * Origins the Claude Code adapter stamps on a `usage_update` when the cycle
+ * was not the user's prompt. `task-notification` covers a finished background
+ * command, a Monitor line, and a scheduled wakeup (`subkind` `scheduled-trigger`).
+ * Background subagent output that the adapter holds inside `session/prompt`
+ * is not one of these cycles.
+ */
+const AUTONOMOUS_ORIGIN_KINDS = new Set([
+  'task-notification',
+  'peer',
+  'coordinator',
+  'observer',
+  'observer-activity',
+])
+
+/** Whether this update is the terminal marker of one autonomous harness cycle. */
+function isAutonomousCycleEnd(update: SessionNotification['update']): boolean {
+  if (update.sessionUpdate !== 'usage_update') return false
+  const origin = update._meta?.['_claude/origin']
+  if (typeof origin !== 'object' || origin === null || !('kind' in origin)) return false
+  const kind = origin.kind
+  return typeof kind === 'string' && AUTONOMOUS_ORIGIN_KINDS.has(kind)
+}
+
+/** Whether the driver projects this update into the open turn. */
+function isProjectedUpdate(update: SessionNotification['update']): boolean {
+  switch (update.sessionUpdate) {
+    case 'agent_message_chunk':
+    case 'agent_thought_chunk':
+    case 'tool_call':
+    case 'tool_call_update':
+    case 'plan':
+      return true
+    default:
+      return false
   }
 }
 

@@ -479,6 +479,8 @@ export class UiSession extends Service {
     this.publishStatus()
   }
 
+  private askedNotificationPermission = false
+
   private observeRunning(sessionId: SessionId, running: boolean): void {
     const previous = this.running.get(sessionId)
     const beforeBaseline = this.sessions.list.getSnapshot().phase === 'pending'
@@ -486,7 +488,43 @@ export class UiSession extends Service {
     if (running) this.completionUnread.delete(sessionId)
     else if ((previous === true || (previous === undefined && beforeBaseline))
       && !this.isMain(sessionId)) this.completionUnread.add(sessionId)
+    if (!running && previous === true) this.notifyHiddenTab(sessionId)
     this.publishStatus()
+  }
+
+  /**
+   * Raise one browser notification when a session stops while this tab is
+   * hidden. The title is the session's display title. Permission is requested
+   * once when it is still undecided; a later stop notifies only after a grant.
+   * @param sessionId - the session that just stopped running.
+   */
+  private notifyHiddenTab(sessionId: SessionId): void {
+    // Client specs always have a document. The guard keeps a non-browser host from throwing.
+    if (typeof document === 'undefined' || document.visibilityState !== 'hidden') return
+    if (typeof Notification === 'undefined') return
+    const title = this.sessions.list.getSnapshot().byId[sessionId]?.displayTitle
+    if (title === undefined || title.length === 0) return
+    const show = (): void => {
+      try {
+        new Notification(title)
+      } catch (error: unknown) {
+        // The constructor rejects when permission changed or the browser
+        // requires a user gesture. The completion reminder still stands.
+        void error
+      }
+    }
+    if (Notification.permission === 'granted') {
+      show()
+      return
+    }
+    if (Notification.permission !== 'default' || this.askedNotificationPermission) return
+    this.askedNotificationPermission = true
+    void Notification.requestPermission().then((permission) => {
+      if (permission === 'granted') show()
+    }).catch((error: unknown) => {
+      // A hidden tab may refuse the request. Leave permission undecided for a later gesture.
+      void error
+    })
   }
 
   private reconcileStatus(): void {

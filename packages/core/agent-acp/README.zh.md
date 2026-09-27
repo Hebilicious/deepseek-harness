@@ -101,7 +101,7 @@ kind: "package-reference"
 
 ### 轮次驱动
 
-一次 `session/prompt` 是一个持久的 dsh 轮次；当 agent 开始新的模型响应时，驱动器会开启新的步骤，即在当前步骤的每个工具调用都已有结果之后，又收到文本、思考、计划或工具调用。`agent_message_chunk` 与 `agent_thought_chunk` 更新汇入 assistant 流，`tool_call` 与 `tool_call_update` 提交持久的工具事件对，`plan` 渲染为文本块，`config_option_update` 刷新会话已知的配置选项。agent 可能在工具输入流式传完之前就宣告调用（Claude Code 适配器先发送 `{}`，再经 `tool_call_update` 补全），因此输入为空的调用会在以下时机中最早的一个提交其 `tool/call`：第一个携带输入的补全更新、其权限请求、其终态更新、agent 的下一个分块、计划或调用，或轮次结束。新的调用会先提交在它之前流出的 assistant 文本，因此日志保持 agent 产生文本与工具调用的顺序。响应的停止原因映射为轮次结束：`end_turn` 完成，`max_tokens` 记录上限，`cancelled` 以用户原因中止，`refusal` 或 `max_turn_requests` 以固定错误码失败。若轮次结束时仍有未关闭的工具调用或 assistant 流，驱动器会为其收尾，因此不会留下悬空的模型可见内容。
+一次 `session/prompt` 是一个持久的 dsh 轮次；当 agent 开始新的模型响应时，驱动器会开启新的步骤，即在当前步骤的每个工具调用都已有结果之后，又收到文本、思考、计划或工具调用。`agent_message_chunk` 与 `agent_thought_chunk` 更新汇入 assistant 流，`tool_call` 与 `tool_call_update` 提交持久的工具事件对，`plan` 渲染为文本块，`config_option_update` 刷新会话已知的配置选项。agent 可能在工具输入流式传完之前就宣告调用（Claude Code 适配器先发送 `{}`，再经 `tool_call_update` 补全），因此输入为空的调用会在以下时机中最早的一个提交其 `tool/call`：第一个携带输入的补全更新、其权限请求、其终态更新、agent 的下一个分块、计划或调用，或轮次结束。新的调用会先提交在它之前流出的 assistant 文本，因此日志保持 agent 产生文本与工具调用的顺序。响应的停止原因映射为轮次结束：`end_turn` 完成，`max_tokens` 记录上限，`cancelled` 以用户原因中止，`refusal` 或 `max_turn_requests` 以固定错误码失败。若轮次结束时仍有未关闭的工具调用或 assistant 流，驱动器会为其收尾，因此不会留下悬空的模型可见内容。当 harness 在该响应之后自行开始一个周期时——Claude Code 对任务通知（已结束的后台命令、Monitor 的一行输出，或一次定时唤醒）以及 peer、coordinator 或 observer 消息会这样做——驱动器会另开一个没有用户消息的持久轮次，把同样的更新投影进去，并在收到 `_meta._claude/origin.kind` 为上述来源之一的 `usage_update` 时关闭它。没有该来源的 `usage_update` 不会关闭轮次。在 `session/prompt` 仍在进行时到达的输出，包括 Claude Code 适配器把 prompt 保持打开以容纳的后台 subagent 工作，仍留在该 prompt 的轮次里。DSH 自己的定时提醒、作业完成通知和 subagent 结算通知是普通的后续消息，本来就会开启轮次；它们不走这条路径。
 
 ### 模型目录
 
