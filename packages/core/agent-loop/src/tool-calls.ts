@@ -6,16 +6,14 @@
  * and drains started calls.
  *
  * Abort records synthetic error results for skipped calls so replay stays
- * valid. A terminal scheduler failure records the canonical recovery result
- * for every call it left unanswered, so the step can close without leaving a
- * committed assistant call that no provider transcript can represent.
+ * valid. A terminal scheduler failure rejects after draining; the owning step
+ * records conservative recovery results before closing.
  * @module dsh-agent-loop/tool-calls
  */
 
 import type { Context } from '@deepseek-ai/cordis'
 import { createToolResultMessage, type ToolCallBlock } from '@deepseek-ai/dsh-llm'
-import type { Session, UserMessage } from '@deepseek-ai/dsh-session'
-import { SessionSeq, toolCallRecovery } from '@deepseek-ai/dsh-session'
+import type { Session, SessionSeq, UserMessage } from '@deepseek-ai/dsh-session'
 import { TOOL_ABORTED_BEFORE_DISPATCH, TOOL_RUNTIME_SCHEDULER, type ToolExecutionInput, type ToolExecutionMode, type ToolExecutionResult, type ToolRunContext } from '@deepseek-ai/dsh-tools'
 import { assertNever } from '@deepseek-ai/dsh-util-values'
 
@@ -47,9 +45,8 @@ interface GroupOutcome {
  * the signal still aborted after accepting started-call context through the
  * caller-supplied acceptor (the machine stages it in its next-step inbox for the
  * step boundary). An internal scheduler failure stops new dispatches, drains
- * already-started dispatches, records a recovery result for every call that
- * then has none, and rejects with the first failure, so the closing step leaves
- * no committed assistant call unanswered.
+ * already-started dispatches, and rejects with the first failure. The owning
+ * step supplies error results for requests without a committed outcome.
  * The committed step's AgentLoop driver boundary supplies the initiating Agent
  * that becomes each explicit {@link ToolExecutionInput.agent}.
  *
@@ -91,15 +88,9 @@ export async function executeToolCalls(
     const first = planned[next]!
     const mode = ctx.tools.executionMode(first.exec).kind
     const group = mode === 'parallel' ? planned.slice(next) : [first]
-    let outcome: GroupOutcome
-    try {
-      outcome = await runGroup(ctx, turn, step, group, mode, signal, acceptContext)
-    } catch (error: unknown) {
-      // Calls after the failed group never reached dispatch; they still need a
-      // durable result before the step closes.
-      recoverUnansweredCalls(session, turn, step, planned.slice(next + group.length).map(call => ({ block: call.block })))
-      throw error
-    }
+    const outcome = await runGroup(
+      ctx, turn, step, group, mode, signal, acceptContext,
+    )
     next += outcome.consumed
     concluded ||= outcome.concluded
     if (outcome.aborted) {
@@ -125,8 +116,8 @@ function parseArguments(raw: string): unknown {
  * drain and remains for the caller's next barrier. Results and contexts commit
  * in model order. Abort stops starts, drains and commits started calls, accepts
  * their contexts into the owning batch, records results for skipped calls, and
- * returns an aborted outcome. Scheduler failure drains dispatches, closes every
- * call it left unanswered with a recovery result, and rejects with the failure.
+ * returns an aborted outcome. Scheduler failure drains dispatches and rejects
+ * for the owning step to record recovery results.
  */
 async function runGroup(
   ctx: Context,
@@ -138,7 +129,7 @@ async function runGroup(
   acceptContext: (context: UserMessage) => void,
 ): Promise<GroupOutcome> {
   const { session } = ctx.agents.requireInitiator()
-  const { maxParallelToolCalls } = ctx.agentLoop.config
+  const maxParallelToolCalls = ctx.agentLoop.config.maxParallelToolCalls.get()
   const slots: (Slot | undefined)[] = group.map(() => undefined)
   // Started slots retain their `tool/call` seq so the result can cite it.
   const callSeqs: Array<SessionSeq | undefined> = group.map(() => undefined)
@@ -241,10 +232,6 @@ async function runGroup(
   } catch (error: unknown) {
     schedulerFailure ??= { error }
     await Promise.allSettled(inFlight.values())
-    recoverUnansweredCalls(session, turn, step, group.slice(committed).map((call, offset) => {
-      const callSeq = callSeqs[committed + offset]
-      return { block: call.block, ...callSeq === undefined ? {} : { callSeq } }
-    }))
     throw schedulerFailure.error
   }
 
@@ -257,38 +244,6 @@ async function runGroup(
   /* v8 ignore next -- unreachable: a non-aborted group commits every started call */
   if (committed !== started) throw new Error('tool-call scheduler: uncommitted settled calls')
   return { consumed: started, aborted: false, concluded }
-}
-
-/**
- * Record the canonical recovery result for every call that produced none. A
- * step that closes with a committed assistant call and no result would leave a
- * transcript no provider can represent, so a scheduler failure closes the calls
- * it abandoned before the failure reaches the step boundary.
- * @param session - the owning session log.
- * @param turn - turn owning the calls.
- * @param step - step owning the calls.
- * @param calls - unanswered calls in model order, each citing its recorded start when it reached one.
- */
-function recoverUnansweredCalls(
-  session: Session,
-  turn: number,
-  step: number,
-  calls: readonly { block: ToolCallBlock; callSeq?: SessionSeq }[],
-): void {
-  for (const { block, callSeq } of calls) {
-    try {
-      const recovery = toolCallRecovery({
-        callId: block.id,
-        turn,
-        step,
-        ...callSeq === undefined ? {} : { callSeq },
-      }, SessionSeq(session.seq))
-      session.append('tool/result', recovery.data, recovery.intent)
-    } catch (_rejectedRecovery) {
-      // A refused repair must not replace the scheduler failure it repairs.
-      return
-    }
-  }
 }
 
 /** Append the durable call/result pair for a model call skipped after cancellation. */

@@ -17,8 +17,7 @@ import AgentRegistry, { type Agent } from '@deepseek-ai/dsh-agent'
 import { AttachmentStore, type ImageAttachmentRef, type StoredImageAttachment } from '@deepseek-ai/dsh-attachment'
 import type { AttachmentId } from '@deepseek-ai/dsh-attachment'
 import { brandString } from '@deepseek-ai/dsh-brand'
-import { createToolResultMessage, createUserMessage } from '@deepseek-ai/dsh-llm'
-import type { ToolCallId } from '@deepseek-ai/dsh-llm'
+import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import LlmRuntime from '@deepseek-ai/dsh-llm'
 import type { SandboxMode } from '@deepseek-ai/dsh-sandbox'
 import SessionStore, { SessionId, type SessionEvent } from '@deepseek-ai/dsh-session'
@@ -212,14 +211,13 @@ function toolCalls(agent: Agent): Array<{ id: string; name: string; args: string
 function toolResults(agent: Agent): Array<{ id: string; isError: boolean; text: string; meta: unknown }> {
   return eventsOf(agent, 'tool/result').map((event) => {
     const data = event.data as {
-      message: { content: Array<{ toolCallId: string; isError?: boolean; content?: Array<{ text?: string }> }> }
+      message: { toolCallId: string; isError: boolean; content: Array<{ text?: string }> }
       meta?: unknown
     }
-    const block = data.message.content[0]!
     return {
-      id: block.toolCallId,
-      isError: block.isError === true,
-      text: JSON.stringify(block.content),
+      id: data.message.toolCallId,
+      isError: data.message.isError,
+      text: JSON.stringify(data.message.content),
       meta: data.meta,
     }
   })
@@ -1216,12 +1214,11 @@ describe('context injection details', () => {
     expect(text).toContain('\\"image\\"')
     expect(text).toContain('shot.png')
 
-    // A tool result is not a block kind the Codex wire carries: the context
-    // stays pending and nothing reaches the thread.
-    agent.inject(createToolResultMessage({
-      callId: brandString<ToolCallId>('call-1'),
-      content: [{ type: 'text', text: 'tool output' }],
-      isError: false,
+    // A reasoning block is not a block kind the Codex wire carries: the
+    // context stays pending and nothing reaches the thread.
+    agent.inject(createUserMessage({
+      content: [{ type: 'reasoning', text: 'tool output' }],
+      source: { kind: 'user' },
     }))
     await bench.ctx.codexAppServer.status({ harness: 'codex' }, new AbortController().signal)
     const calls = await recordedCalls(bench.recordFile)
@@ -1275,10 +1272,9 @@ describe('context injection details', () => {
   it('fails the turn for an input block Codex cannot forward', async () => {
     bench = await setup()
     const { agent } = await bench.ctx.agents.create({ sessionId: SessionId('i4'), agentOptions: {} })
-    agent.followup(createToolResultMessage({
-      callId: brandString<ToolCallId>('call-1'),
-      content: [{ type: 'text', text: 'tool output' }],
-      isError: false,
+    agent.followup(createUserMessage({
+      content: [{ type: 'reasoning', text: 'tool output' }],
+      source: { kind: 'user' },
     }))
     await agent.whenIdle()
 

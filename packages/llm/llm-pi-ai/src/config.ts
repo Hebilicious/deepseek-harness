@@ -12,6 +12,7 @@
  *
  * @module dsh-llm-pi-ai/config
  */
+import type { Volatile } from '@deepseek-ai/cordis'
 
 import type { CacheRetention, ChatTemplateKwargValue, ModelThinkingLevel, Provider, ThinkingBudgets, Transport } from '@earendil-works/pi-ai'
 import z from '@deepseek-ai/schemastery'
@@ -254,14 +255,19 @@ export interface Config {
    * the dormant settings-driven posture: the adapter mounts with no routes
    * and registers them the moment a settings section supplies profiles.
    */
-  providers?: Record<string, PiAiProviderProfile>
+  providers: Volatile<Record<string, PiAiProviderProfile>>
   /**
    * Opt-in overlay of models the installed pi-ai catalog does not describe,
    * read from a published model directory. Its entries extend a route the
-   * installed catalog ships and never declare an endpoint of their own.
+   * installed catalog ships and never declare an endpoint of their own. The
+   * field is not volatile: changing it restarts the plugin, which retargets
+   * the directory refresh.
    */
   catalogOverlay?: PiAiCatalogOverlayConfig
 }
+
+/** Plain options accepted by the provider resolver. */
+export type Options = { [K in keyof Config]?: Config[K] extends Volatile<infer T> ? T : Config[K] }
 
 const thinkingBudgets = z.object({
   minimal: z.number(),
@@ -381,8 +387,8 @@ const profile = z.object({
 })
 
 /** Runtime schema for {@link Config}. */
-export const Config: z<Config> = z.object({
-  providers: z.dict(profile).default({}),
+export const Config = z.object({
+  providers: z.dict(profile).default({}).volatile(),
   catalogOverlay: z.union([
     z.const(false),
     z.const(true),
@@ -400,7 +406,7 @@ export const Config: z<Config> = z.object({
  * @returns the source to fetch from, or `undefined` when the overlay is off.
  * @throws Error naming the field when the section states an unusable source.
  */
-export function catalogOverlaySource(config: Config): CatalogOverlaySource | undefined {
+export function catalogOverlaySource(config: Pick<Options, 'catalogOverlay'>): CatalogOverlaySource | undefined {
   const overlay = config.catalogOverlay
   if (overlay === undefined || overlay === false) return undefined
   const stated = overlay === true ? {} : overlay
@@ -426,7 +432,7 @@ export function catalogOverlaySource(config: Config): CatalogOverlaySource | und
  * @param previous - current resolved section; omission checks every provider.
  * @throws Error naming the route and configuration entry that cannot be served.
  */
-export function assertServiceable(config: Config, previous?: Config): void {
+export function assertServiceable(config: Options, previous?: Options): void {
   const changed = Object.fromEntries(Object.entries(config.providers ?? {}).filter(([provider, profile]) =>
     !deepEqualJson(profile, previous?.providers?.[provider])))
   resolveProfiles(changed)

@@ -550,7 +550,7 @@ function buildSummarizationInput(
 ): SummarizationInput {
   const header = session.requestHeader()
   // The summarized prefix must be a request a provider accepts, so it carries
-  // the same projection as derived history: a call no user turn answers and no
+  // the same projection as derived history: a call no tool message answers and no
   // open step can answer is absent from it.
   const unanswerable = session.unanswerableToolCalls()
   const project = (message: Message | null): Message | null =>

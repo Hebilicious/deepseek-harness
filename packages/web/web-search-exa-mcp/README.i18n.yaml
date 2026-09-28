@@ -1,6 +1,61 @@
-# Bilingual-pair consistency record (docs/i18n/README.md): the git blob hash of each
-# side as of the last confirmed-consistent state. Both languages carry equal authority;
-# after editing either side, bring the other along and re-record with:
+# Bilingual-pair consistency record for README.md (docs/i18n/README.md): per heading
+# section, a hash of its English and Chinese blocks outside code blocks and generated regions.
+# After editing either side, bring the other along and re-record with:
 #   pnpm run verify-translation-pairing --write packages/web/web-search-exa-mcp/README.md
-README.md: 0bb63b1a41e068a286149ae2e4d8c6fb7840e269
-README.zh.md: 0fef841083a474758512ed6a2233028cac95af6f
+/:
+  en: 436a9aec9a9fa113
+  zh: 01931a8322a7465c
+/deepseek-ai-dsh-web-search-exa-mcp:
+  en: 92e4bc3579627668
+  zh: e53cdec0ee1f2e13
+/deepseek-ai-dsh-web-search-exa-mcp/summary:
+  en: b2e04c65ef1638a9
+  zh: 865dfaa74d7a8533
+/deepseek-ai-dsh-web-search-exa-mcp/table-of-contents:
+  en: d152484eb41ac6b4
+  zh: 09388d293f9be9cb
+/deepseek-ai-dsh-web-search-exa-mcp/use-this-package:
+  en: f0afef56c0f47deb
+  zh: 9cd5d08a12dcfb79
+/deepseek-ai-dsh-web-search-exa-mcp/use-this-package/when-to-choose-it:
+  en: f79d2e761c1016ec
+  zh: c5e5cc0d537894a8
+/deepseek-ai-dsh-web-search-exa-mcp/use-this-package/minimal-configuration:
+  en: 38ea4a7799da7276
+  zh: beb2a497f707d2dc
+/deepseek-ai-dsh-web-search-exa-mcp/use-this-package/what-a-search-returns:
+  en: cbaf4dc547ad1762
+  zh: 2a47496bc844033e
+/deepseek-ai-dsh-web-search-exa-mcp/use-this-package/failures-and-recovery:
+  en: 0406420f2b5d743d
+  zh: 356c952ba17f47d1
+/deepseek-ai-dsh-web-search-exa-mcp/understand-the-implementation:
+  en: 9842c69ad3636bb3
+  zh: 3cdc3f816cbdd0cb
+/deepseek-ai-dsh-web-search-exa-mcp/understand-the-implementation/design-philosophy:
+  en: 0a4c4f0217d2592d
+  zh: 31a1bdb4c46850d2
+/deepseek-ai-dsh-web-search-exa-mcp/understand-the-implementation/source-map:
+  en: 6d9d73d910877cba
+  zh: 57e1438517881e99
+/deepseek-ai-dsh-web-search-exa-mcp/understand-the-implementation/request-and-mapping-flow:
+  en: e2712b0531cf0f79
+  zh: 4032c7fbbc8affb8
+/deepseek-ai-dsh-web-search-exa-mcp/further-exploration:
+  en: d539f211dd6e478e
+  zh: 032392a5f669b9a1
+/deepseek-ai-dsh-web-search-exa-mcp/model-experience:
+  en: 786c95ed93ea19fa
+  zh: b7e51057d8795501
+/deepseek-ai-dsh-web-search-exa-mcp/model-experience/kv-cache-effect:
+  en: 40294c1c31b74824
+  zh: d75d48f485447a74
+/deepseek-ai-dsh-web-search-exa-mcp/known-limitations-and-deferred-work:
+  en: 11a221101692bca2
+  zh: 7800f00d3859ad21
+/deepseek-ai-dsh-web-search-exa-mcp/known-limitations-and-deferred-work/dev-note:
+  en: 7f775cc79dbce94b
+  zh: 12b8f68f9e7c48ca
+/deepseek-ai-dsh-web-search-exa-mcp/known-limitations-and-deferred-work/dev-note/future-the-endpoint-s-wider-tool-set:
+  en: 3b3752586d726370
+  zh: bc43e9a47f2687e8

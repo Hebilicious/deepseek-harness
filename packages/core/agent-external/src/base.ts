@@ -22,6 +22,7 @@ import type { UserMessage } from '@deepseek-ai/dsh-llm'
 import type { Scope } from '@deepseek-ai/dsh-scope'
 import { createScope } from '@deepseek-ai/dsh-scope'
 import type { Session, SessionId, TurnEndReason } from '@deepseek-ai/dsh-session'
+import { assertNever } from '@deepseek-ai/dsh-util-values'
 import type { Context } from '@deepseek-ai/cordis'
 import { DurableAgentInbox } from './inbox.ts'
 
@@ -51,6 +52,31 @@ export interface TurnBodyOutcome {
   readonly ends: TurnEndReason
   /** Whether the driver stops here instead of draining pending input. */
   readonly stop: boolean
+}
+
+/**
+ * Read the cause `cancel()` passed when aborting a driver-owned signal, copying
+ * only the fields `turn/end` records. The live reason stays the caller's
+ * object, and Node's fetch assigns a `stack` onto it that `Session.append`
+ * would either log or reject as data JSON cannot hold.
+ * @param signal - a turn or maintenance signal this driver owns.
+ * @returns the copied cause, or undefined while the signal is still live.
+ */
+export function abortedCancelCause(signal: AbortSignal): AgentCancelCause | undefined {
+  if (!signal.aborted) return undefined
+  // `cancel()` is the only aborter of the signals a driver owns.
+  const cause = signal.reason as AgentCancelCause
+  switch (cause.kind) {
+    case 'user':
+    case 'parent':
+    case 'disposed':
+      return { kind: cause.kind }
+    case 'hook':
+      return { kind: 'hook', reason: cause.reason }
+    /* v8 ignore next -- cancel accepts the closed AgentCancelCause union */
+    default:
+      return assertNever(cause)
+  }
 }
 
 /**
@@ -171,10 +197,12 @@ export abstract class ManagedAgent implements Agent {
       } finally {
         this.setPhase({ kind: 'idle', lastTurn: maintenance.lastTurn })
         // A disposed maintenance activity owes no replay: teardown is about to
-        // drop the agent, so pending input must not wake a driver again.
-        const cause = maintenance.abort.signal.reason as AgentCancelCause | undefined
-        const pendingWake = this.inbox.hasPending || this.hasUnpromptedHarnessWork()
-        if (cause?.kind !== 'disposed' && maintenance.wakeRequested && pendingWake) this.wakeDriver()
+        // drop the agent, so pending input must not wake a driver again. The
+        // pending-work read stays behind that check because factory teardown
+        // can already have unregistered the inbox projection.
+        const cause = abortedCancelCause(maintenance.abort.signal)
+        if (cause?.kind !== 'disposed' && maintenance.wakeRequested
+          && (this.inbox.hasPending || this.hasUnpromptedHarnessWork())) this.wakeDriver()
         done.resolve()
       }
     })()
@@ -193,7 +221,7 @@ export abstract class ManagedAgent implements Agent {
       // Maintenance and aborted drivers cannot deliver the wake: latch it for
       // replay at convergence. Live drivers claim queued work themselves;
       // disposal never latches, so teardown waits on no model turn.
-      const reason = this.phase.abort.signal.reason as AgentCancelCause | undefined
+      const reason = abortedCancelCause(this.phase.abort.signal)
       if (reason?.kind !== 'disposed' && (this.phase.kind === 'maintenance' || wakeAfterAbort)) {
         this.phase.wakeRequested = true
       }
@@ -279,8 +307,9 @@ export abstract class ManagedAgent implements Agent {
       turnEnds = outcome.ends
       if (outcome.stop) return false
     } catch (error: unknown) {
-      if (signal.aborted) {
-        const reason = signal.reason as AgentCancelCause
+      // A cause is present exactly while the signal is aborted.
+      const reason = abortedCancelCause(signal)
+      if (reason !== undefined) {
         turnEnds = { kind: 'aborted', reason }
         this.afterAbortedTurn(phase, reason)
         throw error
@@ -343,7 +372,7 @@ export abstract class ManagedAgent implements Agent {
    */
   protected wakeIdleDriver(): void {
     if (this.phase.kind === 'running') {
-      const reason = this.phase.abort.signal.reason as AgentCancelCause | undefined
+      const reason = abortedCancelCause(this.phase.abort.signal)
       if (reason?.kind !== 'disposed') this.phase.wakeRequested = true
       return
     }

@@ -1,7 +1,7 @@
 {
   "name": "@deepseek-ai/dsh-web-acp",
   "description": "The dsh browser-surface ACP bundle: the web patch layer over dsh-base plus dsh-web-app, with `devin acp` sessions in place of the in-process agent loop",
-  "version": "0.1.6-alpha.2",
+  "version": "0.2.0-rc.1",
   "publishConfig": {
     "access": "public"
   },
@@ -34,13 +34,13 @@
     }
   },
   "dependencies": {
-    "@deepseek-ai/dsh-agent-acp": "workspace:^"
+    "@deepseek-ai/dsh-agent-acp": "workspace:*"
   },
   "peerDependencies": {
-    "@deepseek-ai/cordis": "workspace:^"
+    "@deepseek-ai/cordis": "workspace:~"
   },
   "devDependencies": {
-    "@deepseek-ai/cordis": "workspace:^",
-    "@deepseek-ai/dsh-agent-acp": "workspace:^"
+    "@deepseek-ai/cordis": "workspace:~",
+    "@deepseek-ai/dsh-agent-acp": "workspace:*"
   }
 }

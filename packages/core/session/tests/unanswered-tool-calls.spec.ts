@@ -1,7 +1,7 @@
 /**
- * Derived history drops assistant tool calls that no user turn answers and no
- * open step can answer later: every provider protocol requires a call to carry
- * its result in the user turn that follows, so such a call would make the
+ * Derived history drops assistant tool calls that no tool message answers and
+ * no open step can answer later: every provider protocol requires a call to
+ * carry its result before the next assistant message, so such a call would make the
  * session unusable there. The durable log keeps the call the human transcript
  * shows, and a call whose step is still open stays visible until its result
  * lands.
@@ -141,7 +141,7 @@ describe('derived history without unanswerable tool calls', () => {
     expect(messages[1]?.content).toEqual([{ type: 'text', text: 'answered nothing' }])
   })
 
-  it('keeps a call answered by the user turn that follows it', () => {
+  it('keeps a call answered by the tool message that follows it', () => {
     const session = Session.create(SessionId('answered-call'))
     session.append('turn/start', { turn: 1 })
     closedStep(session, 1, 1, () => {
@@ -152,7 +152,7 @@ describe('derived history without unanswerable tool calls', () => {
     userText(session, 'continue')
 
     const messages = session.deriveMessages()
-    expect(messages.map(message => message.role)).toEqual(['user', 'assistant', 'user', 'user'])
+    expect(messages.map(message => message.role)).toEqual(['user', 'assistant', 'tool', 'user'])
     expect(messages[1]?.content).toEqual([{ type: 'tool-call', id: ToolCallId('a'), name: 'read', arguments: '{}' }])
   })
 
@@ -164,15 +164,15 @@ describe('derived history without unanswerable tool calls', () => {
       assistantCall(session, undefined, ['a'])
       toolResult(session, 'a')
     })
-    expect(session.deriveMessages().map(message => message.role)).toEqual(['user', 'assistant', 'user'])
+    expect(session.deriveMessages().map(message => message.role)).toEqual(['user', 'assistant', 'tool'])
 
     const nodes = session.surface.nodes
     // A checkpoint shadows the call; the result node keeps its own place.
     session.append('user/message', createUserMessage({
-      content: [{ type: 'text', text: 'summary' }], source: { kind: 'plugin', plugin: 'compact' },
+      content: [{ type: 'text', text: 'summary' }], source: { kind: 'user' },
     }), { surfaceOp: { op: 'replace', startSeq: nodes[1]!, endSeq: nodes[1]! }, sourceEventSeqs: [nodes[1]!] })
 
-    expect(session.deriveMessages().map(message => message.role)).toEqual(['user', 'user', 'user'])
+    expect(session.deriveMessages().map(message => message.role)).toEqual(['user', 'user', 'tool'])
   })
 
   it('shares one projection across calls and rebuilds it when the step closes', () => {

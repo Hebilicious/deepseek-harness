@@ -25,11 +25,11 @@ kind: "package-reference"
 <a id="use-this-package"></a>
 ## 使用本包
 
-在存在实时 agent 的任何地方挂载 `dsh-agent`：它提供 `ctx.agents` 以及插件、UI、钩子和编排器所面向编程的 `Agent` 句柄。在没有驱动器注册工厂之前，该服务保持惰性——随附驱动器是 `dsh-agent-loop`，因此最小的可用组合需要同时加载两者。
+在存在实时 agent 的任何地方挂载 `dsh-agent`：它提供 `ctx.agents` 以及插件、UI、钩子和编排器所面向编程的 `Agent` 句柄。在没有驱动器注册 harness 工厂之前，该服务保持惰性——随附的进程内驱动器是 `dsh-agent-loop`，它注册 `dsh` harness，因此最小的可用组合需要同时加载两者。
 
 ### 创建或恢复 agent
 
-`ctx.agents.create()` 在一个身份下构建全新 agent 与会话；`ctx.agents.resume()` 加载持久化会话并在此基础上重建 agent。两者都委托给已注册工厂，并返回 `AgentHandle`——唯一能拆除该 agent 的对象。在任一操作的 options 中设置 `parentAgent`，可使结果成为运行时子级；省略它则得到运行时根级。`get(id)`、`list()` 与 `roots()` 用于查找实时 agent；`isOwnedBy(id, parent)` 用于检验这项确切的实时所有权关系。
+`ctx.agents.create()` 在一个身份下构建全新 agent 与会话；`ctx.agents.resume()` 加载持久化会话并在此基础上重建 agent。两者都委托给为所请求 harness 注册的工厂，并返回 `AgentHandle`——唯一能拆除该 agent 的对象。在任一操作的 options 中设置 `parentAgent`，可使结果成为运行时子级；省略它则得到运行时根级。`get(id)`、`list()` 与 `roots()` 用于查找实时 agent；`isOwnedBy(id, parent)` 用于检验这项确切的实时所有权关系。
 
 ```text
 const handle = await ctx.agents.create({
@@ -78,7 +78,7 @@ await handle.agent.whenIdle()
 
 ### 设计理念
 
-该包建立在一项职责分离之上：公开的 `Agent` 接口与注册表位于本包，构造与驱动则位于循环包，并通过已注册工厂提供。消费方因此依赖 `dsh-agent` 而不依赖 `dsh-agent-loop`，从而保持驱动器可替换。第二个理念是发起方作用域：一条 `AsyncLocalStorage` 链把确切的实时 `Agent` 携带经过它启动的异步驱动器工作，使驱动器之下的辅助函数无需逐调用转发 agent 即可归因自己的工作。
+该包建立在一项职责分离之上：公开的 `Agent` 接口与注册表位于本包，构造与驱动则位于驱动器包，并通过已注册的 harness 工厂提供。消费方因此依赖 `dsh-agent` 而不依赖 `dsh-agent-loop`，从而保持驱动器可替换。第二个理念是发起方作用域：一条 `AsyncLocalStorage` 链把确切的实时 `Agent` 携带经过它启动的异步驱动器工作，使驱动器之下的辅助函数无需逐调用转发 agent 即可归因自己的工作。
 
 ### 步骤准入
 
@@ -94,17 +94,20 @@ await handle.agent.whenIdle()
 
 | 文件 | 职责 |
 |---|---|
-| [`src/index.ts`](src/index.ts) | 插件入口：`AgentRegistry`、工厂槽位、发起方作用域、`CreateAgentOptions`/`ResumeAgentOptions` |
+| [`src/index.ts`](src/index.ts) | 插件入口：`AgentRegistry`、harness 工厂注册表、发起方作用域、`CreateAgentOptions`/`ResumeAgentOptions` |
 | [`src/runtime-types.ts`](src/runtime-types.ts) | `Agent`、结构化 `Inbox`、`AgentStatus` 与 `agent/*` 事件声明 |
 | [`src/types.ts`](src/types.ts) | `AgentOptions`、取消原因与收件箱投影词汇 |
 | [`src/dispatch.ts`](src/dispatch.ts) | `agentEvents` 融合分发器与 `assembleContextFor(agent)` |
 | [`src/consumed-work.ts`](src/consumed-work.ts) | `foldConsumedWork(events)`：日志消费掉的工作最终怎样了 |
 | [`src/model-selection.ts`](src/model-selection.ts) | `installModelSelection`：把一个选择耦合到组装与路由 |
 | [`src/invariant.ts`](src/invariant.ts) | 不变式配套：无操作的 `agent/status` 转换会失败 |
+| [`src/archive-admission.ts`](src/archive-admission.ts) | Workspace 注册表归档准入中的 `turn` 族：运行中的回合及其用户原因取消 |
 
 ### 注册表与生命周期
 
 `AgentRegistry` 为每个实时 agent 保留一个条目，含其载体与创建者关系。使用已构造的 agent 前，等待 `register()` 以 `startup` 来源完成串行创建监听器；异步工厂使用拆分的 `enter()`/`announce()` 对，使 setup 与初始化始终受回滚保护。创建期间请求的 detach 会等待所有已调用的异步监听器结算，且每次 detach 都绑定到确切条目，因此陈旧 disposer 无法移除之后出现的同 id 替代项。Teardown 停止并排空循环、撤销作用域、detach agent，再 detach 会话；私有清理完成后该 id 即可复用。
+
+注册表还为它发布的每个 Agent 回答 Workspace 注册表的归档准入（[接缝](../../workspace/workspace/README.zh.md)）：`workspace/session-activity` 在会话的 Agent 运行时报告 `turn` 族（等待审批或回答的回合也算），`workspace/session-stop` 以用户自己的停止方式取消该回合——`agent.cancel({ kind: 'user' })`，但不带停止按钮的 `keepInbox`，因此排队输入被丢弃并记录一次收件箱拼接，而不会在之后唤醒已归档会话。任何一步都不等待收敛；没有活 Agent 的会话没有可运行的回合。`turn` 键从 [`src/types.ts`](src/types.ts) 合并进 `SessionActivityKindMap`，渲染各族的 Client 为此导入 `@deepseek-ai/dsh-agent/types`。
 
 ### 发起方作用域
 

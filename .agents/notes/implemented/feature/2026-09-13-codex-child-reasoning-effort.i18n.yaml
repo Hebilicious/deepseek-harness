@@ -1,6 +1,22 @@
-# Bilingual-pair consistency record (docs/i18n/README.md): the git blob hash of each
-# side as of the last confirmed-consistent state. Both languages carry equal authority;
-# after editing either side, bring the other along and re-record with:
+# Bilingual-pair consistency record for 2026-09-13-codex-child-reasoning-effort.md (docs/i18n/README.md): per heading
+# section, a hash of its English and Chinese blocks outside code blocks and generated regions.
+# After editing either side, bring the other along and re-record with:
 #   pnpm run verify-translation-pairing --write .agents/notes/implemented/feature/2026-09-13-codex-child-reasoning-effort.md
-2026-09-13-codex-child-reasoning-effort.md: 07de8fd6f37be2e463eb83bc180ab88060f45734
-2026-09-13-codex-child-reasoning-effort.zh.md: 3927062ca1967bc559e235c3b260c6ed9193482f
+/agent-note-codex-child-reasoning-effort:
+  en: fd7aab709adf1dd1
+  zh: e7a4df0d5710422f
+/agent-note-codex-child-reasoning-effort/problem:
+  en: 1c5bb4e8faad2d42
+  zh: a470c6f795a97d6e
+/agent-note-codex-child-reasoning-effort/decision:
+  en: c48edd3e95c8a34d
+  zh: 02eee6a3e68c758e
+/agent-note-codex-child-reasoning-effort/alternatives-considered:
+  en: 7ee4aa824f5cca63
+  zh: d8cecec392dddbb8
+/agent-note-codex-child-reasoning-effort/consequences:
+  en: d2115c87a8d28bf1
+  zh: 5442108751b47016
+/agent-note-codex-child-reasoning-effort/testing:
+  en: 5306a693e9e0ee2f
+  zh: c8901329a5d17a9f

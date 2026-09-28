@@ -16,7 +16,10 @@
  * /model popup; exact-model reasoning metadata and the selected effort come
  * from the Host rather than a client-owned vocabulary. A rejected selection
  * announces through the shared transient Toast anchored to the composer
- * card; the in-menu strip with Retry remains the catalog-load surface.
+ * card; the in-menu strip with Retry remains the catalog-load surface. While
+ * the directory's pending selection is unsettled, the trigger shows a spinner
+ * in place of its chevron, and each row whose value that selection carries
+ * shows one in place of its check mark.
  *
  * The model list carries a filter field and a per-row favourite toggle. A
  * pinned model is repeated in the Pinned section above the provider groups
@@ -25,6 +28,7 @@
  * membership is the browser-wide pin store; the filter lasts one opening of
  * the menu.
  */
+import { MenuSurface } from '@deepseek-ai/dsh-client-ui-primitives'
 import {
   useEffect, useId, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore,
   type CSSProperties, type KeyboardEvent, type FocusEvent,
@@ -33,8 +37,9 @@ import { createPortal } from 'react-dom'
 import clsx from 'clsx'
 import type { ModelReasoningEffort, ModelSelection } from '@deepseek-ai/dsh-api-remotes/client'
 import {
-  IconCheckOutline16, IconChevronDownOutline14, IconChevronRightOutline14, IconDataOutline16,
-  IconRefreshOutline14, IconSearchOutline16, IconStarFill16, IconStarOutline16, IconWarningOutline16, Toast,
+  IconCheckOutlineRegular, IconChevronDownOutlineRegular, IconChevronRightOutlineRegular,
+  IconDataOutlineRegular, IconRefreshOutlineRegular, IconSearchOutlineRegular, IconStarFillRegular,
+  IconStarOutlineRegular, IconWarningOutlineRegular, StateDot, Toast,
 } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { InjectFace, PropsLocale } from '@deepseek-ai/dsh-client-ui-slots'
 import type { ModelDirectoryState } from './directory.ts'
@@ -85,6 +90,20 @@ function matchesQuery(
 }
 
 /**
+ * Display name of one provider group or failure. The account provider's label
+ * is locale-owned; every other provider names itself.
+ * @param provider - the catalog group or failure.
+ * @param t - the seat's `model` translator.
+ * @returns the provider label.
+ */
+function providerName(
+  provider: { readonly id: string; readonly name: string },
+  t: ModelSelectProps['t'],
+): string {
+  return provider.id === 'deepseek-account' ? t('provider.account') : provider.name
+}
+
+/**
  * Render the composer model seat.
  * @param props - owner share (locked) + injected face (shared directory
  * store/verbs, browser-wide pins) + the standard locale seat.
@@ -116,7 +135,10 @@ export function ModelSelect(
   const itemRefs = useRef<(HTMLButtonElement | null)[]>([])
   const id = useId()
 
-  const choices = useMemo(() => state.groups.flatMap(group =>
+  const sortedGroups = useMemo(() => state.groups.toSorted((left, right) =>
+    (left.id === 'deepseek-account' ? 0 : left.id === 'deepseek-official' ? 1 : 2)
+      - (right.id === 'deepseek-account' ? 0 : right.id === 'deepseek-official' ? 1 : 2)), [state.groups])
+  const choices = useMemo(() => sortedGroups.flatMap(group =>
     group.models.map(model => ({
       group,
       model,
@@ -127,29 +149,29 @@ export function ModelSelect(
           ? {}
           : { reasoningEffort: model.reasoning.defaultEffort },
       } satisfies ModelSelection,
-    }))), [state.groups])
+    }))), [sortedGroups])
   const needle = query.trim().toLowerCase()
-  // Buckets keep catalog order: rows arrive grouped by provider, and an empty
-  // group survives only while nothing is filtered out of it.
+  // Buckets keep the sorted group order: rows arrive grouped by provider, and
+  // an empty group survives only while nothing is filtered out of it.
   const groups = useMemo(() => {
     const buckets = new Map<string, Choice[]>()
     for (const choice of choices) {
-      if (!matchesQuery(choice.group.name, choice.model, needle)) continue
+      if (!matchesQuery(providerName(choice.group, t), choice.model, needle)) continue
       const bucket = buckets.get(choice.group.id)
       if (bucket === undefined) buckets.set(choice.group.id, [choice])
       else bucket.push(choice)
     }
-    return state.groups
+    return sortedGroups
       .map(group => ({ group, rows: buckets.get(group.id) ?? [] }))
       .filter(entry => needle === '' || entry.rows.length > 0)
-  }, [choices, state.groups, needle])
+  }, [choices, sortedGroups, needle, t])
   const pinnedRows = useMemo(() => {
     const byKey = new Map(choices.map(choice => [modelPinKey(choice.group.id, choice.model.id), choice]))
     return pinnedKeys
       .map(key => byKey.get(key))
       .filter((choice): choice is Choice => choice !== undefined)
-      .filter(choice => matchesQuery(choice.group.name, choice.model, needle))
-  }, [choices, pinnedKeys, needle])
+      .filter(choice => matchesQuery(providerName(choice.group, t), choice.model, needle))
+  }, [choices, pinnedKeys, needle, t])
   const selectedIndex = state.current === null
     ? -1
     : choices.findIndex(c => c.selection.provider === state.current?.provider && c.selection.model === state.current.model)
@@ -157,7 +179,7 @@ export function ModelSelect(
   const reasoning = currentChoice?.model.reasoning
   const effectiveEffort = state.current?.reasoningEffort ?? reasoning?.defaultEffort
   const effortLabel = reasoning === undefined
-    ? undefined
+    ? state.retainedEffort
     : effectiveEffort === undefined
       ? t('effort.providerDefault')
       : reasoning.efforts.find(level => level.id === effectiveEffort)?.name ?? effectiveEffort
@@ -173,7 +195,8 @@ export function ModelSelect(
         label: effort.name,
       })),
     ], [reasoning, t])
-  const busy = state.status === 'selecting'
+  const { pending } = state
+  const busy = pending !== null
   const [refreshing, setRefreshing] = useState(false)
 
   const reload = (): void => {
@@ -277,7 +300,9 @@ export function ModelSelect(
   if (!available) return null
 
   const show = (): void => {
-    setPane('root')
+    triggerRef.current?.focus()
+    if (state.current === null) paneFocus.current = 'drill'
+    setPane(state.current === null ? 'model' : 'root')
     setQuery('')
     setOpen(true)
     reload()
@@ -321,7 +346,7 @@ export function ModelSelect(
       // Escape drops a typed filter first, then backs out of a drilled pane,
       // then closes.
       if (pane === 'model' && query !== '') setQuery('')
-      else if (pane !== 'root') back(pane)
+      else if (pane !== 'root' && state.current !== null) back(pane)
       else close(true)
       return
     }
@@ -332,7 +357,7 @@ export function ModelSelect(
     if (event.key === 'Tab') {
       if (event.shiftKey) {
         event.preventDefault()
-        if (pane !== 'root') back(pane)
+        if (pane !== 'root' && state.current !== null) back(pane)
         else close(true)
         return
       }
@@ -383,13 +408,19 @@ export function ModelSelect(
     })
   }
 
+  const submit = (selection: ModelSelection): void => {
+    lastActionRef.current = 'select'
+    // Disabled option rows cannot retain focus while a selection is pending.
+    triggerRef.current?.focus()
+    void select(selection).then(settleSelection)
+  }
+
   const choose = (selection: ModelSelection): void => {
     if (state.current?.provider === selection.provider && state.current.model === selection.model) {
       close(true)
       return
     }
-    lastActionRef.current = 'select'
-    void select(selection).then(settleSelection)
+    submit(selection)
   }
 
   const chooseEffort = (effort: string | undefined): void => {
@@ -403,8 +434,7 @@ export function ModelSelect(
       model: state.current.model,
       ...effort === undefined ? {} : { reasoningEffort: effort },
     }
-    lastActionRef.current = 'select'
-    void select(selection).then(settleSelection)
+    submit(selection)
   }
 
   const waiting = state.current === null && state.status === 'loading'
@@ -430,12 +460,12 @@ export function ModelSelect(
   /**
    * Render one model row with its favourite toggle.
    * @param choice - the directory row.
-   * @param providerName - the provider label to show under the name, for the
+   * @param providerLabel - the provider label to show under the name, for the
    * mixed-provider Pinned section; omitted inside a provider group, whose
    * heading already names it.
    * @returns the row.
    */
-  const renderRow = (choice: Choice, providerName?: string) => {
+  const renderRow = (choice: Choice, providerLabel?: string) => {
     const key = modelPinKey(choice.group.id, choice.model.id)
     const selected = state.current?.provider === choice.group.id && state.current.model === choice.model.id
     const pinned = pinnedKeys.includes(key)
@@ -451,18 +481,20 @@ export function ModelSelect(
           title={choice.model.name}
           // The Pinned section mixes providers, so its rows name the provider
           // too; content order alone would run the two labels together.
-          aria-label={providerName === undefined
+          aria-label={providerLabel === undefined
             ? undefined
-            : t('option.providerAria', { model: choice.model.name, provider: providerName })}
+            : t('option.providerAria', { model: choice.model.name, provider: providerLabel })}
           disabled={busy}
           onClick={() => { choose({ provider: choice.group.id, model: choice.model.id }) }}
         >
           <span className={css.optionCopy}>
             <span className={css.modelName}>{choice.model.name}</span>
-            {providerName !== undefined && <span className={css.optionProvider}>{providerName}</span>}
+            {providerLabel !== undefined && <span className={css.optionProvider}>{providerLabel}</span>}
           </span>
           <span className={css.check}>
-            {selected ? <IconCheckOutline16 /> : null}
+            {pending?.provider === choice.group.id && pending.model === choice.model.id
+              ? <StateDot state="ongoing" />
+              : selected ? <IconCheckOutlineRegular /> : null}
           </span>
         </button>
         <button
@@ -473,7 +505,7 @@ export function ModelSelect(
           title={pinLabel}
           onClick={() => { togglePin(choice.group.id, choice.model.id) }}
         >
-          {pinned ? <IconStarFill16 /> : <IconStarOutline16 />}
+          {pinned ? <IconStarFillRegular /> : <IconStarOutlineRegular />}
         </button>
       </div>
     )
@@ -482,7 +514,16 @@ export function ModelSelect(
   const pinnedHeadingId = `${id}-pinned`
 
   return (
-    <div ref={rootRef} className={css.root} onKeyDown={onRootKeyDown} onBlur={onBlur}>
+    <div
+      ref={rootRef}
+      className={css.root}
+      onKeyDown={onRootKeyDown}
+      onBlur={onBlur}
+      onMouseDown={(event) => {
+        // WebKit blurs a focused row before click unless the button's mousedown keeps focus.
+        if (event.target instanceof Element && event.target.closest('button') !== null) event.preventDefault()
+      }}
+    >
       <button
         ref={triggerRef}
         type="button"
@@ -492,26 +533,29 @@ export function ModelSelect(
         aria-expanded={open}
         aria-controls={open ? `${id}-menu` : undefined}
         title={triggerLabel}
+        aria-busy={busy}
         disabled={locked}
         onClick={() => {
           if (open) {
-            close()
+            close(true)
           } else {
             show()
           }
         }}
       >
-        <IconDataOutline16 className={css.triggerIcon} size={16} />
+        <IconDataOutlineRegular className={css.triggerIcon} size={16} />
         <span className={css.triggerLabel}>{modelLabel}</span>
         {effortLabel !== undefined && <span className={css.triggerEffort}>{effortLabel}</span>}
-        <IconChevronDownOutline14 className={clsx(css.chevron, open && css.chevronOpen)} />
+        {busy
+          ? <StateDot state="ongoing" />
+          : <IconChevronDownOutlineRegular className={clsx(css.chevron, open && css.chevronOpen)} />}
       </button>
 
       {/* Portaled to body (Menu primitive's portal mode) so the sidebar and
           column overflow clips cannot crop the card; synthetic events still
           bubble through this React subtree, keeping onKeyDown/onBlur live. */}
       {open && createPortal(
-        <div
+        <MenuSurface
           ref={menuRef}
           id={`${id}-menu`}
           className={clsx(css.menu, pane === 'model' && css.menuModel)}
@@ -525,13 +569,13 @@ export function ModelSelect(
               <button ref={itemRef()} type="button" role="menuitem" className={css.cell} onClick={() => { drill('model') }}>
                 <span className={css.cellLabel}>{t('menu.model')}</span>
                 <span className={css.cellValue}>{modelLabel}</span>
-                <IconChevronRightOutline14 className={css.cellChevron} />
+                <IconChevronRightOutlineRegular className={css.cellChevron} />
               </button>
               {reasoning !== undefined && (
                 <button ref={itemRef()} type="button" role="menuitem" className={css.cell} onClick={() => { drill('effort') }}>
                   <span className={css.cellLabel}>{t('menu.effort')}</span>
                   <span className={css.cellValue}>{effortLabel}</span>
-                  <IconChevronRightOutline14 className={css.cellChevron} />
+                  <IconChevronRightOutlineRegular className={css.cellChevron} />
                 </button>
               )}
             </>
@@ -542,7 +586,7 @@ export function ModelSelect(
               {/* Focus lands here on entry so a filter can be typed at once;
                   Arrow Up/Down leave the field for the rows. */}
               <div className={css.search}>
-                <IconSearchOutline16 size={14} className={css.searchIcon} />
+                <IconSearchOutlineRegular size={14} className={css.searchIcon} />
                 <input
                   ref={searchRef}
                   type="search"
@@ -560,7 +604,7 @@ export function ModelSelect(
                   aria-disabled={refreshing}
                   onClick={refreshList}
                 >
-                  <IconRefreshOutline14 size={14} />
+                  <IconRefreshOutlineRegular size={14} />
                 </button>
               </div>
               {state.status === 'loading' && (
@@ -574,7 +618,7 @@ export function ModelSelect(
               )}
               {state.failures.map(failure => (
                 <div className={css.warning} key={failure.id}>
-                  <span>{t('warning.groupLoad', { name: failure.name, message: failure.message })}</span>
+                  <span>{t('warning.groupLoad', { name: providerName(failure, t), message: failure.message })}</span>
                   <button type="button" className={css.retry} onClick={reload}>{t('retry')}</button>
                 </div>
               ))}
@@ -582,14 +626,14 @@ export function ModelSelect(
                 {pinnedRows.length > 0 && (
                   <section role="group" aria-labelledby={pinnedHeadingId} className={css.group}>
                     <div className={css.groupTitle} id={pinnedHeadingId}>{t('group.pinned')}</div>
-                    {pinnedRows.map(choice => renderRow(choice, choice.group.name))}
+                    {pinnedRows.map(choice => renderRow(choice, providerName(choice.group, t)))}
                   </section>
                 )}
                 {groups.map(({ group, rows }) => {
                   const headingId = `${id}-${group.id}`
                   return (
                     <section role="group" aria-labelledby={headingId} className={css.group} key={group.id}>
-                      <div className={css.groupTitle} id={headingId}>{group.name}</div>
+                      <div className={css.groupTitle} id={headingId}>{providerName(group, t)}</div>
                       {rows.map(choice => renderRow(choice))}
                     </section>
                   )
@@ -631,20 +675,23 @@ export function ModelSelect(
                       <span className={css.modelName}>{level.label}</span>
                     </span>
                     <span className={css.check}>
-                      {effectiveEffort === level.effort ? <IconCheckOutline16 /> : null}
+                      {pending !== null && pending.provider === state.current?.provider
+                        && pending.model === state.current.model && pending.reasoningEffort === level.effort
+                        ? <StateDot state="ongoing" />
+                        : effectiveEffort === level.effort ? <IconCheckOutlineRegular /> : null}
                     </span>
                   </button>
                 ))}
             </>
           )}
-        </div>,
+        </MenuSurface>,
         document.body,
       )}
       {toast !== null && (
         <Toast
           key={toast.seq}
           text={toast.text}
-          icon={<IconWarningOutline16 />}
+          icon={<IconWarningOutlineRegular />}
           anchor={rootRef.current?.closest<HTMLElement>('[data-composer-card]') ?? null}
           onDone={() => { setToast(null) }}
         />

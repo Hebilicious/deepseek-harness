@@ -1,13 +1,5 @@
 - tree "Sessions":
-  - treeitem "Ungrouped" [expanded]:
-    - img
-    - text: Ungrouped
-  - treeitem "DSH Loop Use the read tool twice (2) now" [selected]:
-    - img "DSH Loop"
-    - text: Use the read tool twice (2) now
-  - treeitem "DSH Loop Use the read tool twice (1) now":
-    - img "DSH Loop"
-    - text: Use the read tool twice (1) now
-  - treeitem "DSH Loop Use the read tool twice 1min":
-    - img "DSH Loop"
-    - text: Use the read tool twice 1min
+  - treeitem "Ungrouped" [expanded]
+  - treeitem "Use the read tool twice (2) now"
+  - treeitem "Use the read tool twice (1) now" [selected]
+  - treeitem "Use the read tool twice 1min"

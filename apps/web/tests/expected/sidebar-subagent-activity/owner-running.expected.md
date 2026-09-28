@@ -1,11 +1,4 @@
 - tree "Sessions":
-  - treeitem "workspace" [expanded]:
-    - img
-    - text: workspace
-  - treeitem "DSH Loop New Session" [selected]:
-    - img "DSH Loop"
-    - text: New Session
-  - treeitem "1 subagent running DSH Loop Delegate a background job. now":
-    - text: 1 subagent running
-    - img "DSH Loop"
-    - text: Delegate a background job. now
+  - treeitem "workspace" [expanded]
+  - treeitem "New Session" [selected]
+  - treeitem "1 subagent running Delegate a background job. now"

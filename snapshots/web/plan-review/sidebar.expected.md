@@ -1,4 +1,1 @@
-- 'treeitem "Plan awaiting review DSH Loop Plan a small change: add now" [selected]':
-  - text: Plan awaiting review
-  - img "DSH Loop"
-  - text: "Plan a small change: add now"
+- 'treeitem "Plan awaiting review Plan a small change: add" [selected]'

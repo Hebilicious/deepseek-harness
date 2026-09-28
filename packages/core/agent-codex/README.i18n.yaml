@@ -1,6 +1,91 @@
-# Bilingual-pair consistency record (docs/i18n/README.md): the git blob hash of each
-# side as of the last confirmed-consistent state. Both languages carry equal authority;
-# after editing either side, bring the other along and re-record with:
+# Bilingual-pair consistency record for README.md (docs/i18n/README.md): per heading
+# section, a hash of its English and Chinese blocks outside code blocks and generated regions.
+# After editing either side, bring the other along and re-record with:
 #   pnpm run verify-translation-pairing --write packages/core/agent-codex/README.md
-README.md: 81e1406e8208c375dc2789cf9bd049be20ce7a55
-README.zh.md: 52cff34b20033ba96543ce07cd37980850c8fbe7
+/:
+  en: dd67578581d9ddbf
+  zh: 3a0b1ca44bee2138
+/deepseek-ai-dsh-agent-codex:
+  en: 4b3a4ff2806114c5
+  zh: bd8aed166cc6710d
+/deepseek-ai-dsh-agent-codex/summary:
+  en: b4d6824a0db631be
+  zh: 7785abff0d9700a3
+/deepseek-ai-dsh-agent-codex/table-of-contents:
+  en: d152484eb41ac6b4
+  zh: 09388d293f9be9cb
+/deepseek-ai-dsh-agent-codex/use-this-package:
+  en: 30873be28ff95c41
+  zh: 9a9c0b3e2c165586
+/deepseek-ai-dsh-agent-codex/use-this-package/when-to-choose-it:
+  en: 0f8c7cd20aa072a3
+  zh: e36873ef16bede97
+/deepseek-ai-dsh-agent-codex/use-this-package/configuration:
+  en: 7a83253a4d1f7c7c
+  zh: 4f85187bf7d36ca1
+/deepseek-ai-dsh-agent-codex/use-this-package/before-the-first-session:
+  en: 61b99298d523f49f
+  zh: b2fdab38ccd1785d
+/deepseek-ai-dsh-agent-codex/understand-the-implementation:
+  en: 42b15ac6321706aa
+  zh: 7ae097f3abcc5d9c
+/deepseek-ai-dsh-agent-codex/understand-the-implementation/one-runtime-per-instance:
+  en: f9a1db984fa3fdfd
+  zh: 8c5ca819b88f3b58
+/deepseek-ai-dsh-agent-codex/understand-the-implementation/instance-identity:
+  en: 6508e3e667edadf2
+  zh: 472de007c7f8c8c3
+/deepseek-ai-dsh-agent-codex/understand-the-implementation/thread-binding:
+  en: 4a29bfe718924c24
+  zh: 02f0942c5535d345
+/deepseek-ai-dsh-agent-codex/understand-the-implementation/turn-driving:
+  en: 0d4262e10a051ae3
+  zh: 9ec092bf96eb4294
+/deepseek-ai-dsh-agent-codex/understand-the-implementation/approvals-questions-and-elicitation:
+  en: 90bb88ac52d1cd4b
+  zh: aabbfe3bf277557e
+/deepseek-ai-dsh-agent-codex/understand-the-implementation/account-operations:
+  en: 8e389793d3d2e54c
+  zh: c1b53c34b460b0bf
+/deepseek-ai-dsh-agent-codex/understand-the-implementation/model-catalog:
+  en: a3203dec5eff0e1a
+  zh: 27383912e8352829
+/deepseek-ai-dsh-agent-codex/understand-the-implementation/source-map:
+  en: eb657cdb2fc09274
+  zh: f71ca57324f2878f
+/deepseek-ai-dsh-agent-codex/further-exploration:
+  en: 2a97ff9900868bc2
+  zh: 6b090c4c1b93728b
+/deepseek-ai-dsh-agent-codex/model-experience:
+  en: 215e7ba838619b7b
+  zh: a311da3843709f90
+/deepseek-ai-dsh-agent-codex/model-experience/codex-harness-turn:
+  en: b2013cef2367126c
+  zh: c4871381e5205f09
+/deepseek-ai-dsh-agent-codex/model-experience/codex-harness-turn/what-the-model-sees:
+  en: 88ca616a1e9740ef
+  zh: b9edf9520dddda63
+/deepseek-ai-dsh-agent-codex/model-experience/codex-harness-turn/token-effect:
+  en: 7f05c3e221f67710
+  zh: 012edeb0777a3f55
+/deepseek-ai-dsh-agent-codex/model-experience/codex-harness-turn/kv-cache-effect:
+  en: 1219b2b3d0f813b7
+  zh: 94586fdd57bd978e
+/deepseek-ai-dsh-agent-codex/model-experience/model-picker-catalog:
+  en: e024fecdecc99d9e
+  zh: 464557cbd169c218
+/deepseek-ai-dsh-agent-codex/model-experience/model-picker-catalog/what-the-model-sees:
+  en: a54674043e7564e0
+  zh: 6481212349372544
+/deepseek-ai-dsh-agent-codex/model-experience/model-picker-catalog/token-effect:
+  en: cf8677e5b1431735
+  zh: a63c47d1c716377d
+/deepseek-ai-dsh-agent-codex/model-experience/model-picker-catalog/kv-cache-effect:
+  en: 6a06b58c680444f6
+  zh: f884cb41e5129dee
+/deepseek-ai-dsh-agent-codex/known-limitations-and-deferred-work:
+  en: bc9c5d90362a6272
+  zh: b9b34aef70c32510
+/deepseek-ai-dsh-agent-codex/known-limitations-and-deferred-work/dev-note:
+  en: e67f633dc6fe7773
+  zh: e88aeb617ffb74ea

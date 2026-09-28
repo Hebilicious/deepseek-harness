@@ -1,6 +1,34 @@
-# Bilingual-pair consistency record (docs/i18n/README.md): the git blob hash of each
-# side as of the last confirmed-consistent state. Both languages carry equal authority;
-# after editing either side, bring the other along and re-record with:
+# Bilingual-pair consistency record for 2026-09-19-no-self-capacity-blockers.md (docs/i18n/README.md): per heading
+# section, a hash of its English and Chinese blocks outside code blocks and generated regions.
+# After editing either side, bring the other along and re-record with:
 #   pnpm run verify-translation-pairing --write .agents/notes/implemented/feature/2026-09-19-no-self-capacity-blockers.md
-2026-09-19-no-self-capacity-blockers.md: e7c125df4f6f45ec2a7cba7c5b1bfc0c87aa3b7a
-2026-09-19-no-self-capacity-blockers.zh.md: 7a784c6de1427364abb8670d3304685f611eaacc
+/agent-note-deployment-supplied-prompt-policy-text:
+  en: 1b36de3c5eabeb2f
+  zh: a256d133520dcef8
+/agent-note-deployment-supplied-prompt-policy-text/problem:
+  en: f161c061262fb6d0
+  zh: 1dd5de686c59241c
+/agent-note-deployment-supplied-prompt-policy-text/decision:
+  en: c28c3535e00088d5
+  zh: 6211a9ce3cb8200a
+/agent-note-deployment-supplied-prompt-policy-text/decision/goal-tool-policy-and-capacity-screening:
+  en: 64334c9cf3c92d7c
+  zh: 1ac41527182eb528
+/agent-note-deployment-supplied-prompt-policy-text/decision/checkpoint-framing:
+  en: 7844d18d15365949
+  zh: 27859ec2b8956b96
+/agent-note-deployment-supplied-prompt-policy-text/decision/goal-round-prompt:
+  en: 607cb722e56b8215
+  zh: e824b5c498d705c3
+/agent-note-deployment-supplied-prompt-policy-text/decision/where-the-settings-are-composed:
+  en: 1883c66f253bedc5
+  zh: 09942ceb2abe1f10
+/agent-note-deployment-supplied-prompt-policy-text/testing:
+  en: 74621dd01631d68a
+  zh: cf1c7945240001e3
+/agent-note-deployment-supplied-prompt-policy-text/alternatives-considered:
+  en: df15d755f4540697
+  zh: c2561c6bb08ddeb2
+/agent-note-deployment-supplied-prompt-policy-text/consequences:
+  en: 651b150a021bff1a
+  zh: ebd95e6b0a0c0589

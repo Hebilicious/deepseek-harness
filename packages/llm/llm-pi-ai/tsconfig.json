@@ -39,9 +39,6 @@
       "path": "../../credentials/authorization"
     },
     {
-      "path": "../../settings/settings"
-    },
-    {
       "path": "../../util/timeout"
     },
     {
@@ -49,6 +46,12 @@
     },
     {
       "path": "../../util/http-proxy"
+    },
+    {
+      "path": "../../../vendor/loader"
+    },
+    {
+      "path": "../../settings/settings"
     }
   ]
 }

@@ -1,13 +1,5 @@
-- treeitem "folder-group" [expanded]:
-  - img
-  - text: folder-group
+- treeitem "folder-group" [expanded]
 - group:
-  - treeitem "project-two" [expanded]:
-    - img
-    - text: project-two
-  - treeitem "DSH Loop New Session" [selected]:
-    - img "DSH Loop"
-    - text: New Session
-  - treeitem "project-one" [expanded]:
-    - img
-    - text: project-one
+  - treeitem "project-two" [expanded]
+  - treeitem "New Session" [selected]
+  - treeitem "project-one" [expanded]

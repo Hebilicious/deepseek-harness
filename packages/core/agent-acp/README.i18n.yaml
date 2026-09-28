@@ -1,6 +1,91 @@
-# Bilingual-pair consistency record (docs/i18n/README.md): the git blob hash of each
-# side as of the last confirmed-consistent state. Both languages carry equal authority;
-# after editing either side, bring the other along and re-record with:
+# Bilingual-pair consistency record for README.md (docs/i18n/README.md): per heading
+# section, a hash of its English and Chinese blocks outside code blocks and generated regions.
+# After editing either side, bring the other along and re-record with:
 #   pnpm run verify-translation-pairing --write packages/core/agent-acp/README.md
-README.md: ac3b9d8edb9374fe22b3395aa36d412d91b2e3b4
-README.zh.md: 18a26dfa51c8c3f7a52cb1e4ff364f8910853833
+/:
+  en: bbc741eb67c22af0
+  zh: a4f38595ed8864d7
+/deepseek-ai-dsh-agent-acp:
+  en: f58d48a49a615952
+  zh: a9a98ee6dd15550d
+/deepseek-ai-dsh-agent-acp/summary:
+  en: fb74670437ccf5f1
+  zh: 749457750bbbe1f7
+/deepseek-ai-dsh-agent-acp/table-of-contents:
+  en: d152484eb41ac6b4
+  zh: 09388d293f9be9cb
+/deepseek-ai-dsh-agent-acp/use-this-package:
+  en: 1649204a1e3affe2
+  zh: da2e9bb4bec742bf
+/deepseek-ai-dsh-agent-acp/use-this-package/when-to-choose-it:
+  en: a4ebbfb5b7c9c5a2
+  zh: 8a0422bf4fee9251
+/deepseek-ai-dsh-agent-acp/use-this-package/configuration:
+  en: ab64245fda4b2f7f
+  zh: 130ee92e6733f026
+/deepseek-ai-dsh-agent-acp/use-this-package/before-the-first-session:
+  en: 841b2c4ed7d78e84
+  zh: 3292bf2382935eeb
+/deepseek-ai-dsh-agent-acp/understand-the-implementation:
+  en: 42b15ac6321706aa
+  zh: 7ae097f3abcc5d9c
+/deepseek-ai-dsh-agent-acp/understand-the-implementation/one-runtime-per-harness:
+  en: 3dfd298771fcf61b
+  zh: 11edcc402e014139
+/deepseek-ai-dsh-agent-acp/understand-the-implementation/agent-registry-identity:
+  en: 14683fba81122420
+  zh: 9bbd4628d09ecc27
+/deepseek-ai-dsh-agent-acp/understand-the-implementation/session-binding:
+  en: 1e9c338e8c7be261
+  zh: bdfef8be40f5be25
+/deepseek-ai-dsh-agent-acp/understand-the-implementation/turn-driving:
+  en: 54580ac4791a3099
+  zh: 6ef63e9cd3029f06
+/deepseek-ai-dsh-agent-acp/understand-the-implementation/model-catalog:
+  en: d7bc0798de54324b
+  zh: 42d23893c0c6f1d4
+/deepseek-ai-dsh-agent-acp/understand-the-implementation/permissions-mode-and-reasoning-effort:
+  en: 53dcab2381965129
+  zh: 4a89cb2eca1beb91
+/deepseek-ai-dsh-agent-acp/understand-the-implementation/auth-operations:
+  en: c100f1569d924045
+  zh: c512bdfd86d80692
+/deepseek-ai-dsh-agent-acp/understand-the-implementation/source-map:
+  en: 25729d648bdfa536
+  zh: 72db5d39b146054d
+/deepseek-ai-dsh-agent-acp/further-exploration:
+  en: fd699348edb9a2f9
+  zh: 451774cbdd25b4c2
+/deepseek-ai-dsh-agent-acp/model-experience:
+  en: 215e7ba838619b7b
+  zh: a311da3843709f90
+/deepseek-ai-dsh-agent-acp/model-experience/harness-turn:
+  en: b46516db8ab30d8d
+  zh: fe3e70f13af33aa0
+/deepseek-ai-dsh-agent-acp/model-experience/harness-turn/what-the-model-sees:
+  en: 18451b911b0242de
+  zh: 6dd4944677099800
+/deepseek-ai-dsh-agent-acp/model-experience/harness-turn/token-effect:
+  en: 550245ed18cfb212
+  zh: 092f0ebd2e06a0a1
+/deepseek-ai-dsh-agent-acp/model-experience/harness-turn/kv-cache-effect:
+  en: 74cdd71d2ccc397c
+  zh: cbb75f611a124a7b
+/deepseek-ai-dsh-agent-acp/model-experience/session-mode-and-model-selection:
+  en: 6ebfdbb1057dc571
+  zh: 2741e1d871b08276
+/deepseek-ai-dsh-agent-acp/model-experience/session-mode-and-model-selection/what-the-model-sees:
+  en: 27dd1905ad57af6f
+  zh: df3028ee47347e5e
+/deepseek-ai-dsh-agent-acp/model-experience/session-mode-and-model-selection/token-effect:
+  en: 51e245637ca654fd
+  zh: 329732df580b8762
+/deepseek-ai-dsh-agent-acp/model-experience/session-mode-and-model-selection/kv-cache-effect:
+  en: 7b21f1b1deaa2923
+  zh: 03faa6b88528e773
+/deepseek-ai-dsh-agent-acp/known-limitations-and-deferred-work:
+  en: 8209e2b93779f858
+  zh: 6c63d5bad22405bb
+/deepseek-ai-dsh-agent-acp/known-limitations-and-deferred-work/dev-note:
+  en: e67f633dc6fe7773
+  zh: 9c6918ce849f6c93

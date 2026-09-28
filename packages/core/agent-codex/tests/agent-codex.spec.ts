@@ -193,9 +193,7 @@ describe('agent-codex driver', () => {
     expect(bound).toBeDefined()
     const assistant = log.find(event => event.type === 'assistant/message')
     expect(assistant).toBeDefined()
-    const content = (assistant!.data['message'] as {
-      content: { type: string; text?: string }[]
-    }).content
+    const content = assistant!.data['message'].content
     expect(content.some(block => block.type === 'text' && block.text === 'hello from codex'))
       .toBe(true)
     expect(turnEndKind(agent)).toBe('completed')
@@ -241,11 +239,11 @@ describe('agent-codex driver', () => {
     expect(calls).toHaveLength(1)
     const results = eventsOf(agent, 'tool/result')
     expect(results).toHaveLength(1)
-    const block = (results[0]!.data as {
-      message: { content: { type: string; isError?: boolean; content?: { text?: string }[] }[] }
-    }).message.content[0]!
-    expect(block.isError).toBe(false)
-    expect(JSON.stringify(block.content)).toContain('tool output')
+    const message = (results[0]!.data as {
+      message: { isError: boolean; content: { text?: string }[] }
+    }).message
+    expect(message.isError).toBe(false)
+    expect(JSON.stringify(message.content)).toContain('tool output')
   }, TEST_TIMEOUT)
 
   it('closes an open tool item as an error result at turn settlement', async () => {
@@ -256,8 +254,7 @@ describe('agent-codex driver', () => {
 
     const results = eventsOf(agent, 'tool/result')
     expect(results).toHaveLength(1)
-    const block = (results[0]!.data as { message: { content: { isError?: boolean }[] } }).message.content[0]!
-    expect(block.isError).toBe(true)
+    expect((results[0]!.data as { message: { isError: boolean } }).message.isError).toBe(true)
   }, TEST_TIMEOUT)
 
   it('routes command approvals through the approval seam', async () => {

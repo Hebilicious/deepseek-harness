@@ -1,6 +1,82 @@
-# Bilingual-pair consistency record (docs/i18n/README.md): the git blob hash of each
-# side as of the last confirmed-consistent state. Both languages carry equal authority;
-# after editing either side, bring the other along and re-record with:
+# Bilingual-pair consistency record for README.md (docs/i18n/README.md): per heading
+# section, a hash of its English and Chinese blocks outside code blocks and generated regions.
+# After editing either side, bring the other along and re-record with:
 #   pnpm run verify-translation-pairing --write packages/bundle/web-harnesses/README.md
-README.md: b6c6eea02a69252f54eb81326beb5f7eb1ada4fe
-README.zh.md: b287bcfa4e32c6574914573e746d475dd706e938
+/:
+  en: 2ec68d9f7a4e4a7a
+  zh: 02dc7e18f8a48b89
+/deepseek-ai-dsh-web-harnesses:
+  en: 4fadff0a7d1a67d2
+  zh: f81bfda2b8ddd9c1
+/deepseek-ai-dsh-web-harnesses/summary:
+  en: 0fe0378d4f8930dc
+  zh: 6d746215777b2cdb
+/deepseek-ai-dsh-web-harnesses/table-of-contents:
+  en: d152484eb41ac6b4
+  zh: 09388d293f9be9cb
+/deepseek-ai-dsh-web-harnesses/use-this-package:
+  en: bbff250eba0f1b89
+  zh: 0a618f05cc88ee2b
+/deepseek-ai-dsh-web-harnesses/use-this-package/start-the-profile:
+  en: e15a7ec23072fa5d
+  zh: a1462c3e17d4f83d
+/deepseek-ai-dsh-web-harnesses/use-this-package/install-into-another-profile:
+  en: 4488bfc56b62b726
+  zh: 099a180ec7ce9606
+/deepseek-ai-dsh-web-harnesses/use-this-package/what-the-layer-changes:
+  en: c724fb6ef645c919
+  zh: 9dc5158f818953b2
+/deepseek-ai-dsh-web-harnesses/use-this-package/claude-code-runs-through-an-adapter:
+  en: 9f81bd6ec4d51249
+  zh: f57c3839998b18d6
+/deepseek-ai-dsh-web-harnesses/understand-the-implementation:
+  en: 42b15ac6321706aa
+  zh: 4ed0861911abaf5d
+/deepseek-ai-dsh-web-harnesses/understand-the-implementation/patch-semantics:
+  en: a5fb931eca08e114
+  zh: 0414e564ad43d0ef
+/deepseek-ai-dsh-web-harnesses/understand-the-implementation/why-several-harnesses-coexist-here:
+  en: 7b12fcdadd64f137
+  zh: 40d54a04cbd84e7b
+/deepseek-ai-dsh-web-harnesses/understand-the-implementation/why-the-title-request-moves:
+  en: 793096ebdfe5e22f
+  zh: bd6e81b6dcd9a79e
+/deepseek-ai-dsh-web-harnesses/understand-the-implementation/source-map:
+  en: 5c5965066c68052d
+  zh: c3eb2a1239fce96e
+/deepseek-ai-dsh-web-harnesses/further-exploration:
+  en: 2deb617ffa83a8ff
+  zh: eb8c7140e9de912d
+/deepseek-ai-dsh-web-harnesses/model-experience:
+  en: 215e7ba838619b7b
+  zh: a311da3843709f90
+/deepseek-ai-dsh-web-harnesses/model-experience/harness-owned-session-turns:
+  en: 56e707c3cab7a778
+  zh: 2747fc9354ad7b00
+/deepseek-ai-dsh-web-harnesses/model-experience/harness-owned-session-turns/what-the-model-sees:
+  en: bdbdd7694da5c8d9
+  zh: 0a1fd2ffc0df222c
+/deepseek-ai-dsh-web-harnesses/model-experience/harness-owned-session-turns/token-effect:
+  en: d3c0e9bac6a89a67
+  zh: fd8ba28657038059
+/deepseek-ai-dsh-web-harnesses/model-experience/harness-owned-session-turns/kv-cache-effect:
+  en: f8fdc305fc9782fc
+  zh: 2182e4c766873387
+/deepseek-ai-dsh-web-harnesses/model-experience/session-title-request:
+  en: 8564c5390e379a2f
+  zh: 466822d17616a8bf
+/deepseek-ai-dsh-web-harnesses/model-experience/session-title-request/what-the-model-sees:
+  en: 232cded0273594b5
+  zh: 92f2cb8bdc52704b
+/deepseek-ai-dsh-web-harnesses/model-experience/session-title-request/token-effect:
+  en: 6bfa0597e4d997e4
+  zh: d7e7645875caaf9d
+/deepseek-ai-dsh-web-harnesses/model-experience/session-title-request/kv-cache-effect:
+  en: 5455464e7ca4c689
+  zh: be06707bc2c9d36e
+/deepseek-ai-dsh-web-harnesses/known-limitations-and-deferred-work:
+  en: d34ad82138939982
+  zh: 236549851fd2e6ef
+/deepseek-ai-dsh-web-harnesses/known-limitations-and-deferred-work/dev-note:
+  en: e67f633dc6fe7773
+  zh: 9c6918ce849f6c93

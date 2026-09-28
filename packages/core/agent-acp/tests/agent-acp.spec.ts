@@ -75,9 +75,7 @@ describe('agent-acp driver', () => {
     expect(bound).toBeDefined()
     const assistant = log.find(event => event.type === 'assistant/message')
     expect(assistant).toBeDefined()
-    const content = (assistant!.data['message'] as {
-      content: { type: string; text?: string }[]
-    }).content
+    const content = assistant!.data['message'].content
     expect(content.some(block => block.type === 'text' && block.text === 'hello from acp'))
       .toBe(true)
     expect(turnEndKind(agent)).toBe('completed')
@@ -120,11 +118,11 @@ describe('agent-acp driver', () => {
     expect(eventsOf(agent, 'tool/call')).toHaveLength(1)
     const results = eventsOf(agent, 'tool/result')
     expect(results).toHaveLength(1)
-    const block = (results[0]!.data as {
-      message: { content: { type: string; isError?: boolean; content?: { text?: string }[] }[] }
-    }).message.content[0]!
-    expect(block.isError).toBe(false)
-    expect(JSON.stringify(block.content)).toContain('tool output')
+    const message = (results[0]!.data as {
+      message: { isError: boolean; content: { text?: string }[] }
+    }).message
+    expect(message.isError).toBe(false)
+    expect(JSON.stringify(message.content)).toContain('tool output')
   }, TEST_TIMEOUT)
 
   it('commits streamed tool input and keeps text and tool calls in the order the agent sent them', async () => {
@@ -167,7 +165,7 @@ describe('agent-acp driver', () => {
         const data = event.data as { callId: string; arguments: string }
         return [`call ${data.callId} ${data.arguments}`]
       }
-      if (event.type === 'tool/result') return [`result ${(event.data as { message: { content: { toolCallId: string }[] } }).message.content[0]!.toolCallId}`]
+      if (event.type === 'tool/result') return [`result ${(event.data as { message: { toolCallId: string } }).message.toolCallId}`]
       if (event.type === 'assistant/message') return ['text']
       return []
     })
@@ -242,10 +240,7 @@ describe('agent-acp driver', () => {
 
     const results = eventsOf(agent, 'tool/result')
     expect(results).toHaveLength(1)
-    const block = (results[0]!.data as {
-      message: { content: { isError?: boolean }[] }
-    }).message.content[0]!
-    expect(block.isError).toBe(true)
+    expect((results[0]!.data as { message: { isError: boolean } }).message.isError).toBe(true)
   }, TEST_TIMEOUT)
 
   it('routes permission requests through the approval seam', async () => {

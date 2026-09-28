@@ -1,6 +1,19 @@
-# Bilingual-pair consistency record (docs/i18n/README.md): the git blob hash of each
-# side as of the last confirmed-consistent state. Both languages carry equal authority;
-# after editing either side, bring the other along and re-record with:
+# Bilingual-pair consistency record for 2026-09-16-model-picker-search-and-pins.md (docs/i18n/README.md): per heading
+# section, a hash of its English and Chinese blocks outside code blocks and generated regions.
+# After editing either side, bring the other along and re-record with:
 #   pnpm run verify-translation-pairing --write .agents/notes/implemented/feature/2026-09-16-model-picker-search-and-pins.md
-2026-09-16-model-picker-search-and-pins.md: 1aaed9124417c83d36d1568edcd7521ae84256a8
-2026-09-16-model-picker-search-and-pins.zh.md: be7d9ffa4f5e68d1560b07d8c6e37760a26223c0
+/agent-note-model-picker-filter-and-pinned-models:
+  en: 9287e81c06686057
+  zh: 5b565af6eea7ee5a
+/agent-note-model-picker-filter-and-pinned-models/problem:
+  en: bdfcd9ebd50da392
+  zh: a7eb0a433bbb483d
+/agent-note-model-picker-filter-and-pinned-models/decision:
+  en: d79d5ec540a215d4
+  zh: 4722a76b8abeea89
+/agent-note-model-picker-filter-and-pinned-models/alternatives-considered:
+  en: f8e229f1744b9b46
+  zh: 236ec453b4d962ea
+/agent-note-model-picker-filter-and-pinned-models/consequences:
+  en: 83a25a44e92005e8
+  zh: 1e8075947c52aa2b

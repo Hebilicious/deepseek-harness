@@ -54,13 +54,15 @@
  *
  * @module @deepseek-ai/dsh-llm-pi-ai
  */
+import type {} from '@deepseek-ai/dsh-settings'
+
+import type {} from '@deepseek-ai/cordis-plugin-loader'
 
 import type { Context } from '@deepseek-ai/cordis'
 import { launchEnvironmentOf } from '@deepseek-ai/dsh-launch-environment'
 import { assertUsableApiKey, LlmError, resolveImageAttachmentAccess } from '@deepseek-ai/dsh-llm'
 import type { AdapterRegistrationHandle, DirectoryRegistrationHandle, LlmConfigurableProvider } from '@deepseek-ai/dsh-llm'
 import type {} from '@deepseek-ai/dsh-fs'
-import type {} from '@deepseek-ai/dsh-settings'
 import { deepEqualJson } from '@deepseek-ai/dsh-util-values'
 import { PiAiAdapter } from './adapter.ts'
 import { authContextFrom, credentialStoreFrom } from './auth.ts'
@@ -79,6 +81,7 @@ export { PiAiAdapter } from './adapter.ts'
 export type { PiAiAdapterOptions } from './adapter.ts'
 export { Config } from './config.ts'
 export type {
+  Options,
   PiAiCatalogOverlayConfig,
   PiAiCompatProfile,
   PiAiModality,
@@ -125,6 +128,7 @@ function registrationFacts(profiles: ReadonlyMap<string, ResolvedPiAiProviderPro
  */
 function directoryEntries(
   profiles: ReadonlyMap<string, ResolvedPiAiProviderProfile>,
+  settingsNs: string,
 ): LlmConfigurableProvider[] {
   const catalog = new Set(catalogProviderIds())
   const entries = new Map<string, LlmConfigurableProvider>()
@@ -132,7 +136,7 @@ function directoryEntries(
     entries.set(provider, {
       provider,
       displayName,
-      settingsNs: NS,
+      settingsNs,
       settingsPath: ['providers', provider],
       // Membership of the installed catalog, not of the settings document:
       // narrowing a shipped provider's models stores a profile too, and that
@@ -148,8 +152,9 @@ function directoryEntries(
 
 /** Register one generic pi-ai adapter for all configured provider routes. */
 export function apply(ctx: Context, config: Config): void {
-  let current: () => Config = () => config
-  let lastRaw: Config | undefined
+  ctx.inject(['settings'], (child) => { child.effect(() => child.settings.configure({ auto: false }, ctx.fiber)) })
+  const settingsNs = ctx.fiber.entry?.options.id ?? NS
+  let lastRaw: ReturnType<Config['providers']['get']> | undefined
   let memoized: ReadonlyMap<string, ResolvedPiAiProviderProfile> | undefined
   /**
    * Models the loaded directory supplies that the installed catalog does not
@@ -160,9 +165,9 @@ export function apply(ctx: Context, config: Config): void {
   /** The overlay's identity, so a snapshot that changes nothing re-registers nothing. */
   let overlayFacts: unknown
   /**
-   * The running directory refresh, restarted whenever the overlay section
-   * changes. Declared with the other live state because the adapter's explicit
-   * refresh reaches it through a closure built before the section is read.
+   * The running directory refresh, absent while the overlay is off. Declared
+   * with the other live state because the adapter's explicit refresh reaches
+   * it through a closure built before the section is read.
    */
   let refresh: CatalogRefreshHandle | undefined
   /** This route's overlay entries, which the resolver merges under the installed catalog. */
@@ -178,14 +183,30 @@ export function apply(ctx: Context, config: Config): void {
    * drops the memo so every route re-resolves against it.
    */
   const profiles = (): ReadonlyMap<string, ResolvedPiAiProviderProfile> => {
-    const raw = current()
+    const raw = config.providers.get()
     if (raw === lastRaw && memoized !== undefined) return memoized
-    const next = resolveProfiles(raw.providers, 'deferred', overlayFor)
+    const next = resolveProfiles(structuredClone(raw) as import('./config.ts').Options['providers'], 'deferred', overlayFor)
     lastRaw = raw
     memoized = next
     return next
   }
   profiles()
+  ctx.on('internal/config', function (this: import('@deepseek-ai/cordis').Fiber, _raw, next) {
+    const raw: unknown = next()
+    if (this !== ctx.fiber) return raw
+    const candidate = Config(raw as import('./config.ts').Options)
+    assertServiceable(
+      {
+        providers: structuredClone(candidate.providers.get()),
+        catalogOverlay: candidate.catalogOverlay,
+      } as import('./config.ts').Options,
+      {
+        providers: structuredClone(config.providers.get()),
+        catalogOverlay: config.catalogOverlay,
+      } as import('./config.ts').Options,
+    )
+    return raw
+  })
 
   const resolveApiKey = async (
     provider: string,
@@ -249,7 +270,7 @@ export function apply(ctx: Context, config: Config): void {
   let directory: DirectoryRegistrationHandle | undefined
   let directoryFacts: unknown
   const ensureDirectory = (): void => {
-    const entries = directoryEntries(profiles())
+    const entries = directoryEntries(profiles(), settingsNs)
     if (deepEqualJson(entries, directoryFacts)) return
     // Atomic replace, never dispose-then-register: a route another adapter
     // family already declares (a profile keyed `deepseek-official`) would
@@ -287,34 +308,28 @@ export function apply(ctx: Context, config: Config): void {
     )
   }
   /**
-   * Restart the directory refresh whenever the overlay section changes. The
-   * snapshot it loads is adopted through {@link adoptSnapshot}, so an overlay
-   * never has to be configured before settings supply one.
+   * Run the directory refresh the overlay section asks for. The section is not
+   * volatile, so a changed section restarts this plugin and this effect with
+   * it; the snapshot it loads is adopted through {@link adoptSnapshot}. A stored
+   * section naming an unusable source costs only the overlay: the routes are
+   * registered below either way.
    */
-  let refreshFacts: unknown
-  const ensureCatalogRefresh = (): void => {
-    const source = catalogOverlaySource(current())
-    if (deepEqualJson(source, refreshFacts)) return
-    refreshFacts = source
-    void refresh?.dispose()
-    if (source === undefined) {
-      // Removing the section removes what it fetched: every route falls back to
-      // the installed catalog rather than keeping a snapshot nothing refreshes.
-      refresh = undefined
-      overlay = undefined
-      overlayFacts = undefined
-      memoized = undefined
+  ctx.effect(function* () {
+    let source: ReturnType<typeof catalogOverlaySource>
+    try {
+      source = catalogOverlaySource(config)
+    } catch (error) {
+      ctx.logger.error('llm-pi-ai: serving the installed catalog without the model directory overlay')
+      ctx.logger.error(error)
       return
     }
+    if (source === undefined) return
     refresh = startCatalogRefresh({
       source,
       cachePath: catalogSnapshotPath(),
       onSnapshot: adoptSnapshot,
       logger: ctx.logger,
     })
-  }
-  ctx.effect(function* () {
-    ensureCatalogRefresh()
     yield () => refresh?.dispose()
   })
   /** Host-owned request inputs for discovery of one configured route. */
@@ -335,7 +350,7 @@ export function apply(ctx: Context, config: Config): void {
   // except the stored credential and deployment-owned headers: the curated UI
   // accepts neither, so an already-configured route supplies both inside the
   // Host rather than widening the discovery request.
-  ctx.llm.registerModelDiscovery(NS, (request, signal) => discoverModels(
+  ctx.llm.registerModelDiscovery(settingsNs, (request, signal) => discoverModels(
     { ...request, ...signal === undefined ? {} : { signal } },
     () => storedDiscoveryProfile(request.provider),
     overlayFor,
@@ -371,55 +386,11 @@ export function apply(ctx: Context, config: Config): void {
   }
   ensureRegistrationFacts()
 
-  ctx.inject(['settings'], (settingsCtx) => {
-    let registering = true
-    settingsCtx.settings.installSection(ctx, NS, Config, config, {
-      validate: (value) => {
-        // Stored catalog drift must not prevent registration of the repair UI.
-        if (registering) {
-          resolveProfiles(value.providers, 'deferred')
-        } else {
-          assertServiceable(value, current())
-        }
-      },
-      setSource: (source) => {
-        current = source
-      },
-      onChange: () => {
-        // Named here rather than left to the settings watcher: `assertServiceable`
-        // cannot see the llm registry, so a profile claiming a route another
-        // adapter family owns is stored successfully and only fails at this swap.
-        // Without its own diagnostic that refusal reaches the operator as a
-        // generic "settings: watcher failed", naming neither the route nor why it
-        // is not serving. The previous routes keep serving either way.
-        try {
-          ensureRegistrationFacts()
-        } catch (error) {
-          ctx.logger.error('llm-pi-ai: keeping the previously registered routes after a refused update')
-          ctx.logger.error(error)
-        }
-        // The directory follows the profiles the registry accepted, so a route
-        // that failed to register is not advertised as configurable. A refused
-        // directory swap is contained here for the same reason the registry's
-        // is: the previous entries keep serving, and `directoryFacts` stays put
-        // so returning to a working configuration re-applies.
-        try {
-          ensureDirectory()
-        } catch (error) {
-          ctx.logger.error('llm-pi-ai: keeping the previous configurable-provider directory after a refused update')
-          ctx.logger.error(error)
-        }
-        // The overlay section is a live setting like the routes: a section that
-        // appears starts a refresh, one that changes retargets it, and one that
-        // is removed stops it and drops the overlay with it.
-        try {
-          ensureCatalogRefresh()
-        } catch (error) {
-          ctx.logger.error('llm-pi-ai: keeping the previous model directory overlay after a refused update')
-          ctx.logger.error(error)
-        }
-      },
-    })
-    registering = false
+  ctx.on('loader/volatile-update', () => {
+    try { ensureRegistrationFacts(); ensureDirectory() }
+    catch (error) {
+      ctx.logger.error('llm-pi-ai: configuration conflicts with an existing provider route')
+      ctx.logger.error(error)
+    }
   })
 }

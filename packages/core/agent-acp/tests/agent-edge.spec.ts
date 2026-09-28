@@ -55,7 +55,7 @@ describe('ACP update variants', () => {
     expect(JSON.stringify(call.data)).toContain('"tool"')
     expect(JSON.stringify(call.data)).toContain('{}')
     const result = eventsOf(agent, 'tool/result')[0]!
-    expect((result.data as { message: { content: { isError?: boolean }[] } }).message.content[0]!.isError).toBe(true)
+    expect((result.data as { message: { isError: boolean } }).message.isError).toBe(true)
     expect(JSON.stringify(result.data)).toContain('boom')
     expect(turnEndKind(agent)).toBe('completed')
   }, TEST_TIMEOUT)

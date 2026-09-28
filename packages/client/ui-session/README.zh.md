@@ -8,7 +8,9 @@ kind: "package-reference"
 
 ## 概述
 
-使用本包可通过标准 Slot 钩子公开 Session catalog、retain 信息与统一 UI 状态。它按 `SessionBinding` 物化钩子和 prop，而 `SessionProvider` 可以继承外围 binding 或绑定显式 `SessionReference`。它拥有进程本地的 pending-interaction 与完成提醒策略，但不拥有 Controller transport、历史或 reference。当浏览器标签页处于隐藏状态时，一个停止运行的会话会在通知权限已授予时用该会话的显示标题发出一条通知。权限仍未决定时，本包会在标签页可见之后的下一次点击或按键时询问，权限授予后显示每一次这样的停止，若浏览器拒绝该次请求，则在之后的手势上再问。
+使用本包可通过标准 Slot 钩子公开 Session catalog、retain 信息与统一 UI 状态。它按 `SessionBinding` 物化钩子和 prop，而 `SessionProvider` 可以继承外围 binding 或绑定显式 `SessionReference`。它拥有进程本地的 pending-interaction 与完成提醒策略，但不拥有 Controller transport、历史或 reference。标签页隐藏时停止的会话会发出一条带标题的通知；权限未决定时，本包在标签页可见后的下一次手势时请求权限。
+
+运行状态来自 Host 列表基线或状态事件。Subagent 目录行和已保留子会话的 fallback 行不会建立运行状态；主视图引用仍会确认完成提醒。
 
 ## 目录
 

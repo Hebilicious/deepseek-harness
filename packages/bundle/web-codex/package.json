@@ -1,7 +1,7 @@
 {
   "name": "@deepseek-ai/dsh-web-codex",
   "description": "The dsh browser-surface Codex bundle: the web patch layer over dsh-base plus dsh-web-app, with Codex app-server sessions in place of the in-process agent loop",
-  "version": "0.1.6-alpha.2",
+  "version": "0.2.0-rc.1",
   "publishConfig": {
     "access": "public"
   },
@@ -34,13 +34,13 @@
     }
   },
   "dependencies": {
-    "@deepseek-ai/dsh-agent-codex": "workspace:^"
+    "@deepseek-ai/dsh-agent-codex": "workspace:*"
   },
   "peerDependencies": {
-    "@deepseek-ai/cordis": "workspace:^"
+    "@deepseek-ai/cordis": "workspace:~"
   },
   "devDependencies": {
-    "@deepseek-ai/cordis": "workspace:^",
-    "@deepseek-ai/dsh-agent-codex": "workspace:^"
+    "@deepseek-ai/cordis": "workspace:~",
+    "@deepseek-ai/dsh-agent-codex": "workspace:*"
   }
 }

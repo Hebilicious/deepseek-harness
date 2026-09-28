@@ -1,7 +1,3 @@
 - tree "Sessions":
-  - treeitem "workspace" [expanded]:
-    - img
-    - text: workspace
-  - treeitem "DSH Loop Ask a research subagent to now":
-    - img "DSH Loop"
-    - text: Ask a research subagent to now
+  - treeitem "workspace" [expanded]
+  - treeitem "Ask a research subagent to now"
