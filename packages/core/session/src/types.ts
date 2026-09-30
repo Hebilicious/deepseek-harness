@@ -185,6 +185,18 @@ export type PrepareSessionOptions =
   | (CreateSessionOptions & { readonly eventState?: undefined })
   | RestoredSessionOptions
 
+/** Options for {@link SessionStore.enter}. */
+export interface SessionEnterOptions {
+  /**
+   * When `true`, `session/event` dispatch is held until
+   * {@link SessionStore.publish}, which dispatches every held append in log
+   * order. An agent factory whose commit point follows the creation edges
+   * (the harness handshake) uses this so a rolled-back creation never
+   * dispatched an event, while a committed one reaches every observer in order.
+   */
+  readonly deferPublication?: boolean
+}
+
 /** Why an active agent driver was cancelled. */
 export type AgentCancelCause =
   | { readonly kind: 'user' }

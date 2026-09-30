@@ -3,6 +3,8 @@
 import { describe, expect, it, vi } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'
 import { ToolCallId } from '@deepseek-ai/dsh-llm'
+import { HarnessId } from '@deepseek-ai/dsh-agent'
+import type { AgentFactory } from '@deepseek-ai/dsh-agent'
 import { Session, SESSION_FORMAT_VERSION, SessionId } from '@deepseek-ai/dsh-session'
 import type { SessionEvent } from '@deepseek-ai/dsh-session'
 import { bindScopeParent, createScope, scopeOf, scopeTarget } from '@deepseek-ai/dsh-scope'
@@ -464,6 +466,41 @@ describe('SubagentModelSelectionConfig', () => {
       .rejects.toThrow('require a durable policy, route fields, and list_subagent_models')
     await ctx.fiber.dispose()
   })
+
+  it('describes the route requirement a route-owning runtime imposes', async () => {
+    const ctx = await boot()
+    await selectionConfigs.get(ctx)!.update({
+      enabled: true,
+      allowedModels: ALLOWED_MODELS,
+    })
+    const neverFactory: AgentFactory = {
+      createAgent: () => Promise.reject(new Error('test harness must not create')),
+      resume: () => Promise.reject(new Error('test harness must not resume')),
+    }
+    ctx.agents.registerHarness({
+      id: HarnessId('foreign'),
+      name: 'Foreign',
+      modelProvider: 'foreign-llm',
+      factory: neverFactory,
+    })
+
+    // With two runtimes mounted an unnamed create cannot resolve one.
+    const preset = modelSelectionPresets.get(ctx)!
+    const handle = await ctx.agents.create({
+      sessionId: SessionId('harness-wording'),
+      harness: HarnessId('dsh'),
+      setup: (agentCtx) => {
+        bindScopeParent(scopeOf(agentCtx)!, scopeOf(preset.ctx)!)
+      },
+    })
+    const agent = handle.agent
+    const schema = ctx.tools.schemas(agent).find(candidate => candidate.name === 'subagent')
+    const harness = (schema?.parameters as { properties?: Record<string, { description?: string }> })
+      .properties?.['harness']
+    expect(harness?.description).toContain('"foreign"')
+    expect(harness?.description).toContain('selecting that route via `provider` and `model`')
+    await ctx.fiber.dispose()
+  })
 })
 
 
@@ -473,7 +510,7 @@ it('reads the saved default depth at each delegation without remounting the tool
   try {
     ctx.subagents.registerProvider({
       name: 'capture-depth',
-      capabilities: { agentOptions: true, outputSchema: true, depthLimit: true, toolFilter: true, persona: true },
+      capabilities: { agentOptions: true, outputSchema: true, depthLimit: true, toolFilter: true, persona: true, harness: false },
       inheritsParentContext: false,
       start: async (request) => {
         depths.push(request.maxDepth)

@@ -9,7 +9,7 @@ English | [中文](README.zh.md)
 
 ## Summary
 
-The subagent package family lets an agent delegate a task to a child, continue the child's work, and discover every child it created. Choose a fresh in-process child for isolated work, a history-seeded in-process child when prior conversation matters, or an out-of-process child backed by ACP, Codex, Claude Code, or another Harness runtime. Model-facing tools also let agents message adjacent agents, interrupt work, and list child status. Each child remains visible to its parent whether it is running or stored; the package READMEs document provider-specific setup and limits.
+The subagent package family lets an agent delegate a task to a child, continue the child's work, and discover every child it created. Choose a fresh in-process child for isolated work under any mounted agent harness, a history-seeded in-process child when prior conversation matters, a process-isolated Harness child through the TypeScript SDK, or a one-shot out-of-process child backed by ACP, Codex, or Claude Code. Model-facing tools also let agents message adjacent agents, interrupt work, and list child status. Each child remains visible to its parent whether it is running or stored; the package READMEs document provider-specific setup and limits.
 
 ## Table of Contents
 

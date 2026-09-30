@@ -21,6 +21,7 @@ import AgentRegistry, {
 } from '@deepseek-ai/dsh-agent'
 import { createUserMessage, type UserMessage } from '@deepseek-ai/dsh-llm'
 import { brandString } from '@deepseek-ai/dsh-brand'
+import type { JsonValue } from '@deepseek-ai/dsh-util-values'
 import type { MessageId, ReasoningEffortId } from '@deepseek-ai/dsh-llm'
 import SessionProjectionRegistry from '@deepseek-ai/dsh-session-projection'
 import SessionStore, {
@@ -171,6 +172,28 @@ declare module '@deepseek-ai/cordis' {
   interface Context {
     /** Test-bench scripted external harness factory. */
     fakeHarness: FakeHarness
+  }
+}
+
+/**
+ * Scripted `agentToolBridge` stand-in: recognizes the `mcp__dsh__` prefix and
+ * hands out queued completions FIFO per (tool, argumentsJson) pair.
+ */
+class FakeBridge extends Service {
+  readonly queue: { tool: string; argumentsJson: string; meta?: JsonValue }[] = []
+
+  constructor(ctx: Context) {
+    super(ctx, 'agentToolBridge')
+  }
+
+  bridgedToolName(_agent: unknown, reported: string): string | undefined {
+    return reported.startsWith('mcp__dsh__') ? reported.slice('mcp__dsh__'.length) : undefined
+  }
+
+  takeCompletion(_agent: unknown, tool: string, argumentsJson: string): { meta?: JsonValue } | undefined {
+    const index = this.queue
+      .findIndex(entry => entry.tool === tool && entry.argumentsJson === argumentsJson)
+    return index === -1 ? undefined : this.queue.splice(index, 1)[0]
   }
 }
 
@@ -729,7 +752,8 @@ describe('ExternalAgent turn drive', () => {
     agent.driveImpl = (_messages, drive) => new Promise((_resolve, reject) => {
       drive.signal.addEventListener('abort', () => {
         agent.beginUnprompted()
-        reject(drive.signal.reason)
+        const reason: unknown = drive.signal.reason
+        reject(reason instanceof Error ? reason : new Error(String(reason)))
       }, { once: true })
     })
 
@@ -868,6 +892,7 @@ describe('ExternalTurnProjector', () => {
     const { agent } = await create(bench.ctx)
     agent.driveImpl = (_messages, drive) => {
       const projector = drive.projector
+      projector.noteRoute({ provider: 'p1', model: 'm1' })
       const attempt = projector.beginAssistant()
       attempt.push({ type: 'block-start', index: 0, blockType: 'text' })
       attempt.push({ type: 'text-delta', index: 0, text: 'hi' })
@@ -886,7 +911,6 @@ describe('ExternalTurnProjector', () => {
         meta: { title: 'card' },
       })
       projector.toolResult('c2', [{ type: 'text', text: 'ok' }], { error: { name: 'X', code: 'Y' } })
-      projector.noteRoute({ provider: 'p1', model: 'm1' })
       return Promise.resolve({ kind: 'completed' })
     }
 
@@ -895,7 +919,9 @@ describe('ExternalTurnProjector', () => {
 
     const events = agent.session.snapshotEvents()
     const sequence = events.map(event => event.type)
-    expect(sequence.filter(type => type === 'assistant/message')).toHaveLength(2)
+    // The streamed message, the interrupted one, and the tool-call's
+    // standalone advertisement.
+    expect(sequence.filter(type => type === 'assistant/message')).toHaveLength(3)
     expect(sequence).toContain('assistant/attempt')
     expect(sequence).toContain('tool/call')
     expect(sequence.filter(type => type === 'tool/result')).toHaveLength(2)
@@ -905,7 +931,8 @@ describe('ExternalTurnProjector', () => {
       model: 'm1',
       replayState: { response: { id: 'r1' } },
     })
-    const interrupted = events.filter(event => event.type === 'assistant/message').at(-1)
+    const interrupted = events.find(event =>
+      event.type === 'assistant/message' && event.data.interrupted === true)
     expect(interrupted?.type === 'assistant/message' && interrupted.data.interrupted).toBe(true)
     expect(interrupted?.type === 'assistant/message' && interrupted.data.usage)
       .toEqual({ inputTokens: 3, outputTokens: 4 })
@@ -917,6 +944,323 @@ describe('ExternalTurnProjector', () => {
     expect(plainResult?.type === 'tool/result' && 'error' in plainResult.data).toBe(false)
     const header = events.find(event => event.type === 'request/header')
     expect(header?.type === 'request/header' && header.data.reason).toBe('initial')
+  })
+
+  it('logs a bridged call under the dsh name and attaches the completion meta', async () => {
+    bench = await harness()
+    await bench.ctx.plugin(FakeBridge)
+    const bridge = bench.ctx.get('agentToolBridge') as unknown as FakeBridge
+    const { agent } = await create(bench.ctx)
+    agent.driveImpl = (_messages, drive) => {
+      const projector = drive.projector
+      projector.noteRoute({ provider: 'devin', model: 'mock-1' })
+      bridge.queue.push({
+        tool: 'subagent',
+        argumentsJson: '{"prompt":"x"}',
+        meta: { session: 'child-1' },
+      })
+      // Claude Code reports the raw name; Devin reports a display title plus
+      // the canonical name in `_meta`, which arrives as the alias.
+      projector.toolCall('c1', 'Calling subagent from dsh', '{"prompt":"x"}', {
+        alias: 'mcp__dsh__subagent',
+      })
+      projector.toolResult('c1', [{ type: 'text', text: 'harness saw this' }])
+      return Promise.resolve({ kind: 'completed' })
+    }
+
+    send(agent, 'go')
+    await agent.whenIdle()
+
+    const events = agent.session.snapshotEvents()
+    const call = events.find(event => event.type === 'tool/call')
+    expect(call?.type === 'tool/call' && call.data.name).toBe('subagent')
+    expect(call?.type === 'tool/call' && call.data.arguments).toBe('{"prompt":"x"}')
+    const result = events.find(event => event.type === 'tool/result')
+    expect(result?.type === 'tool/result' && result.data.meta).toEqual({ session: 'child-1' })
+    expect(result?.type === 'tool/result' && result.data.message.content).toEqual([
+      { type: 'text', text: 'harness saw this' },
+    ])
+  })
+
+  it('resolves a canonical harness-reported name without an alias', async () => {
+    bench = await harness()
+    await bench.ctx.plugin(FakeBridge)
+    const { agent } = await create(bench.ctx)
+    agent.driveImpl = (_messages, drive) => {
+      const projector = drive.projector
+      projector.noteRoute({ provider: 'devin', model: 'mock-1' })
+      // Codex reports `mcp__<server>__<tool>` as the item name directly.
+      projector.toolCall('c1', 'mcp__dsh__subagent', '{}')
+      projector.toolResult('c1', [{ type: 'text', text: 'ok' }])
+      return Promise.resolve({ kind: 'completed' })
+    }
+
+    send(agent, 'go')
+    await agent.whenIdle()
+
+    const call = agent.session.snapshotEvents().find(event => event.type === 'tool/call')
+    expect(call?.type === 'tool/call' && call.data.name).toBe('subagent')
+  })
+
+  it('drains identical bridged completions FIFO by tool name and arguments', async () => {
+    bench = await harness()
+    await bench.ctx.plugin(FakeBridge)
+    const bridge = bench.ctx.get('agentToolBridge') as unknown as FakeBridge
+    const { agent } = await create(bench.ctx)
+    agent.driveImpl = (_messages, drive) => {
+      const projector = drive.projector
+      projector.noteRoute({ provider: 'devin', model: 'mock-1' })
+      bridge.queue.push(
+        { tool: 'subagent', argumentsJson: '{"prompt":"x"}', meta: { run: 1 } },
+        { tool: 'subagent', argumentsJson: '{"prompt":"x"}', meta: { run: 2 } },
+      )
+      projector.toolCall('c1', 'mcp__dsh__subagent', '{"prompt":"x"}')
+      projector.toolCall('c2', 'mcp__dsh__subagent', '{"prompt":"x"}')
+      // The harness may settle the second call first; the queue drains FIFO.
+      projector.toolResult('c2', [{ type: 'text', text: 'two' }])
+      projector.toolResult('c1', [{ type: 'text', text: 'one' }])
+      return Promise.resolve({ kind: 'completed' })
+    }
+
+    send(agent, 'go')
+    await agent.whenIdle()
+
+    const results = agent.session.snapshotEvents().flatMap(event =>
+      event.type === 'tool/result' ? [event.data] : [])
+    expect(results.map(result => result.meta)).toEqual([{ run: 1 }, { run: 2 }])
+  })
+
+  it('advertises a bridged call on an assistant/message under the dsh name', async () => {
+    bench = await harness()
+    await bench.ctx.plugin(FakeBridge)
+    const { agent } = await create(bench.ctx)
+    agent.driveImpl = (_messages, drive) => {
+      drive.projector.noteRoute({ provider: 'devin', model: 'mock-1' })
+      drive.projector.toolCall('c1', 'mcp__dsh__subagent', '{"prompt":"x"}')
+      drive.projector.toolResult('c1', [{ type: 'text', text: 'ok' }])
+      return Promise.resolve({ kind: 'completed' })
+    }
+
+    send(agent, 'go')
+    await agent.whenIdle()
+
+    const events = agent.session.snapshotEvents()
+    const advert = events.find(event =>
+      event.type === 'assistant/message'
+      && event.data.message.content.some(block => block.type === 'tool-call'))
+    expect(advert?.type === 'assistant/message' && advert.data.message.content).toEqual([{
+      type: 'tool-call',
+      id: 'c1',
+      name: 'subagent',
+      arguments: '{"prompt":"x"}',
+    }])
+    expect(advert?.type === 'assistant/message' && advert.data.message.source).toMatchObject({
+      provider: 'devin',
+      model: 'mock-1',
+    })
+    const advertSeq = advert?.seq
+    const callSeq = events.find(event => event.type === 'tool/call')?.seq
+    expect(advertSeq !== undefined && callSeq !== undefined && advertSeq < callSeq).toBe(true)
+  })
+
+  it('advertises an unbridged call on a standalone assistant/message', async () => {
+    bench = await harness()
+    const { agent } = await create(bench.ctx)
+    agent.driveImpl = (_messages, drive) => {
+      drive.projector.noteRoute({ provider: 'codex', model: 'gpt-5' })
+      drive.projector.toolCall('c1', 'shell', '{"command":"ls"}')
+      drive.projector.toolResult('c1', [{ type: 'text', text: 'ok' }])
+      return Promise.resolve({ kind: 'completed' })
+    }
+
+    send(agent, 'go')
+    await agent.whenIdle()
+
+    const events = agent.session.snapshotEvents()
+    const sequence = events.map(event => event.type)
+    const advertIndex = sequence.indexOf('assistant/message')
+    const callIndex = sequence.indexOf('tool/call')
+    const resultIndex = sequence.indexOf('tool/result')
+    expect(advertIndex !== -1 && advertIndex < callIndex && callIndex < resultIndex).toBe(true)
+    const advert = events[advertIndex]
+    expect(advert?.type === 'assistant/message' && advert.data.message.content).toEqual([{
+      type: 'tool-call',
+      id: 'c1',
+      name: 'shell',
+      arguments: '{"command":"ls"}',
+    }])
+  })
+
+  it('fails a tool call that arrives before any route was noted', async () => {
+    bench = await harness()
+    const { agent } = await create(bench.ctx)
+    let thrown: unknown
+    agent.driveImpl = (_messages, drive) => {
+      try {
+        drive.projector.toolCall('c1', 'shell', '{}')
+      } catch (error: unknown) {
+        thrown = error
+      }
+      return Promise.resolve({ kind: 'completed' })
+    }
+
+    send(agent, 'go')
+    await agent.whenIdle()
+
+    expect(thrown).toBeInstanceOf(Error)
+    expect((thrown as Error).message).toContain('arrived before noteRoute')
+    // The refused call committed no durable pair.
+    expect(types(agent)).not.toContain('tool/call')
+    expect(types(agent)).not.toContain('tool/result')
+  })
+
+  it('folds a mid-stream call into the open attempt and continues on a fresh one', async () => {
+    bench = await harness()
+    const { agent } = await create(bench.ctx)
+    agent.driveImpl = (_messages, drive) => {
+      const projector = drive.projector
+      projector.noteRoute({ provider: 'p1', model: 'm1' })
+      const first = projector.beginAssistant()
+      first.push({ type: 'block-start', index: 0, blockType: 'text' })
+      first.push({ type: 'text-delta', index: 0, text: 'before ' })
+      projector.toolCall('c1', 'shell', '{}')
+      projector.toolResult('c1', [{ type: 'text', text: 'ok' }])
+      // The advertisement settled the open attempt; post-call text streams
+      // on a fresh attempt.
+      const second = projector.beginAssistant()
+      second.push({ type: 'block-start', index: 0, blockType: 'text' })
+      second.push({ type: 'text-delta', index: 0, text: 'after' })
+      second.push({ type: 'block-end', index: 0, block: { type: 'text', text: 'after' } })
+      second.push({ type: 'finish', reason: { kind: 'stop' } })
+      projector.commitAssistant(second, { provider: 'p1', model: 'm1' })
+      return Promise.resolve({ kind: 'completed' })
+    }
+
+    send(agent, 'go')
+    await agent.whenIdle()
+
+    const events = agent.session.snapshotEvents()
+    const sequence = events.map(event => event.type)
+    expect(sequence.indexOf('assistant/message')).toBeLessThan(sequence.indexOf('tool/call'))
+    const first = events.find(event => event.type === 'assistant/message')
+    expect(first?.type === 'assistant/message' && first.data.message.content).toEqual([
+      { type: 'text', text: 'before ' },
+      { type: 'tool-call', id: 'c1', name: 'shell', arguments: '{}' },
+    ])
+    const second = events.filter(event => event.type === 'assistant/message').at(-1)
+    expect(second?.type === 'assistant/message' && second.data.message.content).toEqual([
+      { type: 'text', text: 'after' },
+    ])
+  })
+
+  it('skips an abandoned open attempt when advertising a call', async () => {
+    bench = await harness()
+    const { agent } = await create(bench.ctx)
+    agent.driveImpl = (_messages, drive) => {
+      const projector = drive.projector
+      projector.noteRoute({ provider: 'p1', model: 'm1' })
+      // A driver may abandon a streamed attempt outright; it stays listed
+      // open-side until a lookup skips it, so the next advertisement must not
+      // fold into it.
+      projector.beginAssistant().abandon()
+      projector.toolCall('c1', 'shell', '{}')
+      projector.toolResult('c1', [{ type: 'text', text: 'ok' }])
+      return Promise.resolve({ kind: 'completed' })
+    }
+
+    send(agent, 'go')
+    await agent.whenIdle()
+
+    const messages = agent.session.snapshotEvents()
+      .filter(event => event.type === 'assistant/message')
+    expect(messages).toHaveLength(1)
+    expect(messages[0]!.type === 'assistant/message' && messages[0]!.data.message.content).toEqual([
+      { type: 'tool-call', id: 'c1', name: 'shell', arguments: '{}' },
+    ])
+  })
+
+  it('lets an explicit result meta override the bridged completion meta', async () => {
+    bench = await harness()
+    await bench.ctx.plugin(FakeBridge)
+    const bridge = bench.ctx.get('agentToolBridge') as unknown as FakeBridge
+    const { agent } = await create(bench.ctx)
+    agent.driveImpl = (_messages, drive) => {
+      const projector = drive.projector
+      bridge.queue.push({ tool: 'subagent', argumentsJson: '{}', meta: { from: 'bridge' } })
+      projector.noteRoute({ provider: 'devin', model: 'mock-1' })
+      projector.toolCall('c1', 'mcp__dsh__subagent', '{}')
+      projector.toolResult('c1', [{ type: 'text', text: 'ok' }], { meta: { from: 'driver' } })
+      return Promise.resolve({ kind: 'completed' })
+    }
+
+    send(agent, 'go')
+    await agent.whenIdle()
+
+    const result = agent.session.snapshotEvents().find(event => event.type === 'tool/result')
+    expect(result?.type === 'tool/result' && result.data.meta).toEqual({ from: 'driver' })
+    // The completion was still consumed, so it cannot leak onto a later call.
+    expect(bridge.queue).toHaveLength(0)
+  })
+
+  it('logs an unmatched bridged call without meta', async () => {
+    bench = await harness()
+    await bench.ctx.plugin(FakeBridge)
+    const { agent } = await create(bench.ctx)
+    agent.driveImpl = (_messages, drive) => {
+      const projector = drive.projector
+      projector.noteRoute({ provider: 'devin', model: 'mock-1' })
+      projector.toolCall('c1', 'mcp__dsh__subagent', '{}')
+      projector.toolResult('c1', [{ type: 'text', text: 'ok' }])
+      return Promise.resolve({ kind: 'completed' })
+    }
+
+    send(agent, 'go')
+    await agent.whenIdle()
+
+    const events = agent.session.snapshotEvents()
+    const call = events.find(event => event.type === 'tool/call')
+    expect(call?.type === 'tool/call' && call.data.name).toBe('subagent')
+    const result = events.find(event => event.type === 'tool/result')
+    expect(result?.type === 'tool/result' && 'meta' in result.data).toBe(false)
+  })
+
+  it('leaves unrecognized names and no-bridge logging unchanged', async () => {
+    bench = await harness()
+    await bench.ctx.plugin(FakeBridge)
+    const { agent } = await create(bench.ctx)
+    agent.driveImpl = (_messages, drive) => {
+      const projector = drive.projector
+      projector.noteRoute({ provider: 'devin', model: 'mock-1' })
+      // A different server's prefix never resolves.
+      projector.toolCall('c1', 'mcp__other__x', '{}')
+      // An alias that does not resolve leaves the reported title alone.
+      projector.toolCall('c2', 'Calling x from other', '{}', { alias: 'mcp__other__x' })
+      return Promise.resolve({ kind: 'completed' })
+    }
+
+    send(agent, 'go')
+    await agent.whenIdle()
+
+    const calls = agent.session.snapshotEvents().flatMap(event =>
+      event.type === 'tool/call' ? [event.data.name] : [])
+    expect(calls).toEqual(['mcp__other__x', 'Calling x from other'])
+  })
+
+  it('keeps harness names verbatim when no bridge is mounted', async () => {
+    bench = await harness()
+    const { agent } = await create(bench.ctx)
+    agent.driveImpl = (_messages, drive) => {
+      drive.projector.noteRoute({ provider: 'devin', model: 'mock-1' })
+      drive.projector.toolCall('c1', 'mcp__dsh__subagent', '{}')
+      drive.projector.toolResult('c1', [{ type: 'text', text: 'ok' }])
+      return Promise.resolve({ kind: 'completed' })
+    }
+
+    send(agent, 'go')
+    await agent.whenIdle()
+
+    const call = agent.session.snapshotEvents().find(event => event.type === 'tool/call')
+    expect(call?.type === 'tool/call' && call.data.name).toBe('mcp__dsh__subagent')
   })
 
   it('skips an unchanged route and marks a changed one', async () => {
@@ -1022,13 +1366,19 @@ describe('ExternalAgentHost transaction', () => {
   })
 
   it('rolls the transaction back when the harness bind rejects', async () => {
-    bench = await harness()
+    bench = await harness({ persistence: true })
     bench.host.onConstruct = (agent) => {
       agent.bindImpl = () => Promise.reject(new Error('bind refused'))
     }
 
     await expect(bench.ctx.agents.create({ sessionId: SessionId('s1') })).rejects.toThrow('bind refused')
     expect(bench.host.agents[0]?.unbound).toBe(true)
+    // The announced session detached without routing its creation window into
+    // the write handle: nothing was appended or stored, so the id is reusable.
+    expect(bench.persistence!.appendCalls).toBe(0)
+    expect(bench.persistence!.stores.get(SessionId('s1'))).toEqual([])
+    expect(bench.ctx.agents.get(SessionId('s1'))).toBeUndefined()
+    expect(bench.ctx.sessions.get(SessionId('s1'))).toBeUndefined()
   })
 
   it('rejects create when the caller signal aborts during session setup', async () => {

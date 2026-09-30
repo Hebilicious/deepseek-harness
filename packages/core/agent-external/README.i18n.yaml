@@ -21,8 +21,8 @@
   en: ab59b08083977b29
   zh: 6267c3e8ff2dc447
 /deepseek-ai-dsh-agent-external/use-this-package/entry-point:
-  en: 81b4174fdccadbb9
-  zh: cfa445d84a421dbc
+  en: 5a08c2d6790487bb
+  zh: bddd7210acb7ebb1
 /deepseek-ai-dsh-agent-external/understand-the-implementation:
   en: 42b15ac6321706aa
   zh: 7ae097f3abcc5d9c
@@ -30,14 +30,14 @@
   en: f7a8fb5eec83c27f
   zh: af0a03e74073bd99
 /deepseek-ai-dsh-agent-external/understand-the-implementation/lifecycle-transaction:
-  en: 6ee7cbb2cd4e6a47
-  zh: e0c81533faa8c841
+  en: 761072ef066c0b9e
+  zh: 7e3c8d8bbeee101d
 /deepseek-ai-dsh-agent-external/understand-the-implementation/durable-inbox-and-projections:
   en: db8f9c4c6fae6ce1
   zh: e088c74c884a54d9
 /deepseek-ai-dsh-agent-external/understand-the-implementation/turn-projection:
-  en: 93f016c8cdc6de9f
-  zh: c26a0a1a1c05d62d
+  en: 4377f2c904aa8dec
+  zh: ee0506eb52d961c8
 /deepseek-ai-dsh-agent-external/understand-the-implementation/harness-process:
   en: 99c867fb54f8d79c
   zh: 510a0a1672d0f931

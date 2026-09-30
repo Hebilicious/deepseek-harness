@@ -62,6 +62,9 @@
 /sessions/durability-contract:
   en: 62e3e4fbcba292a3
   zh: cb6dcaf531621e85
+/sessions/deferred-publication-sessionenteroptions:
+  en: 7b465ddcfda6cdfe
+  zh: 0e90ebdb477e54db
 /sessions/remote-catalog-and-workspace-opening:
   en: dd27307e0d7c893c
   zh: b77d2a749b7b641c

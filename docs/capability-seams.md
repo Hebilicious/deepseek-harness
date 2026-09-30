@@ -182,6 +182,8 @@ flowchart LR
   pkg_agent_codex["agent-codex"]
   svc_codexAppServer["ctx.codexAppServer<br/>Codex app-server session driver"]
   pkg_web_codex["web-codex"]
+  pkg_agent_tool_bridge["agent-tool-bridge"]
+  svc_agentToolBridge["ctx.agentToolBridge<br/>External-harness tool bridge"]
   svc_agentLoop["ctx.agentLoop<br/>Concrete loop driver"]
   pkg_base["base"]
   pkg_sdk_minimal["sdk-minimal"]
@@ -290,6 +292,7 @@ flowchart LR
   pkg_agent_default_model --> svc_agentDefaultModel
   pkg_agent_loop --> svc_agentLoop
   pkg_agent_preset_registry --> svc_agentPresets
+  pkg_agent_tool_bridge --> svc_agentToolBridge
   pkg_api_gateway --> svc_typertGateway
   pkg_api_job_controller --> svc_jobController
   pkg_api_session_controller --> svc_sessionController
@@ -443,6 +446,8 @@ flowchart LR
   svc_agentLoop --> pkg_base
   svc_agentLoop --> pkg_sdk_minimal
   svc_agentTeams --> pkg_experimental_tool_agent_team
+  svc_agentToolBridge --> pkg_agent_acp
+  svc_agentToolBridge --> pkg_web_harnesses
   svc_agents --> pkg_acp
   svc_agents --> pkg_agent_loop
   svc_agents --> pkg_subagent_in_process_driver
@@ -656,6 +661,7 @@ flowchart LR
 | `ctx.agentDefaultModel` | `core` | [`agent-default-model`](../packages/core/agent-default-model) | - | [`api-session-controller`](../packages/api/session-controller), [`headless`](../packages/bundle/headless) | - | Reads the default ModelSelection from volatile Config and saves selections through the profile editor. |
 | `ctx.acpHarness` | `bundle` | [`agent-acp`](../packages/core/agent-acp) | - | [`web-acp`](../packages/bundle/web-acp), [`web-harnesses`](../packages/bundle/web-harnesses) | - | One shared process per configured ACP harness; every session binds its own ACP session, and each harness registers its own ctx.agents factory, so a profile mounts as many as it configures beside the in-process loop. |
 | `ctx.codexAppServer` | `bundle` | [`agent-codex`](../packages/core/agent-codex) | - | [`web-codex`](../packages/bundle/web-codex), [`web-harnesses`](../packages/bundle/web-harnesses) | - | One shared app-server process per configured Codex instance; every session binds its own thread, and each instance registers its own ctx.agents factory and model route, so one profile can run several accounts beside the in-process loop. |
+| `ctx.agentToolBridge` | `bundle` | [`agent-tool-bridge`](../packages/core/agent-tool-bridge) | - | [`agent-acp`](../packages/core/agent-acp), [`web-harnesses`](../packages/bundle/web-harnesses) | - | Projects an agent's scoped tools onto one bearer-credentialed loopback MCP endpoint per agent; every call executes through ctx.tools under the agent's identity, so the shared policy pipeline applies unchanged. |
 | `ctx.agentLoop` | `bundle` | [`agent-loop`](../packages/core/agent-loop) | - | [`base`](../packages/bundle/base), [`sdk-minimal`](../packages/bundle/sdk-minimal) | - | The one concrete loop plugin; extension packages depend on dsh-agent events and services, not on this package. |
 | `ctx.schedule` | `core` | [`schedule`](../packages/schedule/schedule) | - | - | - | Stores tasks independently of Session activation and queues due messages in the original Session. |
 | `ctx.goals` | `core` | [`goal`](../packages/goal/goal) | - | - | - | Folds revisioned objective state from the session log and keeps live continuation activation process-local. |

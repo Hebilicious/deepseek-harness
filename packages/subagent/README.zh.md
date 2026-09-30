@@ -9,7 +9,7 @@ kind: "package-group"
 
 ## 概述
 
-subagent 包家族让 agent（智能体）将任务委派给子 agent、继续其工作，并发现自己创建的每个子级。隔离工作可选择全新的进程内子级；需要既有对话时可选择带父级历史的进程内子级；也可选择由 ACP（Agent Client Protocol）、Codex、Claude Code 或另一 Harness 运行时支持的进程外子级。面向模型的工具还让 agent 能够向相邻 agent 发送消息、中断工作并列出子级状态。无论子级正在运行还是已存储，父级都能看到它；各包 README 说明各提供方特定的设置与限制。
+subagent 包家族让 agent（智能体）将任务委派给子 agent、继续其工作，并发现自己创建的每个子级。隔离工作可选择在任意已挂载 agent harness 下运行的全新进程内子级；需要既有对话时可选择带父级历史的进程内子级；也可选择经 TypeScript SDK 运行的进程隔离 Harness 子级，或由 ACP（Agent Client Protocol）、Codex、Claude Code 支持的一次性进程外子级。面向模型的工具还让 agent 能够向相邻 agent 发送消息、中断工作并列出子级状态。无论子级正在运行还是已存储，父级都能看到它；各包 README 说明各提供方特定的设置与限制。
 
 ## 目录
 

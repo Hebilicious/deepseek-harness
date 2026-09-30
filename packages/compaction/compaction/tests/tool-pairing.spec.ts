@@ -161,6 +161,63 @@ describe('tool-pairing boundaries', () => {
     expect(after(session, 'tool/result', 1)).toBe(true)
   })
 
+  it('balances an external-harness call folded into its streaming message', () => {
+    // The shape an external driver commits when a harness-reported call lands
+    // mid-stream: one assistant/message carrying text plus the advertised
+    // tool-call block, then the log-only tool/call, then the result.
+    const session = Session.create(SessionId('external-tool-step'))
+    session.append('assistant/message', {
+      stream: [],
+      turn: 1,
+      step: 1,
+      message: createMessage({
+        role: 'assistant',
+        content: [
+          { type: 'text', text: 'running ' },
+          { type: 'tool-call', id: ToolCallId('c1'), name: 'shell', arguments: '{}' },
+        ],
+        source: {
+          kind: 'model',
+          ...{ provider: 'codex', model: 'gpt-5' },
+        },
+      }),
+    }, SURFACE)
+    session.append('tool/call', {
+      turn: 1,
+      step: 1,
+      callId: ToolCallId('c1'),
+      name: 'shell',
+      arguments: '{}',
+    })
+    session.append('tool/result', {
+      turn: 1, step: 1,
+      message: createToolResultMessage({
+        callId: ToolCallId('c1'),
+        content: [{ type: 'text', text: 'done' }],
+        isError: false,
+      }),
+    }, SURFACE)
+    session.append('assistant/message', {
+      stream: [],
+      turn: 1,
+      step: 1,
+      message: createMessage({
+        role: 'assistant',
+        content: [{ type: 'text', text: 'finished' }],
+        source: {
+          kind: 'model',
+          ...{ provider: 'codex', model: 'gpt-5' },
+        },
+      }),
+    }, SURFACE)
+
+    expect(before(session, 'assistant/message')).toBe(true)
+    expect(after(session, 'assistant/message')).toBe(false)
+    expect(before(session, 'tool/result')).toBe(false)
+    expect(after(session, 'tool/result')).toBe(true)
+    expect(after(session, 'assistant/message', 1)).toBe(true)
+  })
+
   it('keeps neutral nodes inside an open pair unbalanced and free nodes balanced', () => {
     const midStep = Session.create(SessionId('neutral-mid-step'))
     midStep.append('assistant/message', {

@@ -2,7 +2,7 @@
 
 import type { Context } from '@deepseek-ai/cordis'
 import z from '@deepseek-ai/schemastery'
-import type { Agent } from '@deepseek-ai/dsh-agent'
+import { HarnessId, type Agent } from '@deepseek-ai/dsh-agent'
 import { TeamTaskId } from '@deepseek-ai/dsh-experimental-agent-team'
 import type { TeamMemberView } from '@deepseek-ai/dsh-experimental-agent-team'
 import { defineTool } from '@deepseek-ai/dsh-tools'
@@ -171,6 +171,9 @@ function install(agent: Agent, ctx: Context, config: Required<Config>): () => vo
   if (systemPrompt === undefined || tools === undefined) throw new Error('Team tools require the systemPrompt and tools services')
   const disposers: Array<() => unknown> = []
   const register = (disposer: () => unknown): void => { disposers.push(disposer) }
+  // Mounted harnesses the teammate may run under. With zero or one mounted the
+  // choice is already made, so the parameter stays out of the schema.
+  const harnessChoices = ctx.get('agents')?.harnesses() ?? []
   try {
     register(systemPrompt.section({
       name: 'team:policy',
@@ -190,6 +193,20 @@ function install(agent: Agent, ctx: Context, config: Required<Config>): () => vo
           enum: ['fresh', 'fork'],
           description: 'fresh starts without Lead history; fork inherits completed Lead turns. Defaults to fresh.',
         },
+        ...harnessChoices.length > 1 ? {
+          harness: {
+            type: 'string' as const,
+            description: `Which agent runtime runs the teammate. Omit to keep the Lead's runtime and model; a different runtime uses its own default model unless provider/model name a route. Available runtimes: ${harnessChoices.map(entry => `"${entry.id}" (${entry.name})`).join(', ')}. Only valid with context fresh.`,
+          },
+          provider: {
+            type: 'string' as const,
+            description: 'Model provider for the teammate. Pair with model; needed when harness names a runtime the Lead\'s route cannot serve and that has no default.',
+          },
+          model: {
+            type: 'string' as const,
+            description: 'Model id within provider for the teammate.',
+          },
+        } : {},
       },
       output: jsonOutput(SPAWN_VALUE_SCHEMA),
       async execute(args, exec) {
@@ -212,6 +229,13 @@ To message another teammate, use send_message({ target: "<teammate name>", messa
           ],
           context,
           provider: context === 'fork' ? config.forkProvider : config.freshProvider,
+          ...args.harness === undefined ? {} : { harness: HarnessId(args.harness) },
+          ...args.provider === undefined && args.model === undefined ? {} : {
+            agentOptions: {
+              ...args.provider === undefined ? {} : { provider: args.provider },
+              ...args.model === undefined ? {} : { model: args.model },
+            },
+          },
           signal: exec.signal,
         })
         return { member: modelMember(result.member) }

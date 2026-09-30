@@ -651,6 +651,11 @@
     },
     {
       "doc": "docs/subsystems/session.md",
+      "symbol": "SessionEnterOptions",
+      "source": "packages/core/session/src/types.ts"
+    },
+    {
+      "doc": "docs/subsystems/session.md",
       "symbol": "SessionSurface",
       "source": "packages/core/session/src/surface.ts"
     },
@@ -2114,7 +2119,12 @@
     {
       "doc": "docs/subsystems/core.md",
       "symbol": "AgentOptions",
-      "source": "packages/core/agent/src/runtime-types.ts"
+      "source": "packages/core/agent/src/types.ts"
+    },
+    {
+      "doc": "docs/subsystems/core.md",
+      "symbol": "AgentHarness",
+      "source": "packages/core/agent/src/types.ts"
     },
     {
       "doc": "docs/subsystems/feedback.md",
@@ -2336,6 +2346,31 @@
       "doc": "docs/subsystems/product-telemetry.md",
       "symbol": "ProductTelemetryRecord",
       "source": "packages/host/product-telemetry-otel/src/index.ts"
+    },
+    {
+      "doc": "docs/subsystems/core.md",
+      "symbol": "BridgedTool",
+      "source": "packages/core/agent-tool-bridge/src/types.ts"
+    },
+    {
+      "doc": "docs/subsystems/core.md",
+      "symbol": "BridgeToolCall",
+      "source": "packages/core/agent-tool-bridge/src/types.ts"
+    },
+    {
+      "doc": "docs/subsystems/core.md",
+      "symbol": "BridgedToolResult",
+      "source": "packages/core/agent-tool-bridge/src/types.ts"
+    },
+    {
+      "doc": "docs/subsystems/core.md",
+      "symbol": "BridgeMcpEndpoint",
+      "source": "packages/core/agent-tool-bridge/src/types.ts"
+    },
+    {
+      "doc": "docs/subsystems/core.md",
+      "symbol": "BridgedCompletion",
+      "source": "packages/core/agent-tool-bridge/src/types.ts"
     }
   ]
 }

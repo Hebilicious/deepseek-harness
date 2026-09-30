@@ -57,7 +57,7 @@ class MyHost extends ExternalAgentHost<MyAgent> {
 }
 ```
 
-Constructing `MyHost` inside a service constructor registers the `turnBoundary` projection, the factory-owned lifecycle teardown, and the factory slot itself, all effect-scoped to that service's fiber. `bind()` runs before publication, so a rejected handshake rolls the whole creation back and the session id stays reusable.
+Constructing `MyHost` inside a service constructor registers the `turnBoundary` projection, the factory-owned lifecycle teardown, and the factory slot itself, all effect-scoped to that service's fiber. Both creation announcements run before `bind()` — `session/created` then `agent/created`, whose scoped composition listeners install the agent's tools before the handshake snapshots them — while the session's `session/event` dispatch stays held, so a rejected handshake rolls the creation back with nothing stored or observed and the session id stays reusable.
 
 -----
 
@@ -73,7 +73,7 @@ The package splits one agent into a session-facing half and a harness-facing hal
 
 ### Lifecycle transaction
 
-`createAgent()` prepares a private session, takes durable write ownership through `persistence.create()` when a backend is mounted, constructs the driver on the owner's fiber, runs caller setup, awaits `bind()` unpublished, flushes the pre-publication suffix, and only then enters both registries, announces the session and agent, emits `agent/session-start`, and returns the published handle. `resume()` opens the write handle first — which excludes a concurrent resume of the same id — reads the physically valid log, appends `interruptedTurnClosers`, and runs the same publish path with source `resume`. Any failure, cancellation, or owner disposal rolls the transaction back without publishing either identity, and the shared teardown is memoized: stop the driver, `unbind()`, unwind the agent scope, drain and close the write handle, then detach both registries.
+`createAgent()` prepares a private session, takes durable write ownership through `persistence.create()` when a backend is mounted, constructs the driver on the owner's fiber, and runs caller setup. A host constructed without `announceBeforeBind` — the in-process loop — then calls `bind()`, appends `agent/harness`, stores the unstored log, and enters and announces both registries with live dispatch. A host with `announceBeforeBind` — the ACP and Codex drivers, whose handshake snapshots the tool set — instead appends `agent/harness`, enters both registries — the session through `SessionStore.enter(session, { deferPublication: true })`, which holds its `session/event` dispatch — announces `session/created`, and awaits the serial `agent/created` listeners, so tools they install reach the `bind()` handshake. After `bind()` succeeds, the host stores the log below store entry through the write handle and calls `SessionStore.publish()`, which dispatches every held append in log order to all observers; persistence writes those appends through its live path. `resume()` opens the write handle first — which excludes a concurrent resume of the same id — reads the physically valid log, appends `interruptedTurnClosers`, and runs the same path with source `resume`. Any failure, cancellation, or owner disposal rolls the transaction back without dispatching the held appends — a bind failure disposes the announced pair, pairing `agent/disposed` with `session/disposed` — and the shared teardown is memoized: stop the driver, `unbind()`, unwind the agent scope, drain and close the write handle, then detach both registries.
 
 ### Durable inbox and projections
 
@@ -81,7 +81,7 @@ The package splits one agent into a session-facing half and a harness-facing hal
 
 ### Turn projection
 
-`ExternalTurnProjector` is the one place harness observations become durable events: `beginAssistant()` opens a streamed attempt that emits `agent/assistant-stream` frames and settles as `assistant/message` or the log-only `assistant/attempt`, `toolCall()`/`toolResult()` commit pairs, and `noteRoute()` logs `request/header` when the reported route changes.
+`ExternalTurnProjector` is the one place harness observations become durable events: `beginAssistant()` opens a streamed attempt that emits `agent/assistant-stream` frames and settles as `assistant/message` or the log-only `assistant/attempt`, `toolCall()`/`toolResult()` commit pairs, and `noteRoute()` logs `request/header` when the reported route changes. Every `toolCall()` first advertises its `tool-call` block on a committed `assistant/message` — folded into the attempt still streaming, which settles with `finish: tool-calls`, or a standalone single-block message when no attempt is open — so every external call keeps the advertised-lifecycle durable shape a dsh-loop call produces. When a mounted [`agentToolBridge`](../agent-tool-bridge/README.md) resolves the reported tool name — or the `alias` a harness carries separately, such as Devin's `_meta` canonical name — the call logs under the dsh tool name and its result picks up the settled bridged execution's `meta`; unrecognized names log verbatim.
 
 ### Harness process
 

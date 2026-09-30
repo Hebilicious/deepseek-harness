@@ -4,7 +4,7 @@ import { modelAvailable } from './catalog.ts'
 import { randomUUID } from 'node:crypto'
 import type { Context } from '@deepseek-ai/cordis'
 import { brandString } from '@deepseek-ai/dsh-brand'
-import { agentHarnessOf, recordedHarness } from '@deepseek-ai/dsh-agent'
+import { agentHarnessOf, harnessesServing, recordedHarness } from '@deepseek-ai/dsh-agent'
 import type { Agent, ModelSelection as AgentModelSelection } from '@deepseek-ai/dsh-agent'
 import { AttachmentError } from '@deepseek-ai/dsh-attachment'
 import type {
@@ -25,7 +25,6 @@ import { canonicalClientTimeZone } from '@deepseek-ai/dsh-util-time'
 import { assertNever } from '@deepseek-ai/dsh-util-values'
 import { RemoteError, remoteErrorOf } from '@deepseek-ai/dsh-typert-protocol'
 import type { Workspace } from '@deepseek-ai/dsh-workspace'
-import { harnessesServing } from './harness-models.ts'
 import {
   ApiSessionAgentController,
   ApiSessionCwdConflict,

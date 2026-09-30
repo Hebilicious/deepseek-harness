@@ -46,8 +46,14 @@ interface PreparedAgent<TAgent extends ManagedAgent> {
   agent: TAgent
   /** Aborts when the factory unloads, the caller cancels, or teardown begins — ends any setup await. */
   signal: AbortSignal
-  /** Enter registries and await the registry's creation edge before returning. */
-  publish(source: SessionStartSource): Promise<AgentHandle>
+  /**
+   * Enter both registries and await both creation edges.
+   * @param source - the creation source `agent/created` reports.
+   * @param deferred - hold the session's `session/event` dispatch until {@link publish}.
+   */
+  announce(source: SessionStartSource, deferred: boolean): Promise<void>
+  /** Dispatch a deferred entry's held appends in log order and return the live handle. */
+  publish(deferred: boolean): Promise<AgentHandle>
   /** Reverse teardown: stop the driver, unbind, unregister, unwind the scope. Memoized. */
   dispose(): Promise<void>
 }
@@ -83,6 +89,15 @@ export interface ExternalAgentHostOptions {
    * prefix keeps it.
    */
   readonly effectPrefix?: string
+  /**
+   * Announce the creation edges before `bind()`, with the session's
+   * `session/event` dispatch held until the bind commits. A driver whose
+   * handshake snapshots the agent's tool set (ACP `session/new`, Codex
+   * `thread/start`) sets it so `agent/created` scoped tool installs reach that
+   * snapshot. Without it the host binds first and then enters and announces
+   * the session with live dispatch.
+   */
+  readonly announceBeforeBind?: boolean
 }
 
 /**
@@ -102,6 +117,8 @@ export abstract class ExternalAgentHost<TAgent extends ManagedAgent> implements 
   private readonly label: string
   /** Harness identity this host registers under and stamps on its sessions. */
   private readonly harness: AgentHarness
+  /** Whether creation edges precede the bind (see {@link ExternalAgentHostOptions.announceBeforeBind}). */
+  private readonly announceBeforeBind: boolean
 
   /**
    * @param ctx - the driver service's registration context (dependency origin for everything the host owns).
@@ -114,6 +131,7 @@ export abstract class ExternalAgentHost<TAgent extends ManagedAgent> implements 
     this.effectPrefix = options.effectPrefix ?? 'externalAgentHost'
     this.label = label
     this.harness = options.harness
+    this.announceBeforeBind = options.announceBeforeBind === true
     // One registration per profile, never per agent: the inbox and turn-boundary
     // folds are read by every session this factory owns.
     ctx.sessionProjections.register(inboxProjectionDefinition)
@@ -267,7 +285,7 @@ export abstract class ExternalAgentHost<TAgent extends ManagedAgent> implements 
             eventState: coldRead.eventState,
           }))
           stored = { handle, storedCount: persisted.length + closers.length }
-          await this.appendUnstoredSuffix(stored, preparation.session)
+          await this.appendUnstoredSuffix(stored, preparation.session, preparation.session.seq)
         } finally {
           await unfollowOwner()
         }
@@ -435,25 +453,34 @@ export abstract class ExternalAgentHost<TAgent extends ManagedAgent> implements 
       return {
         agent,
         signal: abort.signal,
-        publish: async (source) => {
+        announce: async (source, deferred) => {
           publication = Promise.withResolvers<void>()
           try {
             assertLive()
-            detachSession = agent.ctx.sessions.enter(session)
-            // The mounted backend routes announced live events into the active
-            // write handle by session id; the driver only owns the handle itself.
+            // A deferred entry holds dispatch: creation listeners and the
+            // handshake append normally, but no observer sees an event before
+            // the bind commits, so a refused handshake rolls back without
+            // residue. Otherwise the mounted backend routes live events into
+            // the active write handle by session id from here on.
+            detachSession = agent.ctx.sessions.enter(session, { deferPublication: deferred })
             detachAgent = hostCtx.agents.enter(agent, parentAgent)
             agent.ctx.sessions.announce(session)
             assertLive()
             // The registry's creation edge owns `agent/created` and awaits its
-            // listeners; teardown above waits for this publication to settle.
+            // listeners; teardown above waits for this announcement to settle.
             await hostCtx.agents.announce(agent, source, abort.signal)
             assertLive()
-            return { agent, dispose }
           } finally {
             publication.resolve()
             publication = undefined
           }
+        },
+        publish: (deferred) => {
+          assertLive()
+          // The commit flush stored the log below store entry; publication
+          // dispatches the held appends, which persistence writes after it.
+          if (deferred) agent.ctx.sessions.publish(session)
+          return Promise.resolve({ agent, dispose })
         },
         dispose,
       }
@@ -498,13 +525,28 @@ export abstract class ExternalAgentHost<TAgent extends ManagedAgent> implements 
         try {
           const setupCommit = await raceAbort(setup?.(prepared.agent.ctx, prepared.agent), prepared.signal, id)
           setupCommit?.commit()
-          // Binding runs unpublished: a rejected harness handshake (unresumable
-          // thread, refused session) rolls the transaction back without ever
-          // publishing either identity.
+          if (this.announceBeforeBind) {
+            // The creation edges run before the handshake so `agent/created`
+            // listeners install the agent's scoped tools (delegation, Team)
+            // before the driver snapshots the tool set into `session/new` or
+            // `thread/start`. Dispatch stays held through the handshake, so a
+            // rejected one rolls the announcement back with nothing stored or
+            // observed. The harness record precedes store entry, so the
+            // commit flush stores it.
+            this.recordHarness(session)
+            const entered = session.seq
+            await prepared.announce(source, true)
+            await raceAbort(prepared.agent.bind(prepared.signal), prepared.signal, id)
+            await this.appendUnstoredSuffix(stored, session, entered)
+            return await prepared.publish(true)
+          }
+          // Binding runs unpublished: a rejected handshake rolls the
+          // transaction back without ever publishing either identity.
           await raceAbort(prepared.agent.bind(prepared.signal), prepared.signal, id)
           this.recordHarness(session)
-          await this.appendUnstoredSuffix(stored, session)
-          return await prepared.publish(source)
+          await this.appendUnstoredSuffix(stored, session, session.seq)
+          await prepared.announce(source, false)
+          return await prepared.publish(false)
         } catch (error: unknown) {
           // Teardown owns inbox cleanup and may already have removed its projection.
           prepared.agent.cancel({ kind: 'disposed' }, { keepInbox: true })
@@ -552,21 +594,21 @@ export abstract class ExternalAgentHost<TAgent extends ManagedAgent> implements 
   }
 
   /**
-   * Durably store the session events appended since the last stored cursor.
-   * Pre-publication appends (constructor seed markers, setup-window events,
-   * driver binding records) never re-emit through `session/event`, so
-   * publication must flush them through the handle before live events start
-   * routing into it.
+   * Durably store the session events appended before store entry and not yet
+   * stored: constructor seed markers, setup-window events, and the harness
+   * record. Nothing dispatches them on `session/event`, so the commit flush
+   * stores them through the handle before publication dispatches the held
+   * appends that follow.
    * @param stored - the session's owned handle and stored cursor, if any.
    * @param session - the unpublished session whose suffix is stored.
+   * @param until - the log length at store entry; later events reach
+   *   persistence through the held dispatch.
    */
-  private async appendUnstoredSuffix(stored: StoredSession | undefined, session: Session): Promise<void> {
+  private async appendUnstoredSuffix(stored: StoredSession | undefined, session: Session, until: number): Promise<void> {
     if (stored === undefined) return
     // oxlint-disable-next-line typescript/no-deprecated -- Existing Session history read; migration deferred.
-    const suffix = session.snapshotEvents(SessionLogOffset(stored.storedCount))
+    const suffix = session.snapshotEvents(SessionLogOffset(stored.storedCount), SessionLogOffset(until))
     if (suffix.length > 0) await stored.handle.append(suffix)
-    // Advance by what was stored, not to `session.seq`: an event appended
-    // during the await must stay unstored for the next flush.
     stored.storedCount += suffix.length
   }
 }

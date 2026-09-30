@@ -23,6 +23,7 @@ export const KNOWN_SESSION_EVENT_TYPES: ReadonlySet<string> = new Set([
   'agent-acp/session',
   'agent-codex/thread',
   'agent-preset/selected',
+  'agent-tool-bridge/exposed',
   'agent/harness',
   'agent/inbox/spliced',
   'approval/asked',

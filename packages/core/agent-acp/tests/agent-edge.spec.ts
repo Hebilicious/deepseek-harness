@@ -462,8 +462,15 @@ describe('session-scoped permission overrides', () => {
     expect((sets[0] as { value: string }).value).toBe('ask')
     expect(warn.mock.calls.map(call => String(call[0])).some(message => message.includes('read-only'))).toBe(true)
 
+    // `never` keeps a read-only session in its non-editing mode; only full
+    // access selects the auto-approve mode.
     setApprovalPolicy(agent.session, 'never')
     send(agent, 'never turn')
+    await agent.whenIdle()
+    sets = await paramsOf(bench.recordFile, 'session/set_config_option')
+    expect(sets.map(params => (params as { value: string }).value)).toEqual(['ask'])
+    setSandboxMode(agent.session, 'danger-full-access')
+    send(agent, 'full-access turn')
     await agent.whenIdle()
     sets = await paramsOf(bench.recordFile, 'session/set_config_option')
     expect(sets.map(params => (params as { value: string }).value)).toEqual(['ask', 'bypass'])

@@ -352,6 +352,7 @@
       "@deepseek-ai/dsh-agent-preset": ["./packages/preset/agent-preset/src"],
       "@deepseek-ai/dsh-agent-preset-registry": ["./packages/preset/agent-preset-registry/src"],
       "@deepseek-ai/dsh-agent-preset-registry/invariant": ["./packages/preset/agent-preset-registry/src/invariant.ts"],
+      "@deepseek-ai/dsh-agent-tool-bridge": ["./packages/core/agent-tool-bridge/src"],
       "@deepseek-ai/dsh-agent-tool-presentation": ["./packages/core/agent-tool-presentation/src"],
       "@deepseek-ai/dsh-anonymous-user-id": ["./packages/identity/anonymous-user-id/src"],
       "@deepseek-ai/dsh-app-boot": ["./packages/boot/app-boot/src"],

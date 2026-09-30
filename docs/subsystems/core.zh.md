@@ -52,6 +52,38 @@ interface AgentHandle {
 
 `AgentFactory` 是注册表背后的创建接口：驱动器通过 `ctx.agents.registerHarness({ id, name, factory })` 注册一个 harness，进程内循环也以同样方式注册内置的 `dsh` harness，因此消费方使用 `ctx.agents` 时无需依赖具体的驱动器包。一次部署可以同时挂载多个 harness，并在 `create`/`resume` 时指定其中一个；每个会话都会以 `agent/harness` 事件记录拥有它的 harness，resume 依据该记录路由，因此一个会话不会由第二个 harness 继续。运行时子 Agent 的创建方设置 `options.parentAgent`；注册表把 options 与调用方 Context 传给工厂，不从其中一项推导另一项。确切的 `create`/`resume` 签名及回滚约定见下方[生成区块](#ctxagents--agentregistry)。
 
+`ctx.agents.harnesses()` 把每个已挂载 harness 列为一个 `AgentHarness`。`hostsLoopComposition` 标记其会话消费循环作用域组合的 harness；循环 harness 与 `setFactory()` 声明了它，调用方在安装 persona、工具过滤器或 output schema 之前检查它。`resolveHarness(harness, 'create' | 'resume')` 返回一次调用会落到的 harness——指定的 harness；否则对 resume 取未记录日志的所有者；再否则取唯一挂载的 harness——因此调用方无需重复注册表的回退逻辑。
+
+Source: [`packages/core/agent/src/types.ts`](../../packages/core/agent/src/types.ts)
+
+```ts type-equiv
+/** One agent harness a deployment can create sessions with, as consumers see it. */
+interface AgentHarness {
+  /** Stable id carried on create, resume, and the session's durable record. */
+  readonly id: HarnessId
+  /** Human-readable name for a harness picker. */
+  readonly name: string
+  /** One sentence on what runs the session, for a harness picker. */
+  readonly description?: string
+  /**
+   * The catalog-only LLM provider route that lists this harness's own models.
+   * A session under this harness selects only from that route, and no other
+   * harness selects from it. Absent for a harness that sends its requests
+   * through the deployment's LLM providers, which may use every route no
+   * harness claims.
+   */
+  readonly modelProvider?: string
+  /**
+   * Whether this harness's sessions consume the in-process loop's scoped
+   * composition — `tools.restrict()`, `systemPrompt` sections, and the
+   * structured-output runtime — so per-session persona, tool filters, and
+   * output schemas take effect. Absent for a harness that owns its own prompt
+   * and tool policy.
+   */
+  readonly hostsLoopComposition?: boolean
+}
+```
+
 <a id="the-agent-handle"></a>
 
 ## Agent 句柄
@@ -362,6 +394,82 @@ type SessionStartSource = 'startup' | 'resume' | 'clear' | 'compact'
 唯一属于核心的流水线编写类型：每个已注册工具*是什么*——一个面向模型的 `ToolSchema` 加上一个 `execute` 函数，以及可选的最终内容回调与 UI 回调。工具作者很少手动构造它（`defineTool` DSL 会使用类型化参数构建），但它是注册表存储并由循环用于分发的约定。
 
 其完整字段、`defineTool`/`ValueSchemaSpec`/`ParameterSchemaSpec` 类型化 schema DSL、`ToolExecution`/`ToolExecutionResult` waterfall 类型，以及工具展示 UI 类型都在 **[tools.md](tools.zh.md)** 中。
+
+## 工具桥接
+
+`dsh-agent-tool-bridge` 把外部 harness 驱动的 agent 在其作用域内可见的工具投影到每个 agent 一个持 bearer 凭证的回环 MCP 端点上——ACP 驱动器把它作为 `session/new`/`session/load` 的 `mcpServers` 条目传递，Codex 驱动器则作为 `thread/start`/`thread/resume` 的 `mcp_servers.*` 配置覆盖传递。`BridgedTool` 是面向模型的投影，`BridgeToolCall` 是端点 MCP 处理器运行的一次调用，`BridgedToolResult` 是其完成结果，`BridgedCompletion` 是驱动器 `tool/result` 用于关联的留存记录，`BridgeMcpEndpoint` 是驱动器交给 harness 的连接记录。
+
+来源：[`packages/core/agent-tool-bridge/src/types.ts`](../../packages/core/agent-tool-bridge/src/types.ts)
+
+```ts type-equiv
+/** One dsh tool projected for an external harness: model-facing fields only. */
+interface BridgedTool {
+  /** The registered tool name, as `tools/call` names it. */
+  readonly name: string
+  /** The tool's model-facing description. */
+  readonly description: string
+  /** The tool's JSON Schema arguments object. */
+  readonly inputSchema: Record<string, unknown>
+}
+```
+
+```ts type-equiv
+/** One tool invocation the endpoint's MCP handler asks the bridge to run. */
+interface BridgeToolCall {
+  /** The tool name to execute; must be a member of the agent's bridged set. */
+  readonly name: string
+  /** Parsed call arguments; the tool's own schema validates them. */
+  readonly arguments: unknown
+  /** Caller cancellation, forwarded to the tool execution. */
+  readonly signal: AbortSignal
+}
+```
+
+```ts type-equiv
+/** The settled outcome of one bridged call, in dsh content blocks. */
+interface BridgedToolResult {
+  /** Model-facing content, or the materialized error text on failure. */
+  readonly content: ContentBlock[]
+  /** Whether the call failed — policy denial, guard rejection, or tool error. */
+  readonly isError: boolean
+}
+```
+
+```ts type-equiv
+/**
+ * One settled bridged execution retained for transcript correlation. The
+ * external driver reports the harness's own `tool/call`/`tool/result` pair;
+ * the bridge keeps the dsh execution's presentation `meta` so the driver's
+ * `tool/result` can carry the same card payload an in-process call logs.
+ */
+interface BridgedCompletion {
+  /** The dsh tool the call ran — the name `tool/call` is logged under. */
+  readonly name: string
+  /** Canonical JSON of the call's arguments: object keys sorted recursively. */
+  readonly argumentsJson: string
+  /** The execution's `presentationMeta` projection, when the tool produced one. */
+  readonly meta?: JsonValue
+}
+```
+
+```ts type-equiv
+/**
+ * One opened MCP endpoint, exactly as an ACP `mcpServers` http entry needs it:
+ * the URL plus the header set the client must send. `close` revokes the
+ * endpoint's credential and stops serving it; the owning agent's disposal
+ * closes it implicitly.
+ */
+interface BridgeMcpEndpoint {
+  /** The MCP server name the endpoint serves under. */
+  readonly name: string
+  /** Loopback URL the client connects to. */
+  readonly url: string
+  /** HTTP headers the client must attach to every request. */
+  readonly headers: readonly { name: string; value: string }[]
+  /** Revoke the endpoint's credential and close its in-flight exchanges. */
+  close(): Promise<void>
+}
+```
 
 ## 全仓通用类型模式
 
@@ -724,6 +832,16 @@ harnesses(): readonly AgentHarness[]
 harnessForUnrecordedSession(): HarnessId | undefined
 
 /**
+ * The mounted harness one {@link create} or {@link resume} call resolves to,
+ * without making the call: the named harness, else for a resume
+ * {@link harnessForUnrecordedSession}, else the sole mounted harness.
+ * @param harness - the requested harness id, or `undefined`.
+ * @param operation - `resume` applies the unrecorded-log owner before the sole-harness fallback.
+ * @returns the resolved harness, or `undefined` when the call would refuse.
+ */
+resolveHarness(harness: HarnessId | undefined, operation: 'create' | 'resume'): AgentHarness | undefined
+
+/**
  * Create and publish a new agent through the registered factory.
  * Distinct from {@link register} (which records an already-constructed
  * agent): this constructs the agent and its session. Rejects if no factory is
@@ -828,6 +946,52 @@ roots(): Agent[]
 ```
 
 Source: [`packages/core/agent/src/index.ts`](../../packages/core/agent/src/index.ts)
+
+<a id="ctxagenttoolbridge--agenttoolbridge"></a>
+
+### `ctx.agentToolBridge` — `AgentToolBridge`
+
+The `agentToolBridge` service (`ctx.agentToolBridge`). Owns one shared loopback HTTP listener; every openMcpEndpoint call attaches one bearer-credentialed endpoint to it. The listener binds lazily on the first opened endpoint and closes with the service.
+
+```ts cordis-catalog
+/**
+ * Expose `agent`'s bridged tools on the shared loopback listener under a
+ * fresh bearer credential, and record `agent-tool-bridge/exposed` on the
+ * agent's session. The endpoint answers `tools/list` from the agent's live
+ * scope on every request and routes `tools/call` through the shared policy
+ * pipeline with the request's abort signal fused with the endpoint's.
+ * `close()` revokes the credential and aborts in-flight calls; the agent's
+ * `agent/disposed` and the service's disposal close it implicitly.
+ * @param agent - the agent the endpoint serves.
+ * @returns the URL and headers a client connects with, plus `close()`.
+ */
+async openMcpEndpoint(agent: Agent): Promise<BridgeMcpEndpoint>
+
+/**
+ * Resolve a harness-reported tool name to the agent's bridged dsh tool:
+ * `mcp__<serverName>__<tool>` where `<tool>` is currently bridged for
+ * `agent`. Excluded, unscoped, and unrecognized names return undefined, so
+ * the caller logs them exactly as the harness reported.
+ * @param agent - the agent the harness is driving.
+ * @param reported - the tool name the harness reported for the call.
+ * @returns the dsh tool name, or undefined when the call is not bridged.
+ */
+bridgedToolName(agent: Agent, reported: string): string | undefined
+
+/**
+ * Consume the oldest settled bridged execution for `agent` whose dsh tool
+ * name and arguments match, so a harness-reported `tool/result` can carry
+ * the execution's `meta`. Arguments compare as canonical JSON — object key
+ * order is irrelevant — and identical calls correlate first-in-first-out.
+ * @param agent - the agent the harness is driving.
+ * @param tool - the dsh tool name {@link bridgedToolName} resolved.
+ * @param argumentsJson - the serialized arguments the harness reported.
+ * @returns the settled completion, or undefined when none matches.
+ */
+takeCompletion(agent: Agent, tool: string, argumentsJson: string): BridgedCompletion | undefined
+```
+
+Source: [`packages/core/agent-tool-bridge/src/index.ts`](../../packages/core/agent-tool-bridge/src/index.ts)
 
 <a id="ctxcodexappserver--codexappserver"></a>
 
@@ -1246,4 +1410,26 @@ One session committed a different agent preset to its durable log. Consumers inv
 ```
 
 Source: [`packages/preset/agent-preset-registry/src/types.ts`](../../packages/preset/agent-preset-registry/src/types.ts)
+
+<a id="agents-events"></a>
+
+### `agents/*` events
+
+<a id="agentsharnesses-changed--emit"></a>
+
+#### `agents/harnesses-changed` — emit
+
+The mounted agent-harness set changed: a harness registered with or left the registry. Consumers that enumerate `ctx.agents.harnesses()` re-read it.
+
+```ts cordis-catalog
+/**
+ * The mounted agent-harness set changed: a harness registered with or left
+ * the registry. Consumers that enumerate `ctx.agents.harnesses()` re-read
+ * it.
+ * @mode emit
+ */
+'agents/harnesses-changed'(): void
+```
+
+Source: [`packages/core/agent/src/runtime-types.ts`](../../packages/core/agent/src/runtime-types.ts)
 <!-- END GENERATED cordis-surface -->

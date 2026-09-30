@@ -297,6 +297,40 @@ export interface Config {
 ```
 <!-- END GENERATED config-catalog:@deepseek-ai/dsh-agent-preset-registry -->
 
+<!-- BEGIN GENERATED config-catalog:@deepseek-ai/dsh-agent-tool-bridge -->
+<a id="deepseek-aidsh-agent-tool-bridge"></a>
+
+## `@deepseek-ai/dsh-agent-tool-bridge`
+
+- `inject`: `tools`
+- `source`: [`packages/core/agent-tool-bridge/src/types.ts:73`](../packages/core/agent-tool-bridge/src/types.ts)
+
+```ts config-catalog
+/** Plugin config. Omitted fields take the defaults named on each member. */
+export interface Config {
+  /** Tool names withheld from every bridged agent (default none). */
+  exclude?: string[]
+  /** Loopback interface the shared listener binds (default `127.0.0.1`). */
+  host?: string
+  /** TCP port the shared listener binds; `0` (default) asks the OS for one. */
+  port?: number
+  /**
+   * MCP server identity presented to clients (default `dsh`). It joins the
+   * harness-visible tool name `mcp__<serverName>__<tool>` and Codex's
+   * `mcp_servers.<serverName>` config key, so empty strings, `.`, and `__`
+   * are rejected.
+   */
+  serverName?: string
+  /**
+   * Settled bridged calls retained per agent so a harness-reported
+   * `tool/result` can pick up the dsh execution's `meta` (default 100). The
+   * oldest entry is dropped once the limit is reached.
+   */
+  correlationLimit?: number
+}
+```
+<!-- END GENERATED config-catalog:@deepseek-ai/dsh-agent-tool-bridge -->
+
 <!-- BEGIN GENERATED config-catalog:@deepseek-ai/dsh-agent-tool-presentation -->
 <a id="deepseek-aidsh-agent-tool-presentation"></a>
 
@@ -976,7 +1010,7 @@ export interface Config {
 ## `@deepseek-ai/dsh-experimental-agent-team`
 
 - `inject`: `agents` · `sessions` · `sessionPersistence` · `sessionProjections` · `subagents`
-- `source`: [`packages/experimental/agent-team/src/types.ts:152`](../packages/experimental/agent-team/src/types.ts)
+- `source`: [`packages/experimental/agent-team/src/types.ts:153`](../packages/experimental/agent-team/src/types.ts)
 
 ```ts config-catalog
 /** Team-service deployment limits. */
@@ -3283,7 +3317,7 @@ export type JournalMode = 'wal' | 'delete' | 'truncate' | 'persist'
 ## `@deepseek-ai/dsh-subagent`
 
 - `refs`: `Volatile` (`@deepseek-ai/cordis`)
-- `source`: [`packages/subagent/subagent/src/index.ts:192`](../packages/subagent/subagent/src/index.ts)
+- `source`: [`packages/subagent/subagent/src/index.ts:200`](../packages/subagent/subagent/src/index.ts)
 
 ```ts config-catalog
 /** Host configuration for continuable subagent capacity. */
@@ -4010,12 +4044,12 @@ export interface Config {
 
 - `inject`: `tools` · `subagents` · `systemPrompt` · `sessionProjections`
 - `refs`: [`AgentOptions`](subsystems/core.md)
-- `source`: [`packages/subagent/tool-subagent/src/index.ts:48`](../packages/subagent/tool-subagent/src/index.ts)
+- `source`: [`packages/subagent/tool-subagent/src/index.ts:49`](../packages/subagent/tool-subagent/src/index.ts)
 
 ```ts config-catalog
 /** Config: which registered provider this tool delegates to, plus child defaults. */
 export interface Config {
-  /** The `ctx.subagents` provider name to start runs on (e.g. `spawn`, `acp`). */
+  /** The `ctx.subagents` provider name to start runs on (e.g. `spawn`, `dsh-sdk`). */
   provider: string
   /**
    * Model-facing tool name (default `subagent`). Each loaded instance must use
@@ -4059,6 +4093,15 @@ export interface Config {
     /** Global tool names removed from the child. */
     deny?: string[]
   }
+  /**
+   * Agent-runtime allowlist for the model-facing `harness` parameter. When the
+   * provider supports harness selection, the parameter offers the mounted
+   * harnesses in this list (default: every mounted harness). Requires the
+   * provider's `harness` capability. Configured ids that never mount are
+   * warned about at tool registration; a call naming an unlisted runtime
+   * rejects at execution.
+   */
+  harnesses?: string[]
   /**
    * Maximum child depth: a non-negative safe integer (`0` forbids delegation),
    * or `'provider-managed'` to send no cap. A numeric cap

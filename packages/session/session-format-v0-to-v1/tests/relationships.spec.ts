@@ -280,6 +280,64 @@ describe('released v1 whole-artifact relationships', () => {
     }])).toThrow(/TOOL_NOT_STARTED repair/)
   })
 
+  it('accepts an external-harness tool lifecycle mid-stream', () => {
+    // The shape an external driver commits when a harness-reported call lands
+    // while assistant text is streaming: the open attempt's message carries
+    // the text plus the advertised tool-call block, the tool/call follows,
+    // and post-call text commits as a second message.
+    const rows = [
+      { type: 'turn/start', seq: 0, time: 1, data: { turn: 1 } },
+      { type: 'step/start', seq: 1, time: 2, data: { turn: 1, step: 1 } },
+      {
+        type: 'request/header', seq: 2, time: 3,
+        data: { header: { config: { provider: 'codex', model: 'gpt-5' } }, reason: 'initial' },
+      },
+      {
+        type: 'assistant/message', seq: 3, time: 4, surfaceOp: 'append',
+        data: {
+          turn: 1, step: 1,
+          message: {
+            id: 'pre-call', role: 'assistant',
+            content: [
+              { type: 'text', text: 'running ' },
+              { type: 'tool-call', id: 'c1', name: 'shell', arguments: '{"command":"true"}' },
+            ],
+            source: { kind: 'model', provider: 'codex', model: 'gpt-5' },
+          },
+        },
+      },
+      {
+        type: 'tool/call', seq: 4, time: 5,
+        data: { turn: 1, step: 1, callId: 'c1', name: 'shell', arguments: '{"command":"true"}' },
+      },
+      {
+        type: 'tool/result', seq: 5, time: 6, surfaceOp: 'append',
+        data: {
+          turn: 1, step: 1,
+          message: {
+            id: 'result-c1', role: 'user',
+            content: [{ type: 'tool-result', toolCallId: 'c1', content: [], isError: false }],
+            source: { kind: 'tool', callId: 'c1' },
+          },
+        },
+      },
+      {
+        type: 'assistant/message', seq: 6, time: 7, surfaceOp: 'append',
+        data: {
+          turn: 1, step: 1,
+          message: {
+            id: 'post-call', role: 'assistant',
+            content: [{ type: 'text', text: 'done' }],
+            source: { kind: 'model', provider: 'codex', model: 'gpt-5' },
+          },
+        },
+      },
+      { type: 'step/end', seq: 7, time: 8, data: { turn: 1, step: 1 } },
+      { type: 'turn/end', seq: 8, time: 9, data: { turn: 1, reason: { kind: 'completed' } } },
+    ]
+    expect(decode(rows).events).toEqual(rows)
+  })
+
   it('enforces retry mode, failure, route, and policy-chain relationships', () => {
     const prefix = [
       { type: 'turn/start', seq: 0, time: 1, data: { turn: 1 } },

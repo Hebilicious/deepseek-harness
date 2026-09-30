@@ -29,7 +29,7 @@ kind: "package-reference"
 
 ### 创建或恢复 agent
 
-`ctx.agents.create()` 在一个身份下构建全新 agent 与会话；`ctx.agents.resume()` 加载持久化会话并在此基础上重建 agent。两者都委托给为所请求 harness 注册的工厂，并返回 `AgentHandle`——唯一能拆除该 agent 的对象。在任一操作的 options 中设置 `parentAgent`，可使结果成为运行时子级；省略它则得到运行时根级。`get(id)`、`list()` 与 `roots()` 用于查找实时 agent；`isOwnedBy(id, parent)` 用于检验这项确切的实时所有权关系。
+`ctx.agents.create()` 在一个身份下构建全新 agent 与会话；`ctx.agents.resume()` 加载持久化会话并在此基础上重建 agent。两者都委托给为所请求 harness 注册的工厂，并返回 `AgentHandle`——唯一能拆除该 agent 的对象。在任一操作的 options 中设置 `parentAgent`，可使结果成为运行时子级；省略它则得到运行时根级。`get(id)`、`list()` 与 `roots()` 用于查找实时 agent；`isOwnedBy(id, parent)` 用于检验这项确切的实时所有权关系。`harnesses()` 列出已挂载的 harness，`agents/harnesses-changed` 在该集合变化时触发，`harnessesServing(harnesses, provider)` 将其过滤为能服务某个 LLM 提供方路由的 harness。
 
 ```text
 const handle = await ctx.agents.create({
@@ -95,6 +95,7 @@ await handle.agent.whenIdle()
 | 文件 | 职责 |
 |---|---|
 | [`src/index.ts`](src/index.ts) | 插件入口：`AgentRegistry`、harness 工厂注册表、发起方作用域、`CreateAgentOptions`/`ResumeAgentOptions` |
+| [`src/harness.ts`](src/harness.ts) | `agent/harness` 持久记录与 projection、`harnessOwning`/`recordedHarness` 查询、`harnessesServing` 路由过滤、`LOOP_HARNESS_ID` |
 | [`src/runtime-types.ts`](src/runtime-types.ts) | `Agent`、结构化 `Inbox`、`AgentStatus` 与 `agent/*` 事件声明 |
 | [`src/types.ts`](src/types.ts) | `AgentOptions`、取消原因与收件箱投影词汇 |
 | [`src/dispatch.ts`](src/dispatch.ts) | `agentEvents` 融合分发器与 `assembleContextFor(agent)` |

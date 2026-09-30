@@ -29,7 +29,7 @@ Mount `dsh-agent` wherever live agents exist: it provides `ctx.agents` and the `
 
 ### Create or resume an agent
 
-`ctx.agents.create()` builds a fresh agent and session under one identity; `ctx.agents.resume()` loads a persisted session and rebuilds the agent on it. Both delegate to the factory registered for the requested harness and return an `AgentHandle` — the only object that can tear that agent down. Set `parentAgent` in either operation's options to make the result a runtime child; omit it for a runtime root. `get(id)`, `list()`, and `roots()` find live agents, and `isOwnedBy(id, parent)` tests that exact live relation.
+`ctx.agents.create()` builds a fresh agent and session under one identity; `ctx.agents.resume()` loads a persisted session and rebuilds the agent on it. Both delegate to the factory registered for the requested harness and return an `AgentHandle` — the only object that can tear that agent down. Set `parentAgent` in either operation's options to make the result a runtime child; omit it for a runtime root. `get(id)`, `list()`, and `roots()` find live agents, and `isOwnedBy(id, parent)` tests that exact live relation. `harnesses()` lists the mounted harnesses, `agents/harnesses-changed` fires when that set changes, and `harnessesServing(harnesses, provider)` filters them to those able to serve an LLM provider route.
 
 ```text
 const handle = await ctx.agents.create({
@@ -95,6 +95,7 @@ The package is built on one separation: the public `Agent` surface and registry 
 | File | Role |
 |---|---|
 | [`src/index.ts`](src/index.ts) | Plugin entry: `AgentRegistry`, harness factory registry, initiator scope, `CreateAgentOptions`/`ResumeAgentOptions` |
+| [`src/harness.ts`](src/harness.ts) | `agent/harness` durable record and projection, `harnessOwning`/`recordedHarness` lookups, `harnessesServing` route filter, `LOOP_HARNESS_ID` |
 | [`src/runtime-types.ts`](src/runtime-types.ts) | `Agent`, structural `Inbox`, `AgentStatus`, and the `agent/*` event declarations |
 | [`src/types.ts`](src/types.ts) | `AgentOptions`, cancellation causes, and inbox projection vocabulary |
 | [`src/dispatch.ts`](src/dispatch.ts) | `agentEvents` fused dispatcher and `assembleContextFor(agent)` |

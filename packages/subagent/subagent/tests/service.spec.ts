@@ -1,6 +1,7 @@
 import { describe, expect, expectTypeOf, it, onTestFinished, vi } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'
-import { type Agent } from '@deepseek-ai/dsh-agent'
+import AgentRegistry, { HarnessId } from '@deepseek-ai/dsh-agent'
+import type { Agent, AgentFactory } from '@deepseek-ai/dsh-agent'
 
 import { HarnessError, ReasoningEffortId } from '@deepseek-ai/dsh-llm'
 import { carrierKeyOf } from '@deepseek-ai/dsh-scope'
@@ -25,8 +26,12 @@ function fakeParent(id = 'parent-1'): Agent {
   return { id: SessionId(id) } as unknown as Agent
 }
 
-const ALL_CAPS: SubagentCapabilities = { agentOptions: true, outputSchema: true, depthLimit: true, toolFilter: true, persona: true }
-const NO_CAPS: SubagentCapabilities = { agentOptions: false, outputSchema: false, depthLimit: false, toolFilter: false, persona: false }
+const ALL_CAPS: SubagentCapabilities = {
+  agentOptions: true, outputSchema: true, depthLimit: true, toolFilter: true, persona: true, harness: true,
+}
+const NO_CAPS: SubagentCapabilities = {
+  agentOptions: false, outputSchema: false, depthLimit: false, toolFilter: false, persona: false, harness: false,
+}
 
 function baseRequest(overrides: Partial<SubagentStartRequest> = {}): SubagentStartRequest {
   return {
@@ -189,6 +194,7 @@ describe('SubagentRuntime', () => {
     ['depthLimit', { maxDepth: 1 }],
     ['toolFilter', { toolFilter: { deny: ['bash'] } }],
     ['persona', { persona: 'reviewer' }],
+    ['harness', { harness: HarnessId('dsh') }],
   ] as const)('rejects unsupported %s before provider startup', async (_capability, override) => {
     const { subagents } = await service()
     const provider = new StubProvider('weak', NO_CAPS)
@@ -196,6 +202,56 @@ describe('SubagentRuntime', () => {
     await expect(subagents.start('weak', baseRequest(override)))
       .rejects.toMatchObject({ code: 'UNSUPPORTED_CAPABILITY' })
     expect(provider.startCount).toBe(0)
+  })
+
+  /** Mount the Agent registry with one rejecting harness factory. */
+  async function serviceWithHarnesses(ids: string[]): Promise<{ ctx: Context; subagents: SubagentRuntime }> {
+    const ctx = new Context()
+    await ctx.plugin(SessionProjectionRegistry)
+    await ctx.plugin(AgentRegistry)
+    await ctx.plugin(SubagentRuntime)
+    const factory: AgentFactory = {
+      createAgent: () => Promise.reject(new Error('unused')),
+      resume: () => Promise.reject(new Error('unused')),
+    }
+    for (const id of ids) ctx.agents.registerHarness({ id: HarnessId(id), name: id, factory })
+    return { ctx, subagents: ctx.subagents }
+  }
+
+  it('rejects an explicit harness when no agents service can resolve it', async () => {
+    const { subagents } = await service()
+    const provider = new StubProvider('capable')
+    subagents.registerProvider(provider)
+    await expect(subagents.start('capable', baseRequest({ harness: HarnessId('dsh') })))
+      .rejects.toMatchObject({ code: 'INVALID_REQUEST' })
+    expect(provider.startCount).toBe(0)
+  })
+
+  it('rejects an unmounted harness id before provider startup', async () => {
+    const { subagents } = await serviceWithHarnesses(['dsh'])
+    const provider = new StubProvider('capable')
+    subagents.registerProvider(provider)
+    await expect(subagents.start('capable', baseRequest({ harness: HarnessId('foreign') })))
+      .rejects.toThrow('agent harness "foreign" is not mounted')
+    expect(provider.startCount).toBe(0)
+  })
+
+  it('names no harness in the rejection when the registry is mounted but empty', async () => {
+    const { subagents } = await serviceWithHarnesses([])
+    const provider = new StubProvider('capable')
+    subagents.registerProvider(provider)
+    await expect(subagents.start('capable', baseRequest({ harness: HarnessId('dsh') })))
+      .rejects.toThrow('agent harness "dsh" is not mounted (mounted: none)')
+    expect(provider.startCount).toBe(0)
+  })
+
+  it('passes an explicit mounted harness choice through to the provider', async () => {
+    const { subagents } = await serviceWithHarnesses(['dsh', 'foreign'])
+    const provider = new StubProvider('capable')
+    subagents.registerProvider(provider)
+    const run = await subagents.start('capable', baseRequest({ harness: HarnessId('foreign') }))
+    await expect(run.result).resolves.toMatchObject({ stopReason: 'completed' })
+    expect(provider.lastRequest?.harness).toBe(HarnessId('foreign'))
   })
 
   it('validates depth and schema semantics before provider startup', async () => {

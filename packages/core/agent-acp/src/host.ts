@@ -37,6 +37,7 @@ export class AcpAgentHost extends ExternalAgentHost<AcpAgent> {
     super(ctx, acpPrefix(agentConfig.harness.id), {
       harness: agentConfig.harness,
       effectPrefix: `acpHarness.${agentConfig.harness.id}`,
+      announceBeforeBind: true,
     })
     ctx.sessionProjections.register(acpSessionProjection)
   }

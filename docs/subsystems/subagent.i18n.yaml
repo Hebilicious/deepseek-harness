@@ -3,17 +3,17 @@
 # After editing either side, bring the other along and re-record with:
 #   pnpm run verify-translation-pairing --write docs/subsystems/subagent.md
 /subagent:
-  en: 7ef8cafc02c317b5
-  zh: 1ccf8273c706b436
+  en: 8b298f91ce2a2d87
+  zh: 5a29440e8f546d88
 /subagent/two-kinds-of-capability-discovered-two-ways:
   en: 7be7cbc224948ed1
   zh: 6da4f61394ed900e
 /subagent/the-one-shot-start-request:
-  en: 37b7876d6f186642
-  zh: 196a9df4fca5a4fd
+  en: 11c46f8f27ebb716
+  zh: 64bdd23a46abc7e5
 /subagent/continuable-children-and-activations:
-  en: 6cc3f373d6ad49b2
-  zh: dd2cf41fbbc5fbe9
+  en: 9f9214a955407983
+  zh: f72797524a44c8b5
 /subagent/durable-enumeration-listchildren-listdescendants-and-their-entries:
   en: 5ff018408210d739
   zh: 909d4a1788d65629

@@ -35,7 +35,8 @@
   },
   "dependencies": {
     "@deepseek-ai/dsh-agent-acp": "workspace:*",
-    "@deepseek-ai/dsh-agent-codex": "workspace:*"
+    "@deepseek-ai/dsh-agent-codex": "workspace:*",
+    "@deepseek-ai/dsh-agent-tool-bridge": "workspace:*"
   },
   "peerDependencies": {
     "@deepseek-ai/cordis": "workspace:~"
@@ -43,6 +44,7 @@
   "devDependencies": {
     "@deepseek-ai/cordis": "workspace:~",
     "@deepseek-ai/dsh-agent-acp": "workspace:*",
-    "@deepseek-ai/dsh-agent-codex": "workspace:*"
+    "@deepseek-ai/dsh-agent-codex": "workspace:*",
+    "@deepseek-ai/dsh-agent-tool-bridge": "workspace:*"
   }
 }

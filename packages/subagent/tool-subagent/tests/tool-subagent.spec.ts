@@ -7,8 +7,9 @@ import Loader from '@deepseek-ai/cordis-plugin-loader'
 import { ToolCallId, ReasoningEffortId } from '@deepseek-ai/dsh-llm'
 import SystemPrompt from '@deepseek-ai/dsh-system-prompt'
 import ToolRuntime, { TOOL_ABORTED_BEFORE_DISPATCH } from '@deepseek-ai/dsh-tools'
-import { assembleContextFor, type Agent } from '@deepseek-ai/dsh-agent'
+import { assembleContextFor, HarnessId, type Agent } from '@deepseek-ai/dsh-agent'
 import AgentRegistry from '@deepseek-ai/dsh-agent'
+import type { AgentFactory } from '@deepseek-ai/dsh-agent'
 import AgentLoop from '@deepseek-ai/dsh-agent-loop'
 import { mountAgentLoopTestDependencies } from '@deepseek-ai/dsh-agent-loop-testkit'
 import JsonlSessionPersistence from '@deepseek-ai/dsh-session-persistence-jsonl'
@@ -38,6 +39,38 @@ async function projectedContext(): Promise<Context> {
   const ctx = new Context()
   await ctx.plugin(SessionProjectionRegistry)
   return ctx
+}
+
+/** A harness factory that must never run: schema tests assert routing metadata, not agent work. */
+const neverFactory: AgentFactory = {
+  createAgent: () => Promise.reject(new Error('test harness must not create')),
+  resume: () => Promise.reject(new Error('test harness must not resume')),
+}
+
+/** Mount the real tool stack plus the Agent registry carrying `harnessIds`. */
+async function harnessSetup(
+  toolConfig: tool.Config,
+  mockConfig: Partial<mock.Config>,
+  harnessIds: string[],
+): Promise<Context> {
+  const ctx = await projectedContext()
+  await ctx.plugin(SystemPrompt)
+  await ctx.plugin(ToolRuntime)
+  await ctx.plugin(AgentRegistry)
+  await ctx.plugin(SubagentRuntime)
+  for (const id of harnessIds) {
+    ctx.agents.registerHarness({ id: HarnessId(id), name: `Harness ${id}`, factory: neverFactory })
+  }
+  await mock.mountScriptedProvider(ctx, { name: 'mock', ...mockConfig })
+  await ctx.plugin(tool, toolConfig)
+  return ctx
+}
+
+/** The `harness` row of the registered subagent tool's parameter properties. */
+function harnessParameter(ctx: Context): { description?: string } | undefined {
+  const schema = ctx.tools.schemas().find(s => s.name === 'subagent')
+  const props = (schema?.parameters as { properties?: Record<string, unknown> } | undefined)?.properties ?? {}
+  return props['harness'] as { description?: string } | undefined
 }
 
 /**
@@ -119,6 +152,231 @@ describe('dsh-tool-subagent', () => {
     expect(ctx.subagents.getProvider('mock')).toBeDefined()
     const foreground = await callSubagent(ctx, { description: 'd', prompt: 'p' }, { agent: parent })
     expect(foreground.isError).toBe(false)
+  })
+
+  it('offers a harness parameter listing every mounted harness when the provider supports the choice', async () => {
+    const ctx = await harnessSetup(
+      { provider: 'mock' },
+      { capabilities: { harness: true } },
+      ['dsh', 'foreign'],
+    )
+    const parameter = harnessParameter(ctx)
+    expect(parameter?.description).toContain('"dsh"')
+    expect(parameter?.description).toContain('"foreign"')
+    expect(parameter?.description).toContain('Harness foreign')
+    // Without model selection the route hint must not name absent parameters.
+    expect(parameter?.description).toContain('only accepts a child already configured for that route')
+  })
+
+  it('omits the harness parameter when one or zero harnesses are offerable', async () => {
+    const sole = await harnessSetup({ provider: 'mock' }, { capabilities: { harness: true } }, ['dsh'])
+    expect(harnessParameter(sole)).toBeUndefined()
+    // A provider without the capability offers nothing even with several mounted.
+    const incapable = await harnessSetup({ provider: 'mock' }, {}, ['dsh', 'foreign'])
+    expect(harnessParameter(incapable)).toBeUndefined()
+  })
+
+  it('passes the model-facing harness choice through to the provider', async () => {
+    let chosen: unknown
+    const ctx = await harnessSetup(
+      { provider: 'mock' },
+      { capabilities: { harness: true }, onStart: (request) => { chosen = request.harness } },
+      ['dsh', 'foreign'],
+    )
+    const result = await callSubagent(ctx, {
+      description: 'd', prompt: 'p', run_in_background: false, harness: 'foreign',
+    })
+    expect(result.isError).toBe(false)
+    expect(chosen).toBe(HarnessId('foreign'))
+  })
+
+  it('rejects a harness argument the live allowlist does not admit', async () => {
+    // The schema omits the parameter when the allowlist leaves one choice, but
+    // the validator admits undeclared keys — enforcement lives in execute().
+    const ctx = await harnessSetup(
+      { provider: 'mock', harnesses: ['dsh'] },
+      { capabilities: { harness: true } },
+      ['dsh', 'foreign'],
+    )
+    expect(harnessParameter(ctx)).toBeUndefined()
+
+    const denied = await callSubagent(ctx, {
+      description: 'd', prompt: 'p', run_in_background: false, harness: 'foreign',
+    })
+    expect(denied.isError).toBe(true)
+    expect(text(denied)).toContain('agent runtime "foreign" is not available')
+
+    let chosen: unknown
+    const allowed = await harnessSetup(
+      { provider: 'mock', harnesses: ['dsh'] },
+      { capabilities: { harness: true }, onStart: (request) => { chosen = request.harness } },
+      ['dsh', 'foreign'],
+    )
+    const result = await callSubagent(allowed, {
+      description: 'd', prompt: 'p', run_in_background: false, harness: 'dsh',
+    })
+    expect(result.isError).toBe(false)
+    expect(chosen).toBe(HarnessId('dsh'))
+  })
+
+  it('rejects a harness argument when the provider cannot select a harness', async () => {
+    const ctx = await harnessSetup({ provider: 'mock' }, {}, ['dsh', 'foreign'])
+    const result = await callSubagent(ctx, {
+      description: 'd', prompt: 'p', run_in_background: false, harness: 'dsh',
+    })
+    expect(result.isError).toBe(true)
+    expect(text(result)).toContain('does not support choosing')
+  })
+
+  it('rebuilds the tool schema when harnesses mount and unmount after registration', async () => {
+    const ctx = await harnessSetup({ provider: 'mock' }, { capabilities: { harness: true } }, ['dsh'])
+    expect(harnessParameter(ctx)).toBeUndefined()
+
+    const dispose = ctx.agents.registerHarness({
+      id: HarnessId('late'), name: 'Late harness', factory: neverFactory,
+    })
+    expect(harnessParameter(ctx)?.description).toContain('"late"')
+
+    dispose()
+    expect(harnessParameter(ctx)).toBeUndefined()
+  })
+
+  it('contains a failed schema rebuild and retries it on the next harness change', async () => {
+    const ctx = await harnessSetup({ provider: 'mock' }, { capabilities: { harness: true } }, ['dsh'])
+    expect(harnessParameter(ctx)).toBeUndefined()
+    const warn = vi.spyOn(ctx.logger, 'warn')
+
+    // Force the rebuild's provider revalidation to fail once. The listener
+    // contains the failure: the emitting registry's call still completes, and
+    // the live registration keeps serving the previous schema.
+    const depth = vi.spyOn(SubagentRuntime.prototype, 'resolveMaxDepth')
+      .mockImplementationOnce(() => { throw new Error('settings read exploded') })
+    try {
+      expect(() => ctx.agents.registerHarness({
+        id: HarnessId('late'), name: 'Late harness', factory: neverFactory,
+      })).not.toThrow()
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining('rebuilding the "subagent" tool'))
+      expect(ctx.tools.schemas().some(schema => schema.name === 'subagent')).toBe(true)
+
+      // The next harness change retries the rebuild and the schema catches up.
+      ctx.agents.registerHarness({ id: HarnessId('later'), name: 'Later harness', factory: neverFactory })
+      expect(harnessParameter(ctx)?.description).toContain('"later"')
+    } finally {
+      depth.mockRestore()
+    }
+  })
+
+  it('does not rebuild the tool for a harness change that cannot alter the offer', async () => {
+    // A provider without the harness-selection capability offers an empty
+    // list at every mount, so no runtime change can change the schema.
+    const incapable = await harnessSetup({ provider: 'mock' }, {}, ['dsh'])
+    const incapableRegister = vi.spyOn(incapable.tools, 'register')
+    const disposeLate = incapable.agents.registerHarness({
+      id: HarnessId('late'), name: 'Late harness', factory: neverFactory,
+    })
+    disposeLate()
+    expect(incapableRegister).not.toHaveBeenCalled()
+    await incapable.fiber.dispose()
+
+    // With an allowlist, a mounted runtime outside it cannot change the offer;
+    // one inside it still rebuilds the schema.
+    const ctx = await harnessSetup(
+      { provider: 'mock', harnesses: ['dsh', 'foreign', 'extra'] },
+      { capabilities: { harness: true } },
+      ['dsh', 'foreign'],
+    )
+    const register = vi.spyOn(ctx.tools, 'register')
+    ctx.agents.registerHarness({ id: HarnessId('other'), name: 'Other harness', factory: neverFactory })
+    expect(register).not.toHaveBeenCalled()
+    const disposeExtra = ctx.agents.registerHarness({
+      id: HarnessId('extra'), name: 'Extra harness', factory: neverFactory,
+    })
+    expect(register.mock.calls.filter(([definition]) => definition.name === 'subagent')).toHaveLength(1)
+    expect(harnessParameter(ctx)?.description).toContain('"extra"')
+    disposeExtra()
+    expect(harnessParameter(ctx)?.description).not.toContain('"extra"')
+  })
+
+  it('warns about allowlisted ids that are not mounted, then offers them once they are', async () => {
+    const ctx = new Context()
+    const warn = vi.spyOn(ctx.logger, 'warn')
+    await ctx.plugin(SessionProjectionRegistry)
+    await ctx.plugin(SystemPrompt)
+    await ctx.plugin(ToolRuntime)
+    await ctx.plugin(AgentRegistry)
+    await ctx.plugin(SubagentRuntime)
+    ctx.agents.registerHarness({ id: HarnessId('dsh'), name: 'Harness dsh', factory: neverFactory })
+    await mock.mountScriptedProvider(ctx, { name: 'mock', capabilities: { harness: true } })
+    await ctx.plugin(tool, { provider: 'mock', harnesses: ['dsh', 'ghost'] })
+
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('not mounted: ghost'))
+    expect(harnessParameter(ctx)).toBeUndefined()
+
+    ctx.agents.registerHarness({ id: HarnessId('ghost'), name: 'Harness ghost', factory: neverFactory })
+    expect(harnessParameter(ctx)?.description).toContain('"ghost"')
+    // The diagnostic is load-time: the remount does not repeat it.
+    expect(warn.mock.calls.filter(([message]) => String(message).includes('not mounted'))).toHaveLength(1)
+  })
+
+  it('warns for every allowlisted id when no agent registry is mounted at load', async () => {
+    const ctx = await projectedContext()
+    await ctx.plugin(SystemPrompt)
+    await ctx.plugin(ToolRuntime)
+    await ctx.plugin(SubagentRuntime)
+    await mock.mountScriptedProvider(ctx, { name: 'mock', capabilities: { harness: true } })
+    const warn = vi.spyOn(ctx.logger, 'warn')
+
+    await ctx.plugin(tool, { provider: 'mock', harnesses: ['dsh'] })
+
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('not mounted: dsh'))
+  })
+
+  it('rejects a non-string harness argument and reports an empty live allowlist', async () => {
+    // The allowlist names only unmounted runtimes, so the live offer is empty;
+    // the validator admits the undeclared key and execute() enforces it.
+    const ctx = await harnessSetup(
+      { provider: 'mock', harnesses: ['ghost'] },
+      { capabilities: { harness: true } },
+      ['dsh'],
+    )
+
+    const result = await callSubagent(ctx, {
+      description: 'd', prompt: 'p', run_in_background: false, harness: 42,
+    })
+    expect(result.isError).toBe(true)
+    expect(text(result)).toContain('agent runtime 42 is not available for this tool (available: none)')
+  })
+
+  it('survives removal of a provider whose registration rolled back before the tool mounted', async () => {
+    const ctx = await projectedContext()
+    await ctx.plugin(SystemPrompt)
+    await ctx.plugin(ToolRuntime)
+    await ctx.plugin(AgentRegistry)
+    await ctx.plugin(SubagentRuntime)
+    ctx.agents.registerHarness({ id: HarnessId('dsh'), name: 'Harness dsh', factory: neverFactory })
+    // The tool loads with its provider absent, so nothing is mounted when the
+    // violating provider's registration rolls back.
+    await ctx.plugin(tool, { provider: 'mock', harnesses: ['dsh'] })
+
+    await expect(mock.mountScriptedProvider(ctx, { name: 'mock' }))
+      .rejects.toThrow('does not support harness selection')
+    expect(ctx.subagents.getProvider('mock')).toBeUndefined()
+    expect(ctx.tools.schemas().some(schema => schema.name === 'subagent')).toBe(false)
+    await ctx.fiber.dispose()
+  })
+
+  it('rejects an empty or capability-less harnesses allowlist at load', async () => {
+    await expect(harnessSetup(
+      { provider: 'mock', harnesses: [] },
+      { capabilities: { harness: true } },
+      ['dsh'],
+    )).rejects.toThrow('`harnesses` is configured but empty')
+
+    await expect(harnessSetup(
+      { provider: 'mock', harnesses: ['dsh'] },
+      {},
+      ['dsh'],
+    )).rejects.toThrow('does not support harness selection')
   })
 
   it('classifies foreground and background calls concurrency-safe (sibling delegations overlap)', async () => {
@@ -221,7 +479,7 @@ describe('dsh-tool-subagent', () => {
     await ctx.plugin(SubagentRuntime)
     ctx.subagents.registerProvider({
       name: 'weird',
-      capabilities: { agentOptions: false, outputSchema: false, depthLimit: false, toolFilter: false, persona: false },
+      capabilities: { agentOptions: false, outputSchema: false, depthLimit: false, toolFilter: false, persona: false, harness: false },
       inheritsParentContext: false,
       start: async () => ({
         id: SessionId('weird-child'),
@@ -310,7 +568,7 @@ describe('dsh-tool-subagent', () => {
     await ctx.plugin(SubagentRuntime)
     ctx.subagents.registerProvider({
       name: 'bare',
-      capabilities: { agentOptions: false, outputSchema: false, depthLimit: false, toolFilter: false, persona: false },
+      capabilities: { agentOptions: false, outputSchema: false, depthLimit: false, toolFilter: false, persona: false, harness: false },
       inheritsParentContext: false,
       start: async (request) => {
         seen = request
@@ -400,7 +658,7 @@ describe('dsh-tool-subagent', () => {
     // the provider survives.
     ctx.subagents.registerProvider({
       name: 'continuable',
-      capabilities: { agentOptions: false, outputSchema: false, depthLimit: false, toolFilter: false, persona: false },
+      capabilities: { agentOptions: false, outputSchema: false, depthLimit: false, toolFilter: false, persona: false, harness: false },
       inheritsParentContext: false,
       start: async () => { throw new Error('lifecycle test does not start a child') },
       prepareContinuable: async () => ({}),
@@ -473,7 +731,7 @@ describe('dsh-tool-subagent', () => {
     await ctx.plugin(SubagentRuntime)
     ctx.subagents.registerProvider({
       name: 'spy',
-      capabilities: { agentOptions: false, outputSchema: false, depthLimit: false, toolFilter: false, persona: false },
+      capabilities: { agentOptions: false, outputSchema: false, depthLimit: false, toolFilter: false, persona: false, harness: false },
       inheritsParentContext: false,
       start: async () => ({
         id: SessionId('spy-child'),
@@ -496,7 +754,7 @@ describe('dsh-tool-subagent', () => {
     await ctx.plugin(SubagentRuntime)
     ctx.subagents.registerProvider({
       name: 'spy',
-      capabilities: { agentOptions: false, outputSchema: false, depthLimit: false, toolFilter: false, persona: false },
+      capabilities: { agentOptions: false, outputSchema: false, depthLimit: false, toolFilter: false, persona: false, harness: false },
       inheritsParentContext: false,
       start: async () => ({
         id: SessionId('spy-child'),
@@ -520,7 +778,7 @@ describe('dsh-tool-subagent', () => {
     await ctx.plugin(SubagentRuntime)
     ctx.subagents.registerProvider({
       name: 'spy',
-      capabilities: { agentOptions: false, outputSchema: false, depthLimit: false, toolFilter: false, persona: false },
+      capabilities: { agentOptions: false, outputSchema: false, depthLimit: false, toolFilter: false, persona: false, harness: false },
       inheritsParentContext: false,
       start: async () => ({
         id: SessionId('spy-child'),
@@ -548,7 +806,7 @@ describe('dsh-tool-subagent', () => {
     await ctx.plugin(SubagentRuntime)
     ctx.subagents.registerProvider({
       name: 'spy',
-      capabilities: { agentOptions: false, outputSchema: false, depthLimit: false, toolFilter: false, persona: false },
+      capabilities: { agentOptions: false, outputSchema: false, depthLimit: false, toolFilter: false, persona: false, harness: false },
       inheritsParentContext: false,
       start: async () => ({
         id: SessionId('spy-child'),
@@ -575,7 +833,7 @@ describe('dsh-tool-subagent', () => {
     await ctx.plugin(SubagentRuntime)
     ctx.subagents.registerProvider({
       name: 'spy',
-      capabilities: { agentOptions: false, outputSchema: false, depthLimit: false, toolFilter: false, persona: false },
+      capabilities: { agentOptions: false, outputSchema: false, depthLimit: false, toolFilter: false, persona: false, harness: false },
       inheritsParentContext: false,
       start: async (request) => {
         if (request.signal.aborted) throw new Error('start aborted')
@@ -614,7 +872,7 @@ describe('dsh-tool-subagent', () => {
     await ctx.plugin(SubagentRuntime)
     ctx.subagents.registerProvider({
       name: 'spy',
-      capabilities: { agentOptions: false, outputSchema: false, depthLimit: false, toolFilter: false, persona: false },
+      capabilities: { agentOptions: false, outputSchema: false, depthLimit: false, toolFilter: false, persona: false, harness: false },
       inheritsParentContext: false,
       start: async (request) => {
         if (request.signal.aborted) sawAborted()
@@ -678,7 +936,7 @@ describe('dsh-tool-subagent', () => {
     await ctx.plugin(SubagentRuntime)
     ctx.subagents.registerProvider({
       name: 'capture2',
-      capabilities: { agentOptions: false, outputSchema: false, depthLimit: true, toolFilter: true, persona: true },
+      capabilities: { agentOptions: false, outputSchema: false, depthLimit: true, toolFilter: true, persona: true, harness: false },
       inheritsParentContext: false,
       start: async (request) => {
         seen = request
@@ -735,7 +993,7 @@ describe('dsh-tool-subagent', () => {
     await ctx.plugin(SubagentRuntime)
     ctx.subagents.registerProvider({
       name: 'capture3',
-      capabilities: { agentOptions: false, outputSchema: false, depthLimit: false, toolFilter: true, persona: false },
+      capabilities: { agentOptions: false, outputSchema: false, depthLimit: false, toolFilter: true, persona: false, harness: false },
       inheritsParentContext: false,
       start: async (request) => {
         seen = request
@@ -765,7 +1023,7 @@ describe('dsh-tool-subagent', () => {
     await ctx.plugin(SubagentRuntime)
     ctx.subagents.registerProvider({
       name: 'capture4',
-      capabilities: { agentOptions: false, outputSchema: false, depthLimit: false, toolFilter: false, persona: false },
+      capabilities: { agentOptions: false, outputSchema: false, depthLimit: false, toolFilter: false, persona: false, harness: false },
       inheritsParentContext: false,
       start: async (request) => {
         seen = request
@@ -790,7 +1048,7 @@ describe('dsh-tool-subagent', () => {
     await ctx.plugin(SubagentRuntime)
     ctx.subagents.registerProvider({
       name: 'p',
-      capabilities: { agentOptions: false, outputSchema: false, depthLimit: false, toolFilter: true, persona: false },
+      capabilities: { agentOptions: false, outputSchema: false, depthLimit: false, toolFilter: true, persona: false, harness: false },
       inheritsParentContext: false,
       start: () => { throw new Error('unreachable') },
     })
@@ -829,7 +1087,7 @@ describe('dsh-tool-subagent background mode', () => {
     let prepareCalls = 0
     ctx.subagents.registerProvider({
       name: 'resumable',
-      capabilities: { agentOptions: false, outputSchema: false, depthLimit: false, toolFilter: false, persona: false },
+      capabilities: { agentOptions: false, outputSchema: false, depthLimit: false, toolFilter: false, persona: false, harness: false },
       inheritsParentContext: false,
       start: async request => ({
         id: SessionId('one-shot-child'),
@@ -1005,7 +1263,7 @@ describe('dsh-tool-subagent background mode', () => {
     await disposeSetupProvider(ctx)
     ctx.subagents.registerProvider({
       name: 'mock',
-      capabilities: { agentOptions: true, outputSchema: false, depthLimit: false, toolFilter: false, persona: false },
+      capabilities: { agentOptions: true, outputSchema: false, depthLimit: false, toolFilter: false, persona: false, harness: false },
       inheritsParentContext: false,
       agentRouteDefaults: { provider: 'beta', model: 'replacement-model' },
       start: replacementStart,
@@ -1024,7 +1282,7 @@ describe('dsh-tool-subagent background mode', () => {
     const parent = await ownerAgent(ctx, 'sess-parent')
     ctx.subagents.registerProvider({
       name: 'broken-start',
-      capabilities: { agentOptions: false, outputSchema: false, depthLimit: false, toolFilter: false, persona: false },
+      capabilities: { agentOptions: false, outputSchema: false, depthLimit: false, toolFilter: false, persona: false, harness: false },
       inheritsParentContext: false,
       start: async () => { throw new Error('setup failed') },
     })
@@ -1053,7 +1311,7 @@ describe('dsh-tool-subagent background mode', () => {
     const parent = await ownerAgent(ctx, 'sess-parent')
     ctx.subagents.registerProvider({
       name: 'pending-start',
-      capabilities: { agentOptions: false, outputSchema: false, depthLimit: false, toolFilter: false, persona: false },
+      capabilities: { agentOptions: false, outputSchema: false, depthLimit: false, toolFilter: false, persona: false, harness: false },
       inheritsParentContext: false,
       start: request => new Promise((_resolve, reject) => {
         request.signal.addEventListener('abort', () => { reject(new Error('startup aborted')) }, { once: true })
@@ -1091,7 +1349,7 @@ describe('dsh-tool-subagent background mode', () => {
     const parent = await ownerAgent(ctx, 'sess-parent')
     ctx.subagents.registerProvider({
       name: 'broken-start-rollback',
-      capabilities: { agentOptions: false, outputSchema: false, depthLimit: false, toolFilter: false, persona: false },
+      capabilities: { agentOptions: false, outputSchema: false, depthLimit: false, toolFilter: false, persona: false, harness: false },
       inheritsParentContext: false,
       start: request => new Promise((_resolve, reject) => {
         request.signal.addEventListener('abort', () => {
@@ -1136,7 +1394,7 @@ describe('dsh-tool-subagent background mode', () => {
     let starts = 0
     ctx.subagents.registerProvider({
       name: 'hanging',
-      capabilities: { agentOptions: false, outputSchema: false, depthLimit: false, toolFilter: false, persona: false },
+      capabilities: { agentOptions: false, outputSchema: false, depthLimit: false, toolFilter: false, persona: false, harness: false },
       inheritsParentContext: false,
       start: async (request) => {
         let settle!: (value: { output: { type: 'text'; text: string }[]; stopReason: 'aborted' }) => void
@@ -1177,13 +1435,18 @@ describe('dsh-tool-subagent background mode', () => {
 
 describe('dsh-tool-subagent continuable background mode', () => {
   const roots: string[] = []
-  afterEach(() => {
+  const contexts: Context[] = []
+  afterEach(async () => {
+    // Dispose before removing roots so session lock handles close explicitly
+    // instead of surfacing as garbage-collected FileHandles.
+    for (const ctx of contexts.splice(0).reverse()) await ctx.fiber.dispose()
     for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true })
   })
 
   /** Boot the real continuable stack without any model-facing follow-up adapter. */
   async function continuableSetup() {
     const ctx = new Context()
+    contexts.push(ctx)
     await mountAgentLoopTestDependencies(ctx)
     const root = mkdtempSync(path.join(tmpdir(), 'dsh-tool-subagent-continuable-'))
     roots.push(root)
@@ -1284,7 +1547,7 @@ describe('dsh-tool-subagent continuable background mode', () => {
     let survivingChildId: ReturnType<typeof SessionId> | undefined
     ctx.subagents.registerProvider({
       name: 'gated',
-      capabilities: { agentOptions: false, outputSchema: true, depthLimit: true, toolFilter: true, persona: true },
+      capabilities: { agentOptions: false, outputSchema: true, depthLimit: true, toolFilter: true, persona: true, harness: false },
       inheritsParentContext: false,
       start: async () => { throw new Error('continuable policy must not start a one-shot child') },
       prepareContinuable: async (request) => {
@@ -1359,7 +1622,7 @@ describe('background preflight failure (no orphaned child, by construction)', ()
     let starts = 0
     ctx.subagents.registerProvider({
       name: 'probe',
-      capabilities: { agentOptions: false, outputSchema: false, depthLimit: false, toolFilter: false, persona: false },
+      capabilities: { agentOptions: false, outputSchema: false, depthLimit: false, toolFilter: false, persona: false, harness: false },
       inheritsParentContext: false,
       start: async () => {
         starts += 1
@@ -1397,7 +1660,7 @@ describe('depth budget configuration', () => {
     await ctx.plugin(SubagentRuntime)
     ctx.subagents.registerProvider({
       name: 'capture',
-      capabilities: { agentOptions: false, outputSchema: true, depthLimit: true, toolFilter: true, persona: true },
+      capabilities: { agentOptions: false, outputSchema: true, depthLimit: true, toolFilter: true, persona: true, harness: false },
       inheritsParentContext: false,
       start: async (request) => {
         requests.push(request)
@@ -1435,7 +1698,7 @@ describe('depth budget configuration', () => {
     await ctx.plugin(SubagentRuntime)
     ctx.subagents.registerProvider({
       name: 'no-depth',
-      capabilities: { agentOptions: false, outputSchema: false, depthLimit: false, toolFilter: false, persona: false },
+      capabilities: { agentOptions: false, outputSchema: false, depthLimit: false, toolFilter: false, persona: false, harness: false },
       inheritsParentContext: false,
       start: async () => { throw new Error('unreachable') },
     })
@@ -1451,7 +1714,7 @@ describe('depth budget configuration', () => {
     await ctx.plugin(SubagentRuntime)
     ctx.subagents.registerProvider({
       name: 'external',
-      capabilities: { agentOptions: false, outputSchema: false, depthLimit: false, toolFilter: false, persona: false },
+      capabilities: { agentOptions: false, outputSchema: false, depthLimit: false, toolFilter: false, persona: false, harness: false },
       inheritsParentContext: false,
       start: async (request) => {
         requests.push(request)

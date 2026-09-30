@@ -120,6 +120,22 @@ export function acpToolContent(content: readonly ToolCallContent[] | undefined, 
 }
 
 /**
+ * The canonical tool name one `tool_call` notification carries in `_meta`,
+ * when the harness keeps it there. Devin reports `mcp__<server>__<tool>`
+ * under `cognition.ai/toolName` — `cognition.ai/inferenceToolName` is its
+ * inference-level alias — while `title` holds display text such as
+ * "Calling probe_echo from dsh".
+ * @param meta - the notification's `_meta` map.
+ * @returns the canonical name, or undefined when the notification carries none.
+ */
+export function acpMetaToolName(meta: { [key: string]: unknown } | null | undefined): string | undefined {
+  const tool = meta?.['cognition.ai/toolName']
+  if (typeof tool === 'string' && tool.length > 0) return tool
+  const inference = meta?.['cognition.ai/inferenceToolName']
+  return typeof inference === 'string' && inference.length > 0 ? inference : undefined
+}
+
+/**
  * Map one ACP content block to a durable content block.
  * @param block - one ACP content block.
  * @returns the mapped content block, or `undefined` when the block has no dsh equivalent.

@@ -4,7 +4,7 @@ English | [中文](subagent.zh.md)
 
 The subagent seam lets an agent delegate work to a child agent. Like [bash](shell.md), it is **one optional capability**, not part of the agent loop, so its types live here rather than in [core.md](core.md). It differs from the other capability seams because **multiple provider implementations coexist** in one context, registered by name (`ctx.subagents`), while bash allows only one executor. Its registry follows the [LLM adapter registry](llm-streaming.md), not the single-service bash executor.
 
-Service Definition: [dsh-subagent](../../packages/subagent/subagent) (`ctx.subagents` + the vocabulary below). Service Providers are sibling packages (`dsh-subagent-spawn-in-process`, `dsh-subagent-fork-in-process`, `dsh-subagent-acp`, `dsh-subagent-codex`, `dsh-subagent-claude-code`, `dsh-subagent-dsh-sdk`); the model-facing Consumers are [dsh-tool-subagent](../../packages/subagent/tool-subagent) (per-provider delegation) and [dsh-tool-subagent-control](../../packages/subagent/tool-subagent-control) (the optional global `send_message`, `interrupt_agent`, and `list_agents` controls). The same `ctx.subagents` service owns continuable-child orchestration through an internal activation manager, direct-child discovery through the parent catalog, and recursive descendant discovery through parent catalogs. Product-provider rationale lives in [the Codex and Claude Code Agent Note](../../.agents/notes/implemented/feature/2026-08-04-claude-code-and-codex-subagent-backends.md); common-seam rationale lives in [the subagent Agent Note](../../.agents/notes/implemented/feature/2026-06-21-subagent-capability-seam.md), [the continuable subagents Agent Note](../../.agents/notes/implemented/feature/2026-07-28-continuable-subagent-conversations.md), and [the adjacent-Agent messaging Agent Note](../../.agents/notes/implemented/architecture/2026-08-27-adjacent-agent-steer-messaging.md); [the archived list-identity-projection record](../../.agents/notes/archived/architecture/2026-08-06-subagent-list-identity-projection.md) documents the original list-identity decision.
+Service Definition: [dsh-subagent](../../packages/subagent/subagent) (`ctx.subagents` + the vocabulary below). Service Providers are sibling packages (`dsh-subagent-spawn-in-process`, `dsh-subagent-fork-in-process`, `dsh-subagent-acp`, `dsh-subagent-codex`, `dsh-subagent-claude-code`, `dsh-subagent-dsh-sdk`); the model-facing Consumers are [dsh-tool-subagent](../../packages/subagent/tool-subagent) (per-provider delegation) and [dsh-tool-subagent-control](../../packages/subagent/tool-subagent-control) (the optional global `send_message`, `interrupt_agent`, and `list_agents` controls). The same `ctx.subagents` service owns continuable-child orchestration through an internal activation manager, direct-child discovery through the parent catalog, and recursive descendant discovery through parent catalogs. Product-provider rationale lives in [the Codex and Claude Code Agent Note](../../.agents/notes/implemented/feature/2026-08-04-claude-code-and-codex-subagent-backends.md); harness-selected durable children are recorded in [the harness-selected subagent children Agent Note](../../.agents/notes/implemented/feature/2026-09-24-harness-selected-subagent-children.md); common-seam rationale lives in [the subagent Agent Note](../../.agents/notes/implemented/feature/2026-06-21-subagent-capability-seam.md), [the continuable subagents Agent Note](../../.agents/notes/implemented/feature/2026-07-28-continuable-subagent-conversations.md), and [the adjacent-Agent messaging Agent Note](../../.agents/notes/implemented/architecture/2026-08-27-adjacent-agent-steer-messaging.md); [the archived list-identity-projection record](../../.agents/notes/archived/architecture/2026-08-06-subagent-list-identity-projection.md) documents the original list-identity decision.
 
 Sources: [`packages/subagent/subagent/src/types.ts`](../../packages/subagent/subagent/src/types.ts), [`packages/subagent/subagent/src/index.ts`](../../packages/subagent/subagent/src/index.ts), and [`packages/subagent/subagent/src/continuation.ts`](../../packages/subagent/subagent/src/continuation.ts)
 
@@ -32,12 +32,22 @@ interface SubagentCapabilities {
   readonly depthLimit: boolean
   readonly toolFilter: boolean
   readonly persona: boolean
+  /**
+   * Whether a caller may name the child's agent harness (`harness`); absent
+   * means unsupported. Providers that seed the child with parent history or
+   * run it out of process leave it unset: the seed only makes sense under the
+   * harness that owns the parent session, and an out-of-process child is not a
+   * mounted harness. Unlike the other flags this one is also checked on
+   * continuable starts, because a continuable provider's seed contribution has
+   * the same constraint.
+   */
+  readonly harness?: boolean
 }
 ```
 
 ## The one-shot start request
 
-The tool layer builds this request from the model input and its own config; the service validates it against the named provider before `start`. Required `parent` supplies the session cwd, lineage, and delegation depth. Optional Agent provider, model, reasoning-effort, and token overrides, output schema, depth, tool filter, and persona require matching capability flags. In-process backends merge `agentOptions` over the parent Agent's options, scope filters and personas to child creation, and implement the supported object-rooted schema with a forced capture tool. The DSH SDK backend merges the four Agent route fields over its instance defaults and validates them in the child runtime's initialization; ACP, Codex, and Claude Code reject `agentOptions` before starting their transports.
+The tool layer builds this request from the model input and its own config; the service validates it against the named provider before `start`. Required `parent` supplies the session cwd, lineage, and delegation depth. An optional `harness` names the mounted agent harness the child runs under; omitted, the child keeps the harness that owns the parent's session. Only providers that advertise the optional `harness` flag accept it: `fork` leaves it unset because its parent-history seed only makes sense under that harness, and out-of-process providers leave it unset because their child is not a mounted harness. `persona`, `toolFilter`, and `outputSchema` reject when the resolved harness does not declare `hostsLoopComposition`. A child whose harness differs from the parent's durable record carries its own `agent/harness` record, and a later cold resume reads the child's record, not the parent's. Optional Agent provider, model, reasoning-effort, and token overrides, output schema, depth, tool filter, and persona require matching capability flags. In-process backends merge `agentOptions` over the parent Agent's options, scope filters and personas to child creation, and implement the supported object-rooted schema with a forced capture tool. The DSH SDK backend merges the four Agent route fields over its instance defaults and validates them in the child runtime's initialization; ACP, Codex, and Claude Code reject `agentOptions` before starting their transports.
 
 ```ts type-equiv
 /**
@@ -54,8 +64,9 @@ interface SubagentStartRequest {
   readonly prompt: ContentBlock[]
   /**
    * The spawning agent. In-process providers derive workspace, lineage, and
-   * delegation depth from its durable session state. ACP reads only its cwd,
-   * and only when no deployment `cwd` override is configured.
+   * delegation depth from its durable session state. Out-of-process
+   * providers read only its cwd; ACP and DSH SDK read it only when no
+   * deployment `cwd` override is configured.
    */
   readonly parent: Agent
   /**
@@ -66,6 +77,15 @@ interface SubagentStartRequest {
    * remaining turn work when it fires afterward.
    */
   readonly signal: AbortSignal
+  /**
+   * Optional agent harness the child runs under. Requires
+   * {@link SubagentCapabilities.harness}; rejected at start otherwise.
+   * Omission keeps the harness that owns the parent's session. The id must be
+   * mounted on the deployment's Agent registry, and options only a harness
+   * declaring `hostsLoopComposition` honors (`persona`, `toolFilter`,
+   * `outputSchema`) are rejected when it resolves to a harness without it.
+   */
+  readonly harness?: HarnessId
   /**
    * Optional host-Agent provider, model, reasoning-effort, and output-token
    * overrides. Requires {@link SubagentCapabilities.agentOptions}; in-process
@@ -220,7 +240,7 @@ interface SubagentSettledMessageSource {
 }
 ```
 
-The provider participates only in preparing the initial creation spec, where `spawn` and `fork` differ. Its returned spec carries only detached provider-specific creation inputs — the optional parent-history seed — and no Agent, `AgentHandle`, prompt delivery, result, disposal, or resume operation. Cold resume does not dispatch through a provider at all: the manager folds the generic descriptor, calls `ctx.agents.resume()` through the same activation-owner scope, and submits the waiting turn.
+The provider participates only in preparing the initial creation spec, where `spawn` and `fork` differ. Its returned spec carries only detached provider-specific creation inputs — the optional parent-history seed — and no Agent, `AgentHandle`, prompt delivery, result, disposal, or resume operation. Cold resume does not dispatch through a provider at all: the manager folds the generic descriptor, calls `ctx.agents.resume()` on the child's own recorded `agent/harness` through the same activation-owner scope, and submits the waiting turn.
 
 ```ts type-equiv
 /**

@@ -34,6 +34,29 @@ export interface RouteLogState {
 }
 
 /**
+ * Bridge-side lookup the projector consults for harness-reported tool calls:
+ * resolves the harness's `mcp__<server>__<tool>` name back to the bridged
+ * dsh tool, then hands over the settled execution's presentation `meta` for
+ * the matching `tool/result`. Undefined means no bridge is mounted and every
+ * name logs exactly as the harness reported it.
+ */
+export interface BridgedToolCalls {
+  /**
+   * @param reported - one tool name the harness reported for the call.
+   * @returns the bridged dsh tool name, or undefined when the call is not bridged.
+   */
+  toolName(reported: string): string | undefined
+  /**
+   * Consume the settled bridged execution matching one logged `tool/call`.
+   * @param tool - the dsh tool name {@link toolName} resolved.
+   * @param argumentsJson - the serialized arguments `tool/call` logged.
+   * @returns the completion carrying the execution `meta`, or undefined when
+   *   no settled execution matches.
+   */
+  completion(tool: string, argumentsJson: string): { meta?: JsonValue } | undefined
+}
+
+/**
  * Session-event projector bound to one live turn and step. Durable appends
  * commit before any live notification leaves, so a UI observer never sees an
  * announcement for an event the log rejected.
@@ -56,6 +79,7 @@ export class ExternalTurnProjector {
     private readonly allocAttempt: () => number,
     private readonly nextRevision: () => number,
     private readonly routeState: RouteLogState,
+    private readonly bridged?: BridgedToolCalls,
   ) {
     this.currentStep = step
   }
@@ -77,6 +101,24 @@ export class ExternalTurnProjector {
   }
 
   /**
+   * Bridged calls this turn logged under their dsh name, keyed by the
+   * harness's call id so {@link toolResult} can pick up the settled
+   * execution's `meta`. Turn-scoped: the map dies with the projector.
+   */
+  private readonly bridgedCalls = new Map<string, { name: string; argumentsJson: string }>()
+
+  /**
+   * Attempts this projector opened and has not yet settled. Settlement removes
+   * its attempt even when the commit throws; a driver-side
+   * {@link AssistantStreamAttempt.abandon} leaves an ended entry that
+   * {@link openAssistant} skips.
+   */
+  private readonly openAttempts = new Set<AssistantStreamAttempt>()
+
+  /** Model route most recently committed through {@link noteRoute}. */
+  private route: { provider: string; model: string } | undefined
+
+  /**
    * Open one streamed assistant attempt: live `agent/assistant-stream` frames
    * plus the durable compact stream the settlement embeds. Callers push
    * adapter-shaped chunks; {@link commitAssistant} or {@link commitAttempt}
@@ -92,8 +134,22 @@ export class ExternalTurnProjector {
       this.step,
       (frame) => { this.dispatch.emit('agent/assistant-stream', { frame }) },
     )
+    this.openAttempts.add(attempt)
     attempt.start()
     return attempt
+  }
+
+  /**
+   * The most recently opened attempt still streaming, if any. {@link toolCall}
+   * folds a mid-stream call's advertisement into it; drivers whose lane
+   * bookkeeping points at a settled attempt check `ended` and reopen.
+   */
+  private openAssistant(): AssistantStreamAttempt | undefined {
+    let latest: AssistantStreamAttempt | undefined
+    for (const attempt of this.openAttempts) {
+      if (!attempt.ended) latest = attempt
+    }
+    return latest
   }
 
   /**
@@ -113,21 +169,25 @@ export class ExternalTurnProjector {
     const content = options.interrupted === true ? attempt.interruptedBlocks() : attempt.blocks()
     const usage = options.usage ?? attempt.usage
     let committed!: SessionEvent<'assistant/message'>
-    attempt.settle('assistant/message', () => (committed = this.session.append('assistant/message', {
-      turn: this.turn,
-      step: this.step,
-      message: createAssistantMessage({
-        content,
-        source: {
-          provider: source.provider,
-          model: source.model,
-          ...attempt.replayState === undefined ? {} : { replayState: attempt.replayState },
-        },
-      }),
-      stream: attempt.stream,
-      ...usage === undefined ? {} : { usage },
-      ...options.interrupted === true ? { interrupted: true } : {},
-    }, { surfaceOp: 'append' })).seq)
+    try {
+      attempt.settle('assistant/message', () => (committed = this.session.append('assistant/message', {
+        turn: this.turn,
+        step: this.step,
+        message: createAssistantMessage({
+          content,
+          source: {
+            provider: source.provider,
+            model: source.model,
+            ...attempt.replayState === undefined ? {} : { replayState: attempt.replayState },
+          },
+        }),
+        stream: attempt.stream,
+        ...usage === undefined ? {} : { usage },
+        ...options.interrupted === true ? { interrupted: true } : {},
+      }, { surfaceOp: 'append' })).seq)
+    } finally {
+      this.openAttempts.delete(attempt)
+    }
     return committed
   }
 
@@ -140,11 +200,15 @@ export class ExternalTurnProjector {
    */
   commitAttempt(attempt: AssistantStreamAttempt): SessionEvent<'assistant/attempt'> {
     let committed!: SessionEvent<'assistant/attempt'>
-    attempt.settle('assistant/attempt', () => (committed = this.session.append('assistant/attempt', {
-      turn: this.turn,
-      step: this.step,
-      stream: attempt.stream,
-    })).seq)
+    try {
+      attempt.settle('assistant/attempt', () => (committed = this.session.append('assistant/attempt', {
+        turn: this.turn,
+        step: this.step,
+        stream: attempt.stream,
+      })).seq)
+    } finally {
+      this.openAttempts.delete(attempt)
+    }
     return committed
   }
 
@@ -176,29 +240,83 @@ export class ExternalTurnProjector {
   }
 
   /**
-   * Commit one harness tool invocation record.
+   * Commit one harness tool invocation record. Every call — bridged or not —
+   * is first advertised as a `tool-call` block on a committed
+   * `assistant/message` (see {@link advertiseToolCall}), so the durable
+   * transcript's tool lifecycle matches a dsh-loop call's. When the
+   * reported name — or `options.alias`, a second name the harness carries for
+   * the same call — resolves to a bridged dsh tool, the record logs under the
+   * dsh name so tool presenters apply, while `arguments` stays the
+   * harness's report.
    * @param callId - foreign call identity; paired with its `tool/result`.
    * @param name - foreign tool name as the harness reported it.
    * @param argsJson - raw JSON arguments exactly as reported.
+   * @param options - `alias` is the canonical `mcp__<server>__<tool>` name a
+   *   harness carries separately from the display `name`.
    * @returns the committed event.
+   * @throws when no route was noted for the turn — the advertisement needs the
+   *   provider/model source (see {@link advertiseToolCall}).
    */
-  toolCall(callId: string, name: string, argsJson: string): SessionEvent<'tool/call'> {
-    return this.session.append('tool/call', {
+  toolCall(
+    callId: string,
+    name: string,
+    argsJson: string,
+    options: { alias?: string } = {},
+  ): SessionEvent<'tool/call'> {
+    const dsh = this.bridged === undefined ? undefined
+      : (options.alias === undefined ? undefined : this.bridged.toolName(options.alias))
+        ?? this.bridged.toolName(name)
+    this.advertiseToolCall(callId, dsh ?? name, argsJson)
+    const committed = this.session.append('tool/call', {
       turn: this.turn,
       step: this.step,
       callId: brandString<ToolCallId>(callId),
-      name,
+      name: dsh ?? name,
       arguments: argsJson,
     })
+    // The correlation entry exists only once both appends committed, so a
+    // failed advertisement or call leaves nothing for `toolResult` to consume.
+    if (dsh !== undefined) this.bridgedCalls.set(callId, { name: dsh, argumentsJson: argsJson })
+    return committed
   }
 
   /**
-   * Commit one completed harness tool call's result.
+   * Commit the durable `assistant/message` advertising one harness-reported
+   * call before its `tool/call` append. A call arriving while an assistant
+   * attempt is still streaming folds the `tool-call` block into that attempt
+   * and settles it — the shape a dsh loop produces when text precedes a
+   * call; the driver continues streaming on a fresh attempt. With no open
+   * attempt a standalone single-block message stands in.
+   * @param callId - foreign call identity the block advertises.
+   * @param name - the tool name the block advertises.
+   * @param argumentsJson - serialized arguments the block advertises.
+   * @throws when the turn never noted a route: the advertisement needs the
+   *   provider/model source, so a driver that skipped {@link noteRoute} fails
+   *   loudly instead of committing an unadvertised `tool/call`.
+   */
+  private advertiseToolCall(callId: string, name: string, argumentsJson: string): void {
+    const route = this.route
+    if (route === undefined) {
+      throw new Error(
+        `external tool call "${callId}" arrived before noteRoute recorded this turn's model route`,
+      )
+    }
+    const attempt = this.openAssistant() ?? this.beginAssistant()
+    attempt.pushToolCall(brandString<ToolCallId>(callId), name, argumentsJson)
+    attempt.push({ type: 'finish', reason: { kind: 'tool-calls' } })
+    this.commitAssistant(attempt, route)
+  }
+
+  /**
+   * Commit one completed harness tool call's result. `content` is exactly
+   * what the harness's model saw; when the call was bridged, the logged
+   * `meta` comes from the settled dsh execution instead.
    * @param callId - identity of the paired `tool/call`.
    * @param content - model-facing result blocks.
    * @param options - `isError` marks the block; `error` carries the failure
    *   identity (allowed only with `isError`); `meta` is the JSON-serializable
-   *   card payload the producing driver reads back for presentation.
+   *   card payload the producing driver reads back for presentation and
+   *   overrides the bridged execution's `meta` when both exist.
    * @returns the committed event.
    */
   toolResult(
@@ -208,12 +326,20 @@ export class ExternalTurnProjector {
   ): SessionEvent<'tool/result'> {
     const isError = options.isError === true
     const toolCallId = brandString<ToolCallId>(callId)
+    // A bridged call's settled execution owns the presentation `meta`; an
+    // explicit `options.meta` wins when a driver supplies its own payload.
+    // The completion is consumed either way so it cannot match a later call.
+    const pending = this.bridgedCalls.get(callId)
+    this.bridgedCalls.delete(callId)
+    const completion = pending === undefined ? undefined
+      : this.bridged?.completion(pending.name, pending.argumentsJson)
+    const meta = options.meta ?? completion?.meta
     return this.session.append('tool/result', {
       turn: this.turn,
       step: this.step,
       message: createToolResultMessage({ callId: toolCallId, content, isError }),
       ...options.error === undefined || !isError ? {} : { error: options.error },
-      ...options.meta === undefined ? {} : { meta: options.meta },
+      ...meta === undefined ? {} : { meta },
     }, { surfaceOp: 'append' })
   }
 
@@ -226,6 +352,7 @@ export class ExternalTurnProjector {
    * @returns the committed event, or undefined when the route was unchanged.
    */
   noteRoute(route: ExternalModelSelection): SessionEvent<'request/header'> | undefined {
+    this.route = { provider: route.provider, model: route.model }
     const header = canonicalHeader({
       config: {
         provider: route.provider,

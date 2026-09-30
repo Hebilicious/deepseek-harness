@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { Context } from '@deepseek-ai/cordis'
-import type { Agent } from '@deepseek-ai/dsh-agent'
+import { HarnessId, type Agent } from '@deepseek-ai/dsh-agent'
 import AgentLoop from '@deepseek-ai/dsh-agent-loop'
 import { mountAgentLoopTestDependencies } from '@deepseek-ai/dsh-agent-loop-testkit'
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
@@ -112,7 +112,7 @@ function spawn(
   ctx: Context,
   lead: Agent,
   name: string,
-  options: { context?: 'fresh' | 'fork'; provider?: string } = {},
+  options: { context?: 'fresh' | 'fork'; provider?: string; harness?: HarnessId } = {},
 ) {
   const context = options.context ?? 'fresh'
   return ctx.agentTeams.spawnTeammate(lead, {
@@ -121,6 +121,7 @@ function spawn(
     prompt: content(`${name} initial`),
     context,
     provider: options.provider ?? (context === 'fork' ? 'fork' : 'spawn'),
+    ...options.harness === undefined ? {} : { harness: options.harness },
     signal: SIGNAL,
   })
 }
@@ -336,6 +337,14 @@ describe('Team identity and provisioning', () => {
     })
     await expect(spawn(ctx, lead, 'failed-worker')).rejects.toMatchObject({ code: 'TEAM_MEMBER_NAME_TAKEN' })
     await expect(spawn(ctx, lead, 'other-worker')).rejects.toMatchObject({ code: 'TEAM_MEMBER_LIMIT' })
+  })
+
+  it('passes an explicit teammate harness to the subagent service and rejects an unmounted one', async () => {
+    const { ctx, lead } = await setup([textResponse('same-harness answer')])
+    const started = await spawn(ctx, lead, 'same-harness', { harness: HarnessId('dsh') })
+    expect(ctx.agentTeams.listMembers(lead).some(member => member.name === 'same-harness')).toBe(true)
+    await waitNoAgent(ctx, started.member.id)
+    await expect(spawn(ctx, lead, 'ghost-harness', { harness: HarnessId('ghost') })).rejects.toThrow('not mounted')
   })
 
   it('records non-Error provider failures and contains a reversed provisioning settlement race', async () => {

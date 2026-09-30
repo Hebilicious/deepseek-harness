@@ -165,6 +165,7 @@ class LoopAgentHost extends ExternalAgentHost<ReactLoopAgent> {
         id: HarnessId('dsh'),
         name: 'DSH Loop',
         description: 'DeepSeek Harness runs its own in-process agent loop',
+        hostsLoopComposition: true,
       },
       modelSelection: false,
       effectPrefix: 'agentLoop',

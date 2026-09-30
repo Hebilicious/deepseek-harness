@@ -774,6 +774,24 @@ What a persistence backend relies on: the durable log persists every event lossl
 
 The backends that consume this contract are on [persistence.md](persistence.md).
 
+## Deferred publication — `SessionEnterOptions`
+
+`enter(session, { deferPublication: true })` admits the session with its `session/event` dispatch held: appends still commit to the in-memory log, but no observer receives them. `publish(session)` dispatches every held append in log order to all observers and then dispatches later appends as they commit; a session detached before `publish` never dispatches its held appends. `flush(session)` on a deferred session waits for `publish` or detachment before dispatching `session/flush`, so creation-transaction code must not await a flush of its own session. `publish` requires a completed `session/created` announcement and rejects a session not entered with `deferPublication` or already published. The external-harness agent factory uses this to run the creation edges before its `bind()` handshake: it stores the log below store entry through its write handle, and persistence writes the held appends through its live `session/event` path at publication ([dsh-agent-external](../../packages/core/agent-external/README.md)).
+
+```ts type-equiv
+/** Options for {@link SessionStore.enter}. */
+interface SessionEnterOptions {
+  /**
+   * When `true`, `session/event` dispatch is held until
+   * {@link SessionStore.publish}, which dispatches every held append in log
+   * order. An agent factory whose commit point follows the creation edges
+   * (the harness handshake) uses this so a rolled-back creation never
+   * dispatched an event, while a committed one reaches every observer in order.
+   */
+  readonly deferPublication?: boolean
+}
+```
+
 ## Remote catalog and workspace opening
 
 `ModelCatalog` is the Host-generation model directory returned by `session/modelCatalog`: it carries the deployment default, routable provider ids, successful provider groups, and isolated provider failures. It is not derived from one Session and remains separate from Session projections.
@@ -1072,12 +1090,14 @@ prepare(id?: SessionId, options?: PrepareSessionOptions): Session
  * assume that.
  *
  * @param session - a {@link prepare}d session not yet in the store.
+ * @param options - `deferPublication` holds the session's `session/event`
+ *   dispatch until {@link publish}.
  * @returns the detach disposer (publication hooks + store removal). When called from
  *   a synchronous `session/created` listener, removal and disposal wait until
  *   that creation dispatch unwinds.
  * @throws if a session with this id is already in the store.
  */
-enter(session: Session): () => void
+enter(session: Session, options?: SessionEnterOptions): () => void
 
 /** Emit `session/created` exactly once for an {@link enter}ed session (with
  * the carrier {@link enter} captured). Separate from {@link enter} so the
@@ -1089,6 +1109,18 @@ enter(session: Session): () => void
 announce(session: Session): void
 
 /**
+ * Commit a {@link SessionEnterOptions.deferPublication deferred} entry:
+ * dispatch every held append on `session/event` in log order, then dispatch
+ * later appends as they commit. An entry detached before this call never
+ * dispatches its held appends.
+ * @param session - the entered, announced session to publish.
+ * @throws if the session is not live in this store, its creation announcement
+ *   has not completed, or it was not entered with `deferPublication` or was
+ *   already published.
+ */
+publish(session: Session): void
+
+/**
  * Dispatch the awaited `session/flush` durability checkpoint for `session`,
  * with the carrier captured at {@link enter}. THE flush entry point: the
  * store owns the carrier, so callers (the checkpoint policy's per-request
@@ -1096,6 +1128,10 @@ announce(session: Session): void
  * that flush themselves before reading storage) must come through here
  * rather than dispatch a raw `ctx.parallel('session/flush', …)` — one owner,
  * one spelling, and the scoped-dispatch invariant can pin it.
+ * A `deferPublication` entry first waits for {@link publish} to dispatch its
+ * held appends, so the checkpoint covers them; one that detaches unpublished
+ * has nothing durable and reports no participant. Creation-transaction code
+ * must therefore not await a flush of its own session.
  * @param session - the session whose buffered events must reach durable storage.
  * @returns whether at least one durability listener participated, after every
  *   listener has settled successfully.
@@ -1296,13 +1332,16 @@ Source: [`packages/core/session/src/index.ts`](../../packages/core/session/src/i
 
 #### `session/event` — emit
 
-Post-commit, fire-and-forget append feed. The listener snapshot resolves before the log push, but callbacks run after it; observer failures are logged and contained without making the committed append fail. Scope-filtered dispatch (`@deepseek-ai/dsh-scope`): agent-scoped listeners receive only events from sessions entered through that agent's context.
+Post-commit, fire-and-forget append feed. The listener snapshot resolves before the log push, but callbacks run after it; observer failures are logged and contained without making the committed append fail. A session entered with SessionEnterOptions.deferPublication holds its appends and dispatches them, in log order, when SessionStore.publish commits it. Scope-filtered dispatch (`@deepseek-ai/dsh-scope`): agent-scoped listeners receive only events from sessions entered through that agent's context.
 
 ```ts cordis-catalog
 /**
  * Post-commit, fire-and-forget append feed. The listener snapshot resolves
  * before the log push, but callbacks run after it; observer failures are
  * logged and contained without making the committed append fail.
+ * A session entered with {@link SessionEnterOptions.deferPublication}
+ * holds its appends and dispatches them, in log order, when
+ * {@link SessionStore.publish} commits it.
  * Scope-filtered dispatch (`@deepseek-ai/dsh-scope`): agent-scoped listeners
  * receive only events from sessions entered through that agent's context.
  * @param session - the session whose log grew.

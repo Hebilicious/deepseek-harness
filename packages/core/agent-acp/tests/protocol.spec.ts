@@ -15,6 +15,7 @@ import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import {
   acpAdvertisedModels,
   acpBlockToContent,
+  acpMetaToolName,
   acpModeOption,
   acpModelOption,
   acpPermissionOutcome,
@@ -80,6 +81,25 @@ describe('acpToolContent', () => {
     expect(acpToolContent(undefined, circular).blocks[0]).toEqual({ type: 'text', text: '[object Object]' })
     expect(acpToolContent([{ type: 'content', content: { type: 'text', text: 'kept' } }], { ignored: true }).blocks)
       .toEqual([{ type: 'text', text: 'kept' }])
+  })
+})
+
+describe('acpMetaToolName', () => {
+  it('prefers toolName and falls back to inferenceToolName', () => {
+    expect(acpMetaToolName({
+      'cognition.ai/toolName': 'mcp__dsh__subagent',
+      'cognition.ai/inferenceToolName': 'mcp__dsh__other',
+    })).toBe('mcp__dsh__subagent')
+    expect(acpMetaToolName({ 'cognition.ai/inferenceToolName': 'mcp__dsh__subagent' }))
+      .toBe('mcp__dsh__subagent')
+  })
+
+  it('reads nothing from absent or non-string fields', () => {
+    expect(acpMetaToolName(undefined)).toBeUndefined()
+    expect(acpMetaToolName(null)).toBeUndefined()
+    expect(acpMetaToolName({})).toBeUndefined()
+    expect(acpMetaToolName({ 'cognition.ai/toolName': 7 })).toBeUndefined()
+    expect(acpMetaToolName({ 'cognition.ai/toolName': '' })).toBeUndefined()
   })
 })
 
