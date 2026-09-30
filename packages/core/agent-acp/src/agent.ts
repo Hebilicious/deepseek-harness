@@ -884,8 +884,11 @@ export class AcpAgent extends ExternalAgent implements AcpSessionPeer {
    * read-only sandbox maps to the closest non-editing mode (`ask`) whatever the
    * approval policy; only `never` over `danger-full-access` maps to the
    * auto-approve mode (`bypass`), because no harness mode confines its native
-   * tools to the dsh workspace; every other writable session maps to an
-   * edit-accepting mode, whose remaining asks the approval policy answers. Real Devin advertises
+   * tools to the dsh workspace. `never` over `workspace-write` — every
+   * delegated child's policy — maps to the harness's own guarded autonomous
+   * mode (`auto`, `smart`, `build`) so the child can run commands, and `ask`
+   * over a writable sandbox maps to an edit-accepting mode whose remaining asks
+   * the approval policy answers. Real Devin advertises
    * `accept-edits`, `smart`, `ask`, `plan`, and `bypass`; opencode and
    * mimocode advertise `build` and `plan`; the Claude Code adapter advertises
    * `default`, `acceptEdits`, `plan`, `auto`, and `bypassPermissions`. The deployment config `mode`
@@ -903,6 +906,7 @@ export class AcpAgent extends ExternalAgent implements AcpSessionPeer {
     const sandbox = this.sandboxMode()
     if (sandbox === 'read-only') return pick(['ask', 'plan'])
     if (approval === 'never' && sandbox === 'danger-full-access') return pick(['bypass', 'bypassPermissions', 'smart'])
+    if (approval === 'never') return pick(['auto', 'smart', 'build', 'accept-edits', 'acceptEdits'])
     return pick(['accept-edits', 'acceptEdits', 'build', 'smart'])
   }
 

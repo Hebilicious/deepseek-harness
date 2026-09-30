@@ -18,7 +18,7 @@ Agent 注册表本就挂载多个 agent harness——进程内循环、Codex app
 
 harness 解析只有一个所有者。`AgentRegistry.resolveHarness(harness, 'create' | 'resume')` 返回一次 `create` 或 `resume` 调用会落到的已挂载 harness——指定的 harness；否则对 resume 取未记录日志的所有者；再否则取唯一挂载的 harness——subagent 代码调用它，而不是重复这些回退。`persona`、`toolFilter` 与 `outputSchema` 通过循环的作用域组合安装，因此除非解析出的 harness 声明 `AgentHarness.hostsLoopComposition`，否则会被拒绝；循环 harness 与 `AgentRegistry.setFactory` 声明了它。所解析 harness 不服务的请求提供方路由会被拒绝；当显式 harness 选择无法服务子 agent 仅从父级继承的路由时，该路由会被丢弃，由所选 harness 应用自己的默认值。非循环 harness 上的子 agent 在创建期间记录 `subagent/descriptor`，因为这类 harness 不发出 `agent/pre-step`。冷恢复读取子 agent 自己的 `agent/harness` 记录，当该 harness 不再挂载时拒绝。
 
-harness 选择的子 agent 与任何进程内子 agent 获得相同的委派权限状态：沙箱覆盖、钉定为 `never` 的审批策略（[钉定 never 的 Agent Note](2026-08-10-subagent-approval-pinned-never.zh.md)）以及权限预设。ACP 驱动把该状态映射为无法逃出受限沙箱的 agent 模式：`read-only` 沙箱在任何审批策略下都选择 `ask` 或 `plan`；只有 `danger-full-access` 下的 `never` 才选择自动批准模式（`bypass` 或 `bypassPermissions`）；其他可写会话都选择接受编辑的模式，由审批策略回答其余每次请求，`never` 会拒绝它们。
+harness 选择的子 agent 与任何进程内子 agent 获得相同的委派权限状态：沙箱覆盖、钉定为 `never` 的审批策略（[钉定 never 的 Agent Note](2026-08-10-subagent-approval-pinned-never.zh.md)）以及权限预设。ACP 驱动把该状态映射为无法逃出受限沙箱的 agent 模式：`read-only` 沙箱在任何审批策略下都选择 `ask` 或 `plan`；只有 `danger-full-access` 下的 `never` 才选择自动批准模式（`bypass` 或 `bypassPermissions`）；`workspace-write` 下的 `never` 选择 harness 自有的受控自主模式（`auto`、`smart` 或 `build`），使委派子级能够运行命令；可写沙箱上的 `ask` 会话选择接受编辑的模式，由审批策略回答其余每次请求。
 
 `ctx.agentToolBridge` 通过经认证的逐 agent MCP 端点向外部 harness Session 提供 dsh 工具，包括 `subagent` 与 Agent Team 工具，因此每个经桥接的 harness 都能委派给每个已挂载 harness。每次绑定都会记录一条列出所服务工具名的 `agent-tool-bridge/exposed`。
 

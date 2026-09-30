@@ -723,9 +723,9 @@ describe('agent-acp driver', () => {
       return applied
     }
     expect(await run('s23c', { approval: 'never', sandbox: 'danger-full-access' })).toEqual(['bypassPermissions'])
-    // A delegated child pins `never`; over a confined sandbox it must not
-    // escape into the harness's unconfined auto-approve mode.
-    expect(await run('s23h', { approval: 'never', sandbox: 'workspace-write' })).toEqual(['acceptEdits'])
+    // A delegated child pins `never`; over a confined sandbox it runs the
+    // harness's guarded autonomous mode, never the unconfined auto-approve one.
+    expect(await run('s23h', { approval: 'never', sandbox: 'workspace-write' })).toEqual(['auto'])
     expect(await run('s23i', { approval: 'never', sandbox: 'read-only' })).toEqual(['plan'])
 
     bench = await setup({ MOCK_CONFIG_OPTIONS: claudeModes }, { config: { approval: 'ask' } })
