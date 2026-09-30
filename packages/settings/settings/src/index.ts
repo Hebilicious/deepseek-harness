@@ -248,7 +248,7 @@ export class SettingsForms extends Service {
     for (const [section, values] of Object.entries(sections ?? {})) {
       const ns = LEGACY_SECTION_ENTRIES[section] ?? section
       try {
-        await this.update(ns, values)
+        await this.update(ns, this.volatileSection(ns, section, imported, values))
       } catch (error) {
         this.ownerContext.logger.warn('settings: section %s of %s was not imported into entry %s', section, imported, ns)
         this.ownerContext.logger.warn(error)
@@ -420,6 +420,23 @@ export class SettingsForms extends Service {
       return mergeLayers(strip(raw, form), next) as Record<string, unknown>
     })
     this.describe()
+  }
+
+  /** Drop a legacy section's non-volatile top-level fields, which the profile form cannot hold, and log them.
+   * @param ns Profile entry id the section imports into.
+   * @param section Section name in the legacy document.
+   * @param imported Path of the renamed legacy document that keeps the dropped fields.
+   * @param values The legacy section.
+   * @returns The section's volatile fields, or the section unchanged when its entry exposes no schema.
+   */
+  private volatileSection(ns: string, section: string, imported: string, values: object): object {
+    const entry = this.ownerContext.configEditor.entries().find(row => row.options.id === ns)
+    const schema = entry === undefined ? undefined : this.schema(entry)
+    if (schema === undefined || !isPlainObject(values)) return values
+    const fixed = Object.keys(values).filter(key => !isVolatilePath(schema, [key]))
+    if (fixed.length === 0) return values
+    this.ownerContext.logger.warn('settings: non-volatile field(s) %s of section %s remain only in %s', fixed.join(', '), section, imported)
+    return Object.fromEntries(Object.entries(values).filter(([key]) => !fixed.includes(key)))
   }
 
   private schema(entry: Entry): z | undefined {
