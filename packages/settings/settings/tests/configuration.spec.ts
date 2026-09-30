@@ -312,15 +312,17 @@ it('registers optional presentation policy after Settings loads and removes it w
   await vi.waitFor(() => { expect(ctx.settings.describe().find(view => view.ns === 'first')!.autoGenerate).toBe(false) })
 })
 
-it('imports the removed settings.yaml into the profile once and keeps rejected sections in the renamed file', async () => {
+it('imports the removed settings.yaml into the profile once and keeps rejected fields in the renamed file', async () => {
   const { ctx, home, profile, start } = await fixture()
   await ctx.fiber.dispose()
   const legacy = join(home, 'settings.yaml')
-  writeFileSync(legacy, 'default-model:\n  model: legacy\nfirst:\n  ordinary: rejected\nmissing:\n  count: 1\n')
+  writeFileSync(legacy, 'default-model:\n  model: legacy\nfirst:\n  ordinary: rejected\n  count: 3\nmissing:\n  count: 1\n')
   const restored = await start()
   await vi.waitFor(() => { expect(restored.agentDefaultModel.currentSelection().model).toBe('legacy') })
   expect(parse(readFileSync(profile.patchPath, 'utf8'))).toContainEqual({ id: 'default-model', name: 'cordis:model', config: { provider: 'test', model: 'legacy' } })
-  expect(restored.settings.describe({ redactSecrets: true }).find(row => row.ns === 'first')!.value).toEqual({ count: 2, list: [] })
+  // A non-volatile field is logged and skipped without dropping its section's volatile fields.
+  await vi.waitFor(() => { expect(restored.settings.describe({ redactSecrets: true }).find(row => row.ns === 'first')!.value).toEqual({ count: 3, list: [] }) })
+  expect(readFileSync(profile.patchPath, 'utf8')).not.toContain('rejected')
   expect(existsSync(legacy)).toBe(false)
   expect(readFileSync(`${legacy}.imported`, 'utf8')).toContain('rejected')
   // An empty document is renamed without writes; a document that cannot be renamed is reported, not rethrown into boot.
