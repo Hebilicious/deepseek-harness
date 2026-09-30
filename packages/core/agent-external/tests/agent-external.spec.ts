@@ -729,7 +729,8 @@ describe('ExternalAgent turn drive', () => {
     agent.driveImpl = (_messages, drive) => new Promise((_resolve, reject) => {
       drive.signal.addEventListener('abort', () => {
         agent.beginUnprompted()
-        reject(drive.signal.reason)
+        const reason: unknown = drive.signal.reason
+        reject(reason instanceof Error ? reason : new Error(String(reason)))
       }, { once: true })
     })
 
