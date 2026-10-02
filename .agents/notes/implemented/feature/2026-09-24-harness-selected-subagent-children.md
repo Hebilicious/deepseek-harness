@@ -46,26 +46,13 @@ What is given up: a harness-selected child's Session and driver live in the pare
 
 A headless real-model pass ran against the `web` profile, plus the Agent Team overlay for the team rows, driving `session/create` then `session/prompt` over the remote RPC and reading durable session logs. A delegated call counts as confirmed when the child session records `agent/harness` with the requested runtime and the child's reply reaches the parent tool result; bridged parents and teammates also log an `agent-tool-bridge/exposed` record listing the tools served at bind, which is the signature to check when an external harness reports a missing delegation or Team tool.
 
-Confirmed `subagent` pairs:
+The latest pass covers every external pair: `codex`, `devin`, `claude`, and `opencode`, each as parent and as child, for both `subagent` and `spawn_teammate`, with every harness on a low-cost model and one-word prompts. All 32 cells confirmed. A `subagent` call that starts its child in the background reaches the parent through the settlement wake turn once the parent ends its turn.
 
-| Parent harness | Child harness | Tool path |
+| Tool | Parents × children | Confirmed |
 |---|---|---|
-| `dsh` | `dsh` | in-process `subagent` |
-| `dsh` | `devin` | in-process `subagent` |
-| `devin` | `dsh` | bridged `subagent` |
-| `codex` | `devin` | bridged `subagent` |
-| `codex` | `dsh` | bridged `subagent` |
-| `claude` | `dsh` | bridged `subagent` |
-| `claude` | `devin` | bridged `subagent` |
+| `subagent` | `codex`, `devin`, `claude`, `opencode` × the same four | 16 / 16 |
+| `spawn_teammate` | `codex`, `devin`, `claude`, `opencode` × the same four | 16 / 16 |
 
-Confirmed `spawn_teammate` pairs:
+The pass exposed four bridge defects, now fixed: Codex refused every MCP call under `never` approval, so its bridge server sets `default_tools_approval_mode: approve`; ACP harnesses asked permission for bridged tools, so the driver allows those asks once and the bridged call meets the dsh approval policy when it executes; opencode keeps MCP servers process-wide, so one session could call another session's endpoint as the wrong agent, which unique endpoint names and `processPerSession` close; and delegated ACP children could not run commands, so `never` over `workspace-write` selects the harness's guarded autonomous mode.
 
-| Lead harness | Teammate harness | Notes |
-|---|---|---|
-| `dsh` | `dsh` | same-runtime default |
-| `devin` | `devin` | teammate exposes the nine Team tools over the bridge |
-| `claude` | `claude` | same-runtime default |
-| `dsh` | `devin` | cross-harness on the target's default route |
-| `devin` | `dsh` | cross-harness with an explicit `provider`/`model` |
-
-Coverage gaps: `grok`, `opencode`, and `mimo` were exercised neither as parent nor child, though they bind through the same `agent-acp` path as the confirmed ACP harnesses; `codex` and `claude` were not exercised as cross-harness team members; a `dsh` child selected from an external parent carries no default route in this profile, so `spawn_teammate` must pass `provider`/`model` or the loop's `{{model}}` assembly rejects the first turn.
+Coverage gaps: the `dsh` rows rest on an earlier pass (`dsh` → `dsh` and `devin`; `devin`, `codex`, and `claude` → `dsh`; teams `dsh` ↔ `devin`) because no loop provider had budget during the latest one; `grok` and `mimo` remain unexercised. Claude Code on Haiku falls back from `auto` to `acceptEdits`, so a Haiku child cannot run commands. A `dsh` child selected from an external parent carries no default route in this profile, so `spawn_teammate` must pass `provider`/`model`.

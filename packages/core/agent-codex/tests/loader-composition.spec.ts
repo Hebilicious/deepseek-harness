@@ -224,8 +224,11 @@ describe('agent-codex real Loader composition', () => {
       .map(line => JSON.parse(line) as { method: string; params: unknown })
     const created = calls.find(call => call.method === 'thread/start')
     const config = (created!.params as { config?: Record<string, unknown> }).config ?? {}
-    expect(config['mcp_servers.dsh.url']).toMatch(/^http:\/\/127\.0\.0\.1:\d+\/mcp$/)
-    const headers = config['mcp_servers.dsh.http_headers'] as Record<string, string>
+    const names = Object.keys(config).flatMap(key => /^mcp_servers\.([^.]+)\.url$/.exec(key)?.[1] ?? [])
+    expect(names).toHaveLength(1)
+    expect(names[0]).toMatch(/^dsh-[0-9a-f]{6}$/)
+    expect(config[`mcp_servers.${names[0]!}.url`]).toMatch(/^http:\/\/127\.0\.0\.1:\d+\/mcp$/)
+    const headers = config[`mcp_servers.${names[0]!}.http_headers`] as Record<string, string>
     expect(headers['Authorization']).toMatch(/^Bearer /)
 
     const unauthorized = calls.find(call => call.method === 'mcp-unauthorized')

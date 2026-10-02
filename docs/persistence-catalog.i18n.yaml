@@ -48,8 +48,8 @@
   en: d39b294085ca4dcd
   zh: d39b294085ca4dcd
 /session-persistence-event-catalog/events/agent-tool-bridge/agent-tool-bridge-exposed-log-only:
-  en: ce70151c53322dea
-  zh: 82be2d9133011d56
+  en: 4bcc0cc65429564e
+  zh: c28381734ed0b972
 /session-persistence-event-catalog/events/approval:
   en: 9d2ec4c4c3664b9f
   zh: 9d2ec4c4c3664b9f
@@ -1875,8 +1875,8 @@
   en: cbb3566dd0ea8512
   zh: 195a3052d5e47aa1
 /session-persistence-event-catalog/resolved-persistence-types/tools:
-  en: 15d5ade30a70af92
-  zh: 54805918c72b9387
+  en: 9fc23705fcb1aebd
+  zh: 33303f881e8b25cf
 /session-persistence-event-catalog/resolved-persistence-types/turn:
   en: 1b483dff8fce1134
   zh: 1ff9325ca43d56fa

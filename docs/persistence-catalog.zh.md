@@ -289,7 +289,7 @@ export type SessionEvent<T extends SessionEventType = SessionEventType> = {
 }
 ```
 
-来源：[`packages/core/agent-tool-bridge/src/index.ts:91`](../packages/core/agent-tool-bridge/src/index.ts)
+来源：[`packages/core/agent-tool-bridge/src/index.ts:94`](../packages/core/agent-tool-bridge/src/index.ts)
 
 ### `approval/*`
 
@@ -7749,7 +7749,7 @@ SHA-256: `79ddc907312f97cf9553d4841e8b3fc937097bd8d97900a790efad3c05255e99`
 
 SHA-256: `5deffe3f9b577121a63975fd2a747faa1fa44da54097f7e0d5ed74355a01598f`
 
-来源：[`packages/core/agent-tool-bridge/src/index.ts:91`](../packages/core/agent-tool-bridge/src/index.ts)
+来源：[`packages/core/agent-tool-bridge/src/index.ts:94`](../packages/core/agent-tool-bridge/src/index.ts)
 
 | 属性 | 存在性 | 类型 |
 |---|---|---|

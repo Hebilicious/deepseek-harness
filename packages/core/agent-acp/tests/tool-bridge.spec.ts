@@ -74,7 +74,8 @@ describe('agent-acp tool bridge wiring', () => {
     expect(created).toBeDefined()
     const servers = mcpServersOf(created!)
     expect(servers).toHaveLength(1)
-    expect(servers[0]).toMatchObject({ type: 'http', name: 'dsh' })
+    expect(servers[0]).toMatchObject({ type: 'http' })
+    expect(servers[0]!.name).toMatch(/^dsh-[0-9a-f]{6}$/)
     expect(servers[0]!.url).toMatch(/^http:\/\/127\.0\.0\.1:\d+\/mcp$/)
     const authorization = servers[0]!.headers.find(header => header.name === 'Authorization')
     expect(authorization?.value).toMatch(/^Bearer /)
@@ -191,6 +192,77 @@ describe('agent-acp tool bridge wiring', () => {
     expect(results[0]!.type === 'tool/result' && results[0]!.data.meta).toEqual({ echoed: 'pong:ping' })
   }, TEST_TIMEOUT)
 
+  it('allows a harness permission request for a bridged tool without asking the dsh approval seam', async () => {
+    const decide = async (id: string, env: Record<string, string>): Promise<{ outcome: string; asked: number }> => {
+      bench = await setup({ MOCK_MCP_HTTP: '1', MOCK_PERMISSION: '1', ...env }, { bridge: true, approval: true })
+      bench.ctx.tools.register(bridgeEcho)
+      bench.ctx.on('approval/request', () => Promise.resolve('rejected' as const))
+      const { agent } = await bench.ctx.agents.create({ sessionId: SessionId(id), agentOptions: {} })
+      send(agent, 'call it')
+      await agent.whenIdle()
+      const outcome = JSON.stringify((await recordedCalls(bench.recordFile)).find(call => call.method === 'permission-outcome'))
+      const asked = eventsOf(agent, 'approval/asked').length
+      await teardown(bench)
+      bench = undefined
+      return { outcome, asked }
+    }
+    // Claude Code names the bridged tool; Devin names only the MCP server in its options.
+    const claude = await decide('perm-claude', { MOCK_PERMISSION_TITLE: 'mcp__{{server}}__bridge_echo' })
+    expect(claude.outcome).toContain('"yes"')
+    expect(claude.asked).toBe(0)
+    const devin = await decide('perm-devin', {
+      MOCK_PERMISSION_TITLE: '',
+      MOCK_PERMISSION_OPTIONS: JSON.stringify([
+        { optionId: 'yes', name: 'Allow', kind: 'allow_once' },
+        { optionId: 'no', name: 'Deny calling bridge_echo on the {{server}} MCP server', kind: 'reject_once' },
+      ]),
+    })
+    expect(devin.outcome).toContain('"yes"')
+    expect(devin.asked).toBe(0)
+    // Any other request still goes through the approval seam, including the
+    // fixed `dsh` stem and another server's name.
+    for (const title of ['mcp__other__bridge_echo', 'mcp__dsh__bridge_echo']) {
+      const other = await decide(`perm-other-${title}`, { MOCK_PERMISSION_TITLE: title })
+      expect(other.outcome).toContain('"no"')
+      expect(other.asked).toBe(1)
+    }
+    const otherServer = await decide('perm-other-server', {
+      MOCK_PERMISSION_TITLE: '',
+      MOCK_PERMISSION_OPTIONS: JSON.stringify([
+        { optionId: 'yes', name: 'Allow', kind: 'allow_once' },
+        { optionId: 'no', name: 'Deny calling bridge_echo on the dsh MCP server', kind: 'reject_once' },
+      ]),
+    })
+    expect(otherServer.outcome).toContain('"no"')
+    expect(otherServer.asked).toBe(1)
+    // Without an opened endpoint (no MCP http support) nothing is bridged.
+    const unbridged = await decide('perm-no-endpoint', {
+      MOCK_MCP_HTTP: '0',
+      MOCK_PERMISSION_TITLE: '',
+      MOCK_PERMISSION_OPTIONS: JSON.stringify([
+        { optionId: 'yes', name: 'Allow', kind: 'allow_once' },
+        { optionId: 'no', name: 'Deny calling bridge_echo on the dsh MCP server', kind: 'reject_once' },
+      ]),
+    })
+    expect(unbridged.outcome).toContain('"no"')
+    expect(unbridged.asked).toBe(1)
+  }, TEST_TIMEOUT * 3)
+
+  it('names each session\'s endpoint uniquely on one harness', async () => {
+    // A harness that keys MCP servers process-wide by name (opencode) must not
+    // see one session's endpoint replace another's.
+    bench = await setup({ MOCK_MCP_HTTP: '1' }, { bridge: true })
+    await bench.ctx.agents.create({ sessionId: SessionId('bridge-unique-1'), agentOptions: {} })
+    await bench.ctx.agents.create({ sessionId: SessionId('bridge-unique-2'), agentOptions: {} })
+
+    const names = (await recordedCalls(bench.recordFile))
+      .filter(call => call.method === 'session/new')
+      .map(call => mcpServersOf(call)[0]!.name)
+    expect(names).toHaveLength(2)
+    for (const name of names) expect(name).toMatch(/^dsh-[0-9a-f]{6}$/)
+    expect(names[0]).not.toBe(names[1])
+  }, TEST_TIMEOUT)
+
   it('revokes the endpoint credential when the agent is disposed', async () => {
     bench = await setup({ MOCK_MCP_HTTP: '1' }, { bridge: true })
     const handle = await bench.ctx.agents.create({ sessionId: SessionId('bridge-2'), agentOptions: {} })
@@ -253,7 +325,11 @@ describe('agent-acp tool bridge wiring', () => {
     expect(loaded).toBeDefined()
     const servers = mcpServersOf(loaded!)
     expect(servers).toHaveLength(1)
-    expect(servers[0]).toMatchObject({ type: 'http', name: 'dsh' })
+    expect(servers[0]).toMatchObject({ type: 'http' })
+    expect(servers[0]!.name).toMatch(/^dsh-[0-9a-f]{6}$/)
+    // The resumed agent opened its own endpoint under a fresh name.
+    const created = mcpServersOf(calls.find(call => call.method === 'session/new')!)
+    expect(servers[0]!.name).not.toBe(created[0]!.name)
 
     // The resumed agent owns a fresh credential: its exposure event is on the
     // session and the previous endpoint's token no longer answers.

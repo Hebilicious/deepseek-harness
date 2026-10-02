@@ -67,6 +67,7 @@ Choose this driver when a harness's own loop, prompt, tools, MCP servers, and co
 | `harnesses[].reasoningEffort` | — | Deployment default below the session's selection |
 | `harnesses[].catalogArgs` | — | Model-catalog CLI arguments; omitted, the catalog comes from a session advert |
 | `harnesses[].probeCatalog` | `true` | Read the catalog by opening one throwaway session before any session binds |
+| `harnesses[].processPerSession` | `false` | Spawn one harness process per dsh session; required for a harness that keeps MCP servers process-wide (opencode), where a shared process lets one session call another session's tool-bridge endpoint |
 | `catalogCacheMs` | `300000` | How long one harness's catalog read is reused before the next read |
 | `catalogFailureCacheMs` | `30000` | How long one harness's failed catalog read is remembered before the next attempt |
 | `harnesses[].authStatusArgs` | `['auth', 'status']` | Auth-status command arguments; an explicitly empty list declares no CLI verb |

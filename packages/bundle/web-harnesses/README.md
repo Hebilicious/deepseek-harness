@@ -49,7 +49,7 @@ In-box bundles resolve from the dsh installation; the launcher activates this la
 | `agent-default-model` | `provider: ''`, `model: ''`: a deployment default belongs to one harness's catalog route, so no session carries one until the picker or a `model/selection` chooses it |
 | `session-title-llm` | Pinned to `deepseek-official` / `deepseek-flash`, because a session's logged route is a catalog-only adapter for external harnesses and serves no streams |
 | `agent-codex` | Inserted: one shared app-server per profile, one Codex thread per session |
-| `agent-acp` | Inserted with five harness entries, one process each: `devin`, `grok`, `opencode`, `mimo`, `claude` |
+| `agent-acp` | Inserted with five harness entries, one process each: `devin`, `grok`, `opencode`, `mimo`, `claude`; `opencode` runs one process per session (`processPerSession`) because it keeps MCP servers process-wide |
 | `agent-tool-bridge` | Inserted: serves the session's scoped dsh tools to external harnesses over one authenticated loopback MCP endpoint per agent, excluding names every harness has natively or only the in-process loop can drive |
 
 The harness rows themselves are ordinary profile configuration. Repoint, add, or remove an ACP entry in the profile's own `cordis.patch.yml`, and the picker follows the mounted set.

@@ -49,7 +49,7 @@ dsh plugin --profile <name> remove @deepseek-ai/dsh-web-harnesses
 | `agent-default-model` | `provider: ''`、`model: ''`：部署级默认值只属于某一个 harness 的目录路由，因此在选择器或 `model/selection` 选定之前，会话不携带默认值 |
 | `session-title-llm` | 固定为 `deepseek-official` / `deepseek-flash`，因为外部 harness 的会话记录路由是仅提供目录的 adapter，不提供流式输出 |
 | `agent-codex` | 插入：每个 profile 一个共享 app-server，每个会话一个 Codex 线程 |
-| `agent-acp` | 插入五条 harness 条目，各一个进程：`devin`、`grok`、`opencode`、`mimo`、`claude` |
+| `agent-acp` | 插入五条 harness 条目，各一个进程：`devin`、`grok`、`opencode`、`mimo`、`claude`；`opencode` 按进程范围保存 MCP 服务器，因此每个会话运行一个进程（`processPerSession`） |
 | `agent-tool-bridge` | 插入：为每个 agent 提供一个经认证的回环 MCP 端点，把会话作用域内可见的 dsh 工具提供给外部 harness，排除每个 harness 原生已有或只有进程内循环才能驱动的工具名 |
 
 harness 行本身就是普通的 profile 配置。在 profile 自己的 `cordis.patch.yml` 中改写、添加或移除 ACP 条目，选择器会跟随已挂载的集合。

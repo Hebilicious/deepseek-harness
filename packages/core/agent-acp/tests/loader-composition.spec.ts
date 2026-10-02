@@ -234,7 +234,7 @@ describe('agent-acp real Loader composition', () => {
     const created = calls.find(call => call.method === 'session/new')
     const servers = (created!.params as { mcpServers?: { type: string; url: string }[] }).mcpServers ?? []
     expect(servers).toHaveLength(1)
-    expect(servers[0]).toMatchObject({ type: 'http', name: 'dsh' })
+    expect(servers[0]).toMatchObject({ type: 'http', name: expect.stringMatching(/^dsh-[0-9a-f]{6}$/) as unknown })
     expect(servers[0]!.url).toMatch(/^http:\/\/127\.0\.0\.1:\d+\/mcp$/)
 
     const unauthorized = calls.find(call => call.method === 'mcp-unauthorized')

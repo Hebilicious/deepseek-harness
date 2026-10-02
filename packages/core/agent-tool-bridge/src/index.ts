@@ -14,7 +14,10 @@
  * appends one log-only `agent-tool-bridge/exposed` event per opened endpoint,
  * recording the tool list the harness may see.
  *
- * Harnesses report bridged calls under `mcp__<serverName>__<tool>` names, so
+ * Every endpoint gets its own server name, `<serverName>-<6 hex>`: a harness
+ * that keeps MCP servers process-wide by name (opencode) would otherwise let
+ * one session's endpoint replace or close another's. Harnesses report
+ * bridged calls under `mcp__<endpoint name>__<tool>` or `<endpoint name>_<tool>`, so
  * the bridge also retains each settled execution's presentation `meta` for
  * the driver's transcript correlation: {@link bridgedToolName} maps a
  * harness-reported name back to the dsh tool and {@link takeCompletion}
@@ -99,6 +102,8 @@ declare module '@deepseek-ai/dsh-session/types' {
 interface Endpoint {
   /** The agent whose tool scope this endpoint serves. */
   readonly agent: Agent
+  /** The endpoint's own MCP server name, `<serverName>-<6 hex>`. */
+  readonly name: string
   /** The endpoint's bearer credential as sent in Authorization, compared constant-time per request. */
   readonly credential: Buffer
   /** The endpoint's MCP protocol handler (fresh `McpServer` per request). */
@@ -160,8 +165,10 @@ export class AgentToolBridge extends Service {
   })
 
   private readonly exclude: ReadonlySet<string>
-  /** The `mcp__<serverName>__` prefix harnesses report bridged tools under. */
-  private readonly bridgedPrefix: string
+  /** The configured server-name stem every endpoint name starts with. */
+  private readonly serverName: string
+  /** Endpoint server names each agent has opened, kept until the agent is disposed so late results still resolve. */
+  private readonly names = new Map<Agent, Set<string>>()
   private readonly correlationLimit: number
   private readonly endpoints = new Set<Endpoint>()
   /**
@@ -196,11 +203,12 @@ export class AgentToolBridge extends Service {
     if (serverName.length === 0 || serverName.includes('.') || serverName.includes('__')) {
       throw new Error(`agentToolBridge: serverName "${serverName}" must be non-empty and not contain '.' or '__'`)
     }
-    this.bridgedPrefix = `mcp__${serverName}__`
+    this.serverName = serverName
     this.correlationLimit = config.correlationLimit ?? 100
     this.exclude = new Set(config.exclude ?? [])
     ctx.on('agent/disposed', ({ agent }) => {
       this.completions.delete(agent)
+      this.names.delete(agent)
       /* v8 ignore start -- handler.close() has no failure mode a spec can reach deterministically */
       void this.closeAgentEndpoints(agent).catch((error: unknown) => {
         this.ctx.logger.warn(`agentToolBridge: endpoint teardown failed: ${errorChain(error)}`)
@@ -302,14 +310,16 @@ export class AgentToolBridge extends Service {
   async openMcpEndpoint(agent: Agent): Promise<BridgeMcpEndpoint> {
     await this.ensureListening()
     const credential = randomBytes(32).toString('base64url')
+    const name = `${this.serverName}-${randomBytes(3).toString('hex')}`
     const controller = new AbortController()
-    const handler = createMcpHandler(() => this.mcpServer(agent, controller.signal), {
+    const handler = createMcpHandler(() => this.mcpServer(agent, name, controller.signal), {
       onerror: (error) => {
         this.ctx.logger.warn(`agentToolBridge: MCP request failed: ${errorChain(error)}`)
       },
     })
     const endpoint: Endpoint = {
       agent,
+      name,
       credential: Buffer.from(credential),
       handler,
       nodeHandler: toNodeHandler(handler),
@@ -317,6 +327,9 @@ export class AgentToolBridge extends Service {
       closed: false,
     }
     this.endpoints.add(endpoint)
+    const names = this.names.get(agent) ?? new Set<string>()
+    names.add(name)
+    this.names.set(agent, names)
     try {
       agent.session.append('agent-tool-bridge/exposed', {
         tools: this.tools(agent).map(tool => tool.name),
@@ -337,7 +350,7 @@ export class AgentToolBridge extends Service {
     /* v8 ignore next -- ensureListening resolved, so the listener is bound */
     if (bound === undefined) throw new Error('agentToolBridge: listener is not bound')
     return {
-      name: this.config.serverName ?? 'dsh',
+      name,
       url: `http://${bound.host}:${bound.port}/mcp`,
       headers: [{ name: 'Authorization', value: `Bearer ${credential}` }],
       close: () => this.closeEndpoint(endpoint),
@@ -346,18 +359,24 @@ export class AgentToolBridge extends Service {
 
   /**
    * Resolve a harness-reported tool name to the agent's bridged dsh tool:
-   * `mcp__<serverName>__<tool>` where `<tool>` is currently bridged for
-   * `agent`. Excluded, unscoped, and unrecognized names return undefined, so
+   * `mcp__<endpoint name>__<tool>` (Claude Code, Codex) or
+   * `<endpoint name>_<tool>` (opencode) for an endpoint this agent opened,
+   * where `<tool>` is currently bridged for `agent`. Excluded, unscoped, and unrecognized names return undefined, so
    * the caller logs them exactly as the harness reported.
    * @param agent - the agent the harness is driving.
    * @param reported - the tool name the harness reported for the call.
    * @returns the dsh tool name, or undefined when the call is not bridged.
    */
   bridgedToolName(agent: Agent, reported: string): string | undefined {
-    if (!reported.startsWith(this.bridgedPrefix)) return undefined
-    const name = reported.slice(this.bridgedPrefix.length)
-    if (name.length === 0 || this.exclude.has(name)) return undefined
-    return this.ctx.tools.get(name, agent) === undefined ? undefined : name
+    for (const endpointName of this.names.get(agent) ?? []) {
+      for (const prefix of [`mcp__${endpointName}__`, `${endpointName}_`]) {
+        if (!reported.startsWith(prefix)) continue
+        const name = reported.slice(prefix.length)
+        if (name.length === 0 || this.exclude.has(name)) return undefined
+        return this.ctx.tools.get(name, agent) === undefined ? undefined : name
+      }
+    }
+    return undefined
   }
 
   /**
@@ -388,9 +407,9 @@ export class AgentToolBridge extends Service {
   }
 
   /** Build the per-request `McpServer` serving `agent`'s current bridged set. */
-  private mcpServer(agent: Agent, endpointSignal: AbortSignal): McpServer {
+  private mcpServer(agent: Agent, name: string, endpointSignal: AbortSignal): McpServer {
     const mcp = new McpServer(
-      { name: this.config.serverName ?? 'dsh', version: '0.0.0' },
+      { name, version: '0.0.0' },
       { capabilities: { tools: {} } },
     )
     for (const tool of this.tools(agent)) {

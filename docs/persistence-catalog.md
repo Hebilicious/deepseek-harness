@@ -287,7 +287,7 @@ Source: [`packages/preset/agent-preset-registry/src/session.ts:28`](../packages/
 }
 ```
 
-Source: [`packages/core/agent-tool-bridge/src/index.ts:91`](../packages/core/agent-tool-bridge/src/index.ts)
+Source: [`packages/core/agent-tool-bridge/src/index.ts:94`](../packages/core/agent-tool-bridge/src/index.ts)
 
 ### `approval/*`
 
@@ -7747,7 +7747,7 @@ Sources: [`packages/todo/tool-todo/src/types.ts:31`](../packages/todo/tool-todo/
 
 SHA-256: `5deffe3f9b577121a63975fd2a747faa1fa44da54097f7e0d5ed74355a01598f`
 
-Sources: [`packages/core/agent-tool-bridge/src/index.ts:91`](../packages/core/agent-tool-bridge/src/index.ts)
+Sources: [`packages/core/agent-tool-bridge/src/index.ts:94`](../packages/core/agent-tool-bridge/src/index.ts)
 
 | Property | Presence | Type |
 |---|---|---|

@@ -444,7 +444,7 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
       },
       {
         signature: 'bridgedToolName(agent: Agent, reported: string): string | undefined',
-        description: 'Resolve a harness-reported tool name to the agent\'s bridged dsh tool: `mcp__<serverName>__<tool>` where `<tool>` is currently bridged for `agent`. Excluded, unscoped, and unrecognized names return undefined, so the caller logs them exactly as the harness reported.',
+        description: 'Resolve a harness-reported tool name to the agent\'s bridged dsh tool: `mcp__<endpoint name>__<tool>` (Claude Code, Codex) or `<endpoint name>_<tool>` (opencode) for an endpoint this agent opened, where `<tool>` is currently bridged for `agent`. Excluded, unscoped, and unrecognized names return undefined, so the caller logs them exactly as the harness reported.',
         parameters: [{ name: 'agent', description: 'the agent the harness is driving.' }, { name: 'reported', description: 'the tool name the harness reported for the call.' }],
         returns: 'the dsh tool name, or undefined when the call is not bridged.',
       },

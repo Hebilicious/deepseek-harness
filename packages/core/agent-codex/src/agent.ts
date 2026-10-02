@@ -242,7 +242,11 @@ export class CodexAgent extends ExternalAgent implements CodexThreadPeer {
    * Open this agent's tool-bridge endpoint when the deployment mounts the
    * `agentToolBridge` service, and shape it as the `config` overrides both
    * `thread/start` and `thread/resume` accept: one `mcp_servers.<name>` entry
-   * whose `http_headers` carry the endpoint's bearer credential. Codex
+   * whose `http_headers` carry the endpoint's bearer credential and whose
+   * tools are pre-approved (`default_tools_approval_mode: approve`): every
+   * bridged call already runs through the dsh approval pipeline, and Codex
+   * otherwise refuses an MCP call outright under the `never` approval policy
+   * a delegated child carries. Codex
    * resolves config overrides per thread request, so the fresh credential a
    * rebind mints reaches a resumed thread — `thread/resume` carries no
    * `dynamicTools` member, so the endpoint rides the `config` override both
@@ -259,6 +263,7 @@ export class CodexAgent extends ExternalAgent implements CodexThreadPeer {
     return {
       [`mcp_servers.${endpoint.name}.url`]: endpoint.url,
       [`mcp_servers.${endpoint.name}.http_headers`]: headers,
+      [`mcp_servers.${endpoint.name}.default_tools_approval_mode`]: 'approve',
     }
   }
 

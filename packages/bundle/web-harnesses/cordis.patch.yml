@@ -93,6 +93,9 @@
             description: opencode runs the session over the Agent Client Protocol
             executable: opencode
             args: ['acp']
+            # opencode keeps MCP servers process-wide, so a shared process
+            # would let one session call another's tool-bridge endpoint.
+            processPerSession: true
           # Claude Code has no ACP mode of its own, so this entry runs the ACP
           # adapter, which drives the `claude` CLI underneath. `npx` resolves
           # the adapter on first use; a machine that installs it globally can

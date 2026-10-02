@@ -84,6 +84,9 @@
  *                         driver's unnamed-tool fallback).
  * - `MOCK_PERMISSION`   — call `session/request_permission` before answering;
  *                         `MOCK_PERMISSION_OPTIONS` overrides the option list.
+ *                         `{{server}}` in the title or an option name becomes
+ *                         the name of the session's first http `mcpServers`
+ *                         entry.
  * - `MOCK_ELICIT`       — call `elicitation/create` with a flat form schema
  *                         (`MOCK_ELICIT_MODE` selects a non-form mode).
  * - `MOCK_STOP`         — the `stopReason` `session/prompt` returns
@@ -409,6 +412,12 @@ interface ProbedMcpServer {
   readonly headers?: readonly { name: string; value: string }[]
 }
 
+/** Replace `{{server}}` with the name of the session's first http `mcpServers` entry. */
+function withServerName(text: string): string {
+  const server = sessionMcpServers.find(entry => entry.type === 'http')
+  return text.replaceAll('{{server}}', server?.name ?? '')
+}
+
 /** POST one MCP JSON-RPC message; returns the status and any result/error payload. */
 async function mcpPost(
   url: string,
@@ -673,8 +682,8 @@ function makeAgent() {
       if (WANT_PERMISSION) {
         const decision = await conn.request(methods.client.session.requestPermission, {
           sessionId: params.sessionId,
-          toolCall: { toolCallId: 'mock-call', title: PERMISSION_TITLE },
-          options: PERMISSION_OPTIONS ?? [
+          toolCall: { toolCallId: 'mock-call', title: withServerName(PERMISSION_TITLE) },
+          options: PERMISSION_OPTIONS?.map(option => ({ ...option, name: withServerName(option.name) })) ?? [
             { optionId: 'yes', name: 'Allow once', kind: 'allow_once' as const },
             { optionId: 'always', name: 'Always allow', kind: 'allow_always' as const },
             { optionId: 'no', name: 'Reject', kind: 'reject_once' as const },

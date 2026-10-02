@@ -192,7 +192,7 @@ describe('AgentToolBridge', () => {
     const agent = { id, session: ctx.sessions.create(id) } as unknown as Agent
 
     const endpoint = await bridge.openMcpEndpoint(agent)
-    expect(endpoint.name).toBe('dsh')
+    expect(endpoint.name).toMatch(/^dsh-[0-9a-f]{6}$/)
     expect(endpoint.url).toMatch(/^http:\/\/127\.0\.0\.1:\d+\/mcp$/)
     const client = await connect(endpoint)
     expect((await client.listTools()).tools.map(t => t.name)).toContain('ping')
@@ -249,12 +249,13 @@ describe('AgentToolBridge', () => {
     const agent = bench.agent()
     const endpoint = await bench.bridge.openMcpEndpoint(agent)
 
-    expect(endpoint.name).toBe('dsh')
+    expect(endpoint.name).toMatch(/^dsh-[0-9a-f]{6}$/)
     expect(endpoint.url).toMatch(/^http:\/\/127\.0\.0\.1:\d+\/mcp$/)
     const auth = endpoint.headers.find(h => h.name === 'Authorization')
     expect(auth?.value).toMatch(/^Bearer [A-Za-z0-9_-]{43}$/)
 
     const client = await connect(endpoint)
+    expect(client.getServerVersion()?.name).toBe(endpoint.name)
     const tools = await client.listTools()
     expect(tools.tools.map(t => t.name)).toContain('ping')
     expect(tools.tools.map(t => t.name)).not.toContain('blocked')
@@ -274,7 +275,10 @@ describe('AgentToolBridge', () => {
   it('applies configured name and port', async () => {
     bench = await setup({ serverName: 'bridge-x', port: 0 })
     const endpoint = await bench.bridge.openMcpEndpoint(bench.agent())
-    expect(endpoint.name).toBe('bridge-x')
+    expect(endpoint.name).toMatch(/^bridge-x-[0-9a-f]{6}$/)
+    const again = await bench.bridge.openMcpEndpoint(bench.agent())
+    expect(again.name).not.toBe(endpoint.name)
+    await again.close()
     expect(endpoint.url).toMatch(/^http:\/\/127\.0\.0\.1:\d+\/mcp$/)
     await endpoint.close()
   })
@@ -577,21 +581,46 @@ describe('AgentToolBridge transcript correlation', () => {
     await ctx.fiber.dispose()
   })
 
-  it('recognizes canonical mcp__dsh__ names and ignores everything else', async () => {
+  it('recognizes names under the agent\'s own endpoint names and ignores everything else', async () => {
     bench = await setup({ exclude: ['blocked'] })
     const agent = bench.agent()
-    expect(bench.bridge.bridgedToolName(agent, 'mcp__dsh__ping')).toBe('ping')
-    expect(bench.bridge.bridgedToolName(agent, 'mcp__dsh__blocked')).toBeUndefined()
-    expect(bench.bridge.bridgedToolName(agent, 'mcp__dsh__unknown')).toBeUndefined()
+    expect(bench.bridge.bridgedToolName(agent, 'mcp__dsh__ping')).toBeUndefined()
+    const { name } = await bench.bridge.openMcpEndpoint(agent)
+    expect(bench.bridge.bridgedToolName(agent, `mcp__${name}__ping`)).toBe('ping')
+    expect(bench.bridge.bridgedToolName(agent, `${name}_ping`)).toBe('ping')
+    expect(bench.bridge.bridgedToolName(agent, `mcp__${name}__blocked`)).toBeUndefined()
+    expect(bench.bridge.bridgedToolName(agent, `${name}_blocked`)).toBeUndefined()
+    expect(bench.bridge.bridgedToolName(agent, `mcp__${name}__unknown`)).toBeUndefined()
+    expect(bench.bridge.bridgedToolName(agent, `mcp__${name}__`)).toBeUndefined()
+    expect(bench.bridge.bridgedToolName(agent, 'mcp__dsh__ping')).toBeUndefined()
     expect(bench.bridge.bridgedToolName(agent, 'mcp__other__ping')).toBeUndefined()
-    expect(bench.bridge.bridgedToolName(agent, 'mcp__dsh__')).toBeUndefined()
     expect(bench.bridge.bridgedToolName(agent, 'ping')).toBeUndefined()
   })
 
-  it('uses the configured serverName in recognition', async () => {
+  it('resolves only the endpoint names the agent opened, until the agent is disposed', async () => {
+    bench = await setup()
+    const first = bench.agent()
+    const second = bench.agent()
+    const own = await bench.bridge.openMcpEndpoint(first)
+    const other = await bench.bridge.openMcpEndpoint(second)
+    expect(own.name).not.toBe(other.name)
+    expect(bench.bridge.bridgedToolName(first, `mcp__${other.name}__ping`)).toBeUndefined()
+    expect(bench.bridge.bridgedToolName(first, `${other.name}_ping`)).toBeUndefined()
+    // A closed endpoint's name still resolves so late results correlate.
+    await own.close()
+    expect(bench.bridge.bridgedToolName(first, `mcp__${own.name}__ping`)).toBe('ping')
+    bench.ctx.emit('agent/disposed', { agent: first })
+    expect(bench.bridge.bridgedToolName(first, `mcp__${own.name}__ping`)).toBeUndefined()
+    await other.close()
+  })
+
+  it('uses the configured serverName as the endpoint name stem in recognition', async () => {
     bench = await setup({ serverName: 'bridge-x' })
     const agent = bench.agent()
-    expect(bench.bridge.bridgedToolName(agent, 'mcp__bridge-x__ping')).toBe('ping')
+    const { name } = await bench.bridge.openMcpEndpoint(agent)
+    expect(name).toMatch(/^bridge-x-[0-9a-f]{6}$/)
+    expect(bench.bridge.bridgedToolName(agent, `mcp__${name}__ping`)).toBe('ping')
+    expect(bench.bridge.bridgedToolName(agent, 'mcp__bridge-x__ping')).toBeUndefined()
     expect(bench.bridge.bridgedToolName(agent, 'mcp__dsh__ping')).toBeUndefined()
   })
 

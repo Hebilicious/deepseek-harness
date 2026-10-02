@@ -135,7 +135,10 @@ export class AcpHarness extends TypertRemoteService {
       // The host constructor owns its registrations: the acpSession
       // projection, shared transaction ownership, and this harness in
       // `ctx.agents`, all effect-scoped so unloading disposes only them.
-      new AcpAgentHost(ctx, runtime, agentConfigFor(entry))
+      new AcpAgentHost(
+        ctx, runtime, agentConfigFor(entry),
+        entry.processPerSession ? () => new AcpRuntime(ctx, runtimeOptionsFor(entry, config)) : undefined,
+      )
       ctx.effect(() => () => runtime.dispose(), `acpHarness(${entry.id}).dispose()`)
       ctx.effect(
         () => ctx.llm.registerAdapter([entry.id], new AcpCatalogAdapter(entry.id, entry.name, runtime)),

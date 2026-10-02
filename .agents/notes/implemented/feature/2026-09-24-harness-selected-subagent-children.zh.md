@@ -46,26 +46,13 @@ harness 选择的子 agent 是委派给外部产品的推荐路径。一次性�
 
 一次无头真实模型验证在 `web` profile 上运行（团队行另加 Agent Team 叠加层），经远程 RPC 驱动 `session/create` 与 `session/prompt`，并读取持久化 Session 日志。委派调用在子 Session 以所请求运行时记录 `agent/harness` 且子级回复进入父级工具结果时计为确认；经桥接的父级与队友还会在绑定时记录一条 `agent-tool-bridge/exposed`，列出所服务的工具——当外部 harness 报告缺少委派或 Team 工具时，这是要检查的特征。
 
-已确认的 `subagent` 配对：
+最近一轮覆盖了所有外部配对：`codex`、`devin`、`claude` 与 `opencode` 各自作为父级与子级，分别测试 `subagent` 与 `spawn_teammate`，每个 harness 都使用低成本模型和单词提示词。全部 32 个单元均已确认。在后台启动子级的 `subagent` 调用，会在父级结束轮次后经结算唤醒轮次送达父级。
 
-| 父 harness | 子 harness | 工具路径 |
+| 工具 | 父级 × 子级 | 已确认 |
 |---|---|---|
-| `dsh` | `dsh` | 进程内 `subagent` |
-| `dsh` | `devin` | 进程内 `subagent` |
-| `devin` | `dsh` | 桥接 `subagent` |
-| `codex` | `devin` | 桥接 `subagent` |
-| `codex` | `dsh` | 桥接 `subagent` |
-| `claude` | `dsh` | 桥接 `subagent` |
-| `claude` | `devin` | 桥接 `subagent` |
+| `subagent` | `codex`、`devin`、`claude`、`opencode` × 同样四个 | 16 / 16 |
+| `spawn_teammate` | `codex`、`devin`、`claude`、`opencode` × 同样四个 | 16 / 16 |
 
-已确认的 `spawn_teammate` 配对：
+这一轮暴露并修复了四个桥接缺陷：Codex 在 `never` 审批下拒绝所有 MCP 调用，因此其桥接服务器设置 `default_tools_approval_mode: approve`；ACP harness 会为桥接工具请求许可，因此驱动器对这些请求一次性放行，桥接调用执行时再由 dsh 审批策略裁决；opencode 按进程范围保存 MCP 服务器，导致一个会话能以错误的 agent 身份调用另一个会话的端点，唯一端点名称与 `processPerSession` 消除了这一问题；委派的 ACP 子级无法运行命令，因此 `workspace-write` 下的 `never` 选择 harness 自有的受控自主模式。
 
-| Lead harness | 队友 harness | 说明 |
-|---|---|---|
-| `dsh` | `dsh` | 同运行时默认 |
-| `devin` | `devin` | 队友经桥接暴露九个 Team 工具 |
-| `claude` | `claude` | 同运行时默认 |
-| `dsh` | `devin` | 跨 harness，走目标默认路由 |
-| `devin` | `dsh` | 跨 harness，显式给出 `provider`/`model` |
-
-覆盖缺口：`grok`、`opencode` 与 `mimo` 既未作为父级也未作为子级验证，但它们与已确认的 ACP harness 走相同的 `agent-acp` 绑定路径；`codex` 与 `claude` 未作为跨 harness 团队成员验证；在此 profile 下，由外部父级选择的 `dsh` 子级没有默认路由，`spawn_teammate` 必须传入 `provider`/`model`，否则循环的 `{{model}}` 装配会拒绝首轮。
+覆盖缺口：`dsh` 相关行依赖较早的一轮（`dsh` → `dsh` 与 `devin`；`devin`、`codex`、`claude` → `dsh`；团队 `dsh` ↔ `devin`），因为最近一轮期间没有任何循环提供方有余额；`grok` 与 `mimo` 仍未验证。Claude Code 在 Haiku 上会从 `auto` 回退为 `acceptEdits`，因此 Haiku 子级无法运行命令。在此 profile 下，由外部父级选择的 `dsh` 子级没有默认路由，`spawn_teammate` 必须传入 `provider`/`model`。

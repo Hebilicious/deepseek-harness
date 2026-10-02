@@ -44,14 +44,14 @@ Mount `dsh-agent-tool-bridge` in a profile that also runs external-harness sessi
 | `exclude` | `[]` | Tool names withheld from every endpoint; enforced again at call time |
 | `host` | `127.0.0.1` | Listener bind address; only loopback interfaces are accepted because the bearer credential is the endpoint's whole request check |
 | `port` | `0` | Listener port; `0` binds the shared listener on one ephemeral port every endpoint URL reports |
-| `serverName` | `dsh` | The MCP server name endpoints and driver `mcpServers` entries advertise; it joins `mcp__<serverName>__<tool>` names and Codex `mcp_servers.<serverName>` keys, so empty strings, `.`, and `__` are rejected |
+| `serverName` | `dsh` | The stem of each endpoint's MCP server name (`<serverName>-<6 hex>`) that driver `mcpServers` entries advertise; it joins `mcp__<name>__<tool>` names and Codex `mcp_servers.<name>` keys, so empty strings, `.`, and `__` are rejected |
 | `correlationLimit` | `100` | Settled executions retained per agent so a reported `tool/result` can pick up the dsh `meta`; the oldest entry drops at the limit |
 
 ### Bridge tools to a harness
 
 `openMcpEndpoint(agent)` serves the agent's scoped, non-excluded tools as MCP `{name, description, inputSchema}` entries and returns `{name, url, headers, close()}`, where `headers` carries the endpoint's fresh `Authorization: Bearer` credential. A `tools/call` naming a withheld tool — excluded or unknown to the scope — returns an error result without reaching the registry; every other call runs `ctx.tools.execute` as the agent. An endpoint closes on `close()`, on `agent/disposed`, and with the service, which also closes the shared listener.
 
-Two further operations serve the external drivers' transcript projection. `bridgedToolName(agent, reported)` resolves a harness-reported `mcp__<serverName>__<tool>` name to the dsh tool currently bridged for that agent; unrecognized, excluded, or unscoped names return `undefined` and the driver logs them verbatim. `takeCompletion(agent, tool, argumentsJson)` consumes the oldest settled execution matching the dsh name and the reported arguments — compared as canonical JSON, so object key order is irrelevant — so the driver's `tool/result` carries the execution's `meta`.
+Each endpoint is served under its own name, `<serverName>-<6 hex>`, because a harness that keeps MCP servers process-wide by name (opencode) would otherwise let one session's endpoint replace or close another's. Two further operations serve the external drivers' transcript projection. `bridgedToolName(agent, reported)` resolves a harness-reported `mcp__<serverName>__<tool>` name to the dsh tool currently bridged for that agent; unrecognized, excluded, or unscoped names return `undefined` and the driver logs them verbatim. `takeCompletion(agent, tool, argumentsJson)` consumes the oldest settled execution matching the dsh name and the reported arguments — compared as canonical JSON, so object key order is irrelevant — so the driver's `tool/result` carries the execution's `meta`.
 
 -----
 

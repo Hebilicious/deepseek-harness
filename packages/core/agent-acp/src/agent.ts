@@ -166,6 +166,7 @@ export class AcpAgent extends ExternalAgent implements AcpSessionPeer {
     session: Session,
     private readonly runtime: AcpRuntime,
     private readonly driverConfig: AcpAgentConfig,
+    private readonly catalogRuntime?: AcpRuntime,
   ) {
     super(hostCtx, id, options, session)
   }
@@ -371,7 +372,8 @@ export class AcpAgent extends ExternalAgent implements AcpSessionPeer {
    */
   private adoptAdvert(advert: AcpSessionAdvert): void {
     this.configOptions = advert.configOptions ?? []
-    this.runtime.recordAdvert(acpAdvertisedModels(advert))
+    const catalog = this.catalogRuntime ?? this.runtime
+    catalog.recordAdvert(acpAdvertisedModels(advert))
   }
 
   /**
@@ -404,6 +406,8 @@ export class AcpAgent extends ExternalAgent implements AcpSessionPeer {
     detach?.()
     this.detachSession = undefined
     this.connection = undefined
+    // A private per-session runtime ends with its session.
+    if (this.catalogRuntime !== undefined) await this.runtime.dispose()
   }
 
   /**
@@ -713,12 +717,15 @@ export class AcpAgent extends ExternalAgent implements AcpSessionPeer {
    * Answer one `session/request_permission` through the DSH approval seam.
    * The request arrives while a prompt or an adopted harness cycle is in
    * flight, so the durable turn is open and the audit pair can commit.
-   * With no live turn, or no approval service, the outcome is cancelled.
+   * A request for a bridged dsh tool is allowed once without asking: the
+   * bridge executes it through the dsh tool pipeline, whose approval policy
+   * decides it there, so a second ask here would reject every bridged call
+   * under `never`. With no live turn, or no approval service, any other
+   * request is cancelled.
    */
   async requestPermission(params: RequestPermissionRequest): Promise<RequestPermissionResponse> {
     const active = this.active
-    const approval = this.ctx.get('approval')
-    if (active === undefined || approval === undefined) return { outcome: { outcome: 'cancelled' } }
+    if (active === undefined) return { outcome: { outcome: 'cancelled' } }
     const toolCall = params.toolCall
     // The approval record names the call, so the call is committed first.
     const pending = active.pendingToolCalls.get(toolCall.toolCallId)
@@ -726,6 +733,9 @@ export class AcpAgent extends ExternalAgent implements AcpSessionPeer {
       if (hasInput(toolCall.rawInput)) pending.input = toolCall.rawInput
       this.commitToolCall(active, toolCall.toolCallId)
     }
+    if (this.isBridgedPermission(params)) return { outcome: acpPermissionOutcome(params.options, 'allowed-once') }
+    const approval = this.ctx.get('approval')
+    if (approval === undefined) return { outcome: { outcome: 'cancelled' } }
     const toolName = optionalString(toolCall.name) ?? optionalString(toolCall.title) ?? 'tool'
     const reason = optionalString(toolCall.title) ?? toolName
     try {
@@ -741,6 +751,26 @@ export class AcpAgent extends ExternalAgent implements AcpSessionPeer {
       this.ctx.logger.warn(`${this.prefix}: permission request failed closed: ${errorChain(error)}`)
       return { outcome: { outcome: 'cancelled' } }
     }
+  }
+
+  /**
+   * Whether a permission request asks to call a tool on this agent's bridge
+   * endpoint: the reported name maps to a bridged dsh tool
+   * (`mcp__<endpoint name>__<tool>`, as Claude Code reports it), or an
+   * option names this agent's endpoint (Devin reports no tool name and labels
+   * its options `… on the <endpoint name> MCP server …`).
+   * @param params - the harness's permission request.
+   * @returns true when the bridge serves the requested call.
+   */
+  private isBridgedPermission(params: RequestPermissionRequest): boolean {
+    const bridge = this.ctx.get('agentToolBridge')
+    if (bridge === undefined) return false
+    const reported = optionalString(params.toolCall.name) ?? optionalString(params.toolCall.title)
+    if (reported !== undefined && bridge.bridgedToolName(this, reported) !== undefined) return true
+    const endpointName = this.bridgeEndpoint?.name
+    if (endpointName === undefined) return false
+    const server = `on the ${endpointName} MCP server`
+    return params.options.some(option => option.name.includes(server))
   }
 
   /**

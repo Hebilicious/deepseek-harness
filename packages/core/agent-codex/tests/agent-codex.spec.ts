@@ -839,12 +839,25 @@ function configOf(call: RecordedCall | undefined): Record<string, unknown> {
   return (call?.params as { config?: Record<string, unknown> } | undefined)?.config ?? {}
 }
 
-/** The `mcp_servers.dsh` entry fields a recorded thread request carried. */
-function bridgeEndpointOf(call: RecordedCall | undefined): { url: string; headers: Record<string, string> } {
+/** One bridge endpoint's `mcp_servers.<name>` fields as a recorded thread request carried them. */
+interface RecordedBridgeEndpoint {
+  name: string
+  url: string
+  headers: Record<string, string>
+  approvalMode: unknown
+}
+
+/** The single `mcp_servers.<name>` entry a recorded thread request carried, keyed by the name found in its config keys. */
+function bridgeEndpointOf(call: RecordedCall | undefined): RecordedBridgeEndpoint {
   const config = configOf(call)
+  const names = Object.keys(config).flatMap(key => /^mcp_servers\.([^.]+)\.url$/.exec(key)?.[1] ?? [])
+  expect(names).toHaveLength(1)
+  const name = names[0]!
   return {
-    url: config['mcp_servers.dsh.url'] as string,
-    headers: config['mcp_servers.dsh.http_headers'] as Record<string, string>,
+    name,
+    url: config[`mcp_servers.${name}.url`] as string,
+    headers: config[`mcp_servers.${name}.http_headers`] as Record<string, string>,
+    approvalMode: config[`mcp_servers.${name}.default_tools_approval_mode`],
   }
 }
 
@@ -860,6 +873,9 @@ describe('agent-codex tool bridge', () => {
 
     const calls = await recordedCalls(bench.recordFile)
     const endpoint = bridgeEndpointOf(calls.find(call => call.method === 'thread/start'))
+    expect(endpoint.name).toMatch(/^dsh-[0-9a-f]{6}$/)
+    // Bridged calls already pass the dsh approval pipeline, so Codex must not gate them again.
+    expect(endpoint.approvalMode).toBe('approve')
     expect(endpoint.url).toMatch(/^http:\/\/127\.0\.0\.1:\d+\/mcp$/)
     expect(endpoint.headers['Authorization']).toMatch(/^Bearer /)
 
@@ -892,7 +908,7 @@ describe('agent-codex tool bridge', () => {
     await agent.whenIdle()
 
     // The mock called the endpoint and reported `mcpToolCall` items naming
-    // server `dsh`; the log carries the dsh tool name and the reported
+    // the endpoint's server name; the log carries the dsh tool name and the reported
     // arguments.
     const calls = eventsOf(agent, 'tool/call')
     expect(calls).toHaveLength(1)
@@ -935,6 +951,8 @@ describe('agent-codex tool bridge', () => {
     // resumed thread's request: a second tools/list under the new headers.
     const started = bridgeEndpointOf(calls.find(call => call.method === 'thread/start'))
     expect(endpoint.headers['Authorization']).not.toBe(started.headers['Authorization'])
+    expect(endpoint.name).toMatch(/^dsh-[0-9a-f]{6}$/)
+    expect(endpoint.name).not.toBe(started.name)
     expect(calls.filter(call => call.method === 'mcp-tools')).toHaveLength(2)
     await resumed.dispose()
   }, TEST_TIMEOUT)

@@ -40,7 +40,7 @@ export interface AcpConfig {
 
 - `inject`: `agents` · `sessions` · `sessionProjections` · `subprocess` · `llm` · `typert`
 - `refs`: [`SandboxMode`](subsystems/sandbox.md)
-- `source`: [`packages/core/agent-acp/src/config.ts:68`](../packages/core/agent-acp/src/config.ts)
+- `source`: [`packages/core/agent-acp/src/config.ts:75`](../packages/core/agent-acp/src/config.ts)
 
 ```ts config-catalog
 /** Plugin config; {@link Config.harnesses} is the only required field. */
@@ -108,6 +108,13 @@ export interface AcpHarnessEntry {
    * binds.
    */
   probeCatalog?: boolean
+  /**
+   * Spawn one harness process per dsh session instead of one shared process
+   * (default false). A harness that keeps MCP servers process-wide (opencode)
+   * needs it: in a shared process every session could call every other
+   * session's tool-bridge endpoint, running bridged tools as the wrong agent.
+   */
+  processPerSession?: boolean
   /**
    * Auth-status CLI arguments (default `['auth', 'status']`). An explicitly
    * empty list declares that this harness reports authorization through its

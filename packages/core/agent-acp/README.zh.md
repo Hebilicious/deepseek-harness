@@ -67,6 +67,7 @@ kind: "package-reference"
 | `harnesses[].reasoningEffort` | — | 位于会话选择之下的部署默认值 |
 | `harnesses[].catalogArgs` | — | 模型目录 CLI 参数；省略时目录取自会话声明 |
 | `harnesses[].probeCatalog` | `true` | 在任何会话绑定之前，通过开启一个一次性会话来读取目录 |
+| `harnesses[].processPerSession` | `false` | 每个 dsh 会话启动一个独立的 harness 进程；按进程范围保存 MCP 服务器的 harness（opencode）必须开启，否则共享进程会让一个会话调用另一个会话的工具桥接端点 |
 | `catalogCacheMs` | `300000` | 复用某 harness 目录读取结果的时长 |
 | `catalogFailureCacheMs` | `30000` | 记住某 harness 目录读取失败的时长，超过后才会再次尝试 |
 | `harnesses[].authStatusArgs` | `['auth', 'status']` | 认证状态命令参数；显式空列表表示没有 CLI 命令 |

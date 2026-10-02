@@ -44,14 +44,14 @@ kind: "package-reference"
 | `exclude` | `[]` | 对所有端点保留的工具名；调用时再次强制检查 |
 | `host` | `127.0.0.1` | 监听器绑定地址；只接受回环接口，因为 bearer 凭证是端点唯一的请求校验 |
 | `port` | `0` | 监听端口；`0` 让共享监听器绑定一个临时端口，每个端点 URL 都报告该端口 |
-| `serverName` | `dsh` | 端点与驱动器 `mcpServers` 条目对外宣称的 MCP 服务器名；它会拼入 `mcp__<serverName>__<tool>` 名称与 Codex `mcp_servers.<serverName>` 配置键，因此拒绝空字符串、`.` 与 `__` |
+| `serverName` | `dsh` | 每个端点 MCP 服务器名（`<serverName>-<6 位十六进制>`）的前缀，驱动器 `mcpServers` 条目对外宣称该名称；它会拼入 `mcp__<name>__<tool>` 名称与 Codex `mcp_servers.<name>` 配置键，因此拒绝空字符串、`.` 与 `__` |
 | `correlationLimit` | `100` | 每个 agent 保留的已结算执行数，让上报的 `tool/result` 能取得 dsh `meta`；到达上限时丢弃最旧的条目 |
 
 ### 把工具桥接给 harness
 
 `openMcpEndpoint(agent)` 以 MCP `{name, description, inputSchema}` 条目形式提供该 agent 作用域可见且未被排除的工具，并返回 `{name, url, headers, close()}`，其中 `headers` 携带该端点全新的 `Authorization: Bearer` 凭证。`tools/call` 若命名了被保留的工具——被排除或不在作用域内——直接返回错误结果而不触达注册表；其余调用都以该 agent 身份运行 `ctx.tools.execute`。端点在 `close()`、`agent/disposed` 以及服务销毁时关闭，服务销毁同时也会关闭共享监听器。
 
-另外两个操作服务于外部驱动器的转录投影。`bridgedToolName(agent, reported)` 把 harness 上报的 `mcp__<serverName>__<tool>` 名称解析为该 agent 当前桥接的 dsh 工具；无法识别、被排除或不在作用域内的名称返回 `undefined`，驱动器按原样记录。`takeCompletion(agent, tool, argumentsJson)` 消费与 dsh 名称和上报参数匹配的最早已结算执行——参数按规范化 JSON 比较，对象键序无关——使驱动器的 `tool/result` 携带该执行的 `meta`。
+每个端点以自己的名称 `<serverName>-<6 位十六进制>` 提供服务，因为按名称在进程范围内保存 MCP 服务器的 harness（opencode）否则会让一个会话的端点替换或关闭另一个会话的端点。另外两个操作服务于外部驱动器的转录投影。`bridgedToolName(agent, reported)` 把 harness 上报的 `mcp__<serverName>__<tool>` 名称解析为该 agent 当前桥接的 dsh 工具；无法识别、被排除或不在作用域内的名称返回 `undefined`，驱动器按原样记录。`takeCompletion(agent, tool, argumentsJson)` 消费与 dsh 名称和上报参数匹配的最早已结算执行——参数按规范化 JSON 比较，对象键序无关——使驱动器的 `tool/result` 携带该执行的 `meta`。
 
 -----
 
