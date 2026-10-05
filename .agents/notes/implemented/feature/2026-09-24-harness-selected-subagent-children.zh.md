@@ -16,7 +16,7 @@ Agent 注册表本就挂载多个 agent harness——进程内循环、Codex app
 
 当提供方支持该能力且挂载了多个允许的 harness 时，`dsh-tool-subagent` 暴露面向模型的 `harness` 参数；可选的 `harnesses` 配置收窄可选范围，工具在执行时强制检查该允许列表。
 
-harness 解析只有一个所有者。`AgentRegistry.resolveHarness(harness, 'create' | 'resume')` 返回一次 `create` 或 `resume` 调用会落到的已挂载 harness——指定的 harness；否则对 resume 取未记录日志的所有者；再否则取唯一挂载的 harness——subagent 代码调用它，而不是重复这些回退。`persona`、`toolFilter` 与 `outputSchema` 通过循环的作用域组合安装，因此除非解析出的 harness 声明 `AgentHarness.hostsLoopComposition`，否则会被拒绝；循环 harness 与 `AgentRegistry.setFactory` 声明了它。所解析 harness 不服务的请求提供方路由会被拒绝；当显式 harness 选择无法服务子 agent 仅从父级继承的路由时，该路由会被丢弃，由所选 harness 应用自己的默认值。非循环 harness 上的子 agent 在创建期间记录 `subagent/descriptor`，因为这类 harness 不发出 `agent/pre-step`。冷恢复读取子 agent 自己的 `agent/harness` 记录，当该 harness 不再挂载时拒绝。
+harness 解析只有一个所有者。`AgentRegistry.resolveHarness(harness, 'create' | 'resume')` 返回一次 `create` 或 `resume` 调用会落到的已挂载 harness——指定的 harness；否则对 resume 取未记录日志的所有者；再否则取唯一挂载的 harness——subagent 代码调用它，而不是重复这些回退。`persona`、`toolFilter` 与 `outputSchema` 通过循环的作用域组合安装，因此除非解析出的 harness 声明 `AgentHarness.hostsLoopComposition`，否则会被拒绝；循环 harness 与 `AgentRegistry.setFactory` 声明了它。所解析 harness 不服务的请求提供方路由会被拒绝；当显式 harness 选择无法服务子 agent 仅从父级继承的路由时，该路由会被丢弃，由所选 harness 应用自己的默认值；对于没有自身目录路由的循环，则在循环能够服务时采用部署默认模型。非循环 harness 上的子 agent 在创建期间记录 `subagent/descriptor`，因为这类 harness 不发出 `agent/pre-step`。冷恢复读取子 agent 自己的 `agent/harness` 记录，当该 harness 不再挂载时拒绝。
 
 harness 选择的子 agent 与任何进程内子 agent 获得相同的委派权限状态：沙箱覆盖、钉定为 `never` 的审批策略（[钉定 never 的 Agent Note](2026-08-10-subagent-approval-pinned-never.zh.md)）以及权限预设。ACP 驱动把该状态映射为无法逃出受限沙箱的 agent 模式：`read-only` 沙箱在任何审批策略下都选择 `ask` 或 `plan`；只有 `danger-full-access` 下的 `never` 才选择自动批准模式（`bypass` 或 `bypassPermissions`）；`workspace-write` 下的 `never` 选择 harness 自有的受控自主模式（`auto`、`smart` 或 `build`），使委派子级能够运行命令；可写沙箱上的 `ask` 会话选择接受编辑的模式，由审批策略回答其余每次请求。
 
@@ -55,4 +55,4 @@ harness 选择的子 agent 是委派给外部产品的推荐路径。一次性�
 
 这一轮暴露并修复了四个桥接缺陷：Codex 在 `never` 审批下拒绝所有 MCP 调用，因此其桥接服务器设置 `default_tools_approval_mode: approve`；ACP harness 会为桥接工具请求许可，因此驱动器对这些请求一次性放行，桥接调用执行时再由 dsh 审批策略裁决；opencode 按进程范围保存 MCP 服务器，导致一个会话能以错误的 agent 身份调用另一个会话的端点，唯一端点名称与 `processPerSession` 消除了这一问题；委派的 ACP 子级无法运行命令，因此 `workspace-write` 下的 `never` 选择 harness 自有的受控自主模式。
 
-覆盖缺口：`dsh` 相关行依赖较早的一轮（`dsh` → `dsh` 与 `devin`；`devin`、`codex`、`claude` → `dsh`；团队 `dsh` ↔ `devin`），因为最近一轮期间没有任何循环提供方有余额；`grok` 与 `mimo` 仍未验证。Claude Code 在 Haiku 上会从 `auto` 回退为 `acceptEdits`，因此 Haiku 子级无法运行命令。在此 profile 下，由外部父级选择的 `dsh` 子级没有默认路由，`spawn_teammate` 必须传入 `provider`/`model`。
+覆盖缺口：`dsh` 相关行依赖较早的一轮（`dsh` → `dsh` 与 `devin`；`devin`、`codex`、`claude` → `dsh`；团队 `dsh` ↔ `devin`），因为最近一轮期间没有任何循环提供方有余额；`grok` 与 `mimo` 仍未验证。Claude Code 在 Haiku 上会从 `auto` 回退为 `acceptEdits`，因此 Haiku 子级无法运行命令。由外部父级选择的 `dsh` 子级会丢弃父级无法服务的路由，并在循环能够服务时采用部署默认模型（`ctx.agentDefaultModel`）。

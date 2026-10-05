@@ -22,6 +22,7 @@ import type { ObjectJsonSchema, ToolRestriction } from '@deepseek-ai/dsh-tools'
 import type {} from '@deepseek-ai/dsh-sandbox-policy'
 import type {} from '@deepseek-ai/dsh-user-approval'
 import type {} from '@deepseek-ai/dsh-permission-presets'
+import type {} from '@deepseek-ai/dsh-agent-default-model'
 // Type-only: make `ctx.get('agentPresets')` resolve to the preset roster when
 // composed — a child inherits its parent's composition opportunistically (the
 // documented `ctx.get` pattern), never as a hard dep. A rosterless deployment
@@ -125,7 +126,9 @@ export function resolveChildAgentOptions(
  * Drop route fields a fresh child inherited but never named when an explicit
  * `harness` choice moves the child to a harness other than the parent's
  * recorded owner and the inherited route cannot serve it: an unspecified
- * route lets the chosen harness apply its own default. A compatible
+ * route lets the chosen harness apply its own default, and a harness with no
+ * catalog route of its own (the loop) takes the deployment default model
+ * (`ctx.agentDefaultModel`) when that harness serves it. A compatible
  * inherited route still applies, and route fields the request named
  * explicitly stay for `resolveChildHarness` to honor or reject.
  * @param ctx - context the mounted harness list is read from.
@@ -142,15 +145,27 @@ export function dropCrossHarnessInheritedRoute(
   named: AgentOptions | undefined,
 ): void {
   if (requested === undefined) return
-  const owner = ctx.get('agents')?.resolveHarness(harnessOwning(ctx, parent.session), 'create')?.id
+  // A harness choice reaches here only after the service resolved it on the agents service.
+  const owner = ctx.agents.resolveHarness(harnessOwning(ctx, parent.session), 'create')?.id
   if (requested === owner) return
   const provider = resolved.provider
-  const mounted = ctx.get('agents')?.harnesses() ?? []
+  const mounted = ctx.agents.harnesses()
   if (provider !== undefined && harnessesServing(mounted, provider).includes(requested)) return
   if (named?.provider === undefined) delete resolved.provider
   if (named?.model === undefined) delete resolved.model
   if (named?.reasoningEffort === undefined) delete resolved.reasoningEffort
   if (named?.maxTokens === undefined) delete resolved.maxTokens
+  if (resolved.provider !== undefined) return
+  // A harness without its own catalog route (the loop) has no default of its
+  // own; the deployment default model applies when that harness serves it.
+  const fallback = ctx.get('agentDefaultModel')?.currentSelection()
+  if (fallback === undefined || fallback.provider === '' || fallback.model === '') return
+  if (!harnessesServing(mounted, fallback.provider).includes(requested)) return
+  resolved.provider = fallback.provider
+  resolved.model = fallback.model
+  if (fallback.reasoningEffort !== undefined && resolved.reasoningEffort === undefined) {
+    resolved.reasoningEffort = fallback.reasoningEffort
+  }
 }
 
 /**

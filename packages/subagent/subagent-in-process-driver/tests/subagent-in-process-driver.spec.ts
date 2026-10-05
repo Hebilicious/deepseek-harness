@@ -1,4 +1,4 @@
-import { ToolCallId, createUserMessage } from '@deepseek-ai/dsh-llm'
+import { ReasoningEffortId, ToolCallId, createUserMessage } from '@deepseek-ai/dsh-llm'
 import type { ContextFormed } from '@deepseek-ai/dsh-llm'
 import { describe, expect, it } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'
@@ -172,6 +172,38 @@ describe('startInProcessRun', () => {
     expect(child.options.model).toBeUndefined()
     await run.result
     await run.dispose()
+  })
+
+  it('gives a cross-harness child the deployment default model only when the chosen harness serves it', async () => {
+    const childRoute = async (selection: { provider: string; model: string; reasoningEffort?: string }) => {
+      const { ctx, parent } = await setup([])
+      const foreign = mountWorkingForeignHarness(ctx, { modelProvider: 'foreign-llm' })
+      ctx.provide('agentDefaultModel', { currentSelection: () => selection } as never)
+      const run = await startInProcessRun({ ...request(parent), harness: foreign.id }, {})
+      const { provider, model, reasoningEffort } = run.localAgent!.options
+      await run.result
+      await run.dispose()
+      return { provider, model, reasoningEffort }
+    }
+    // The dropped inherited route falls back to a default the chosen harness serves.
+    expect(await childRoute({ provider: 'foreign-llm', model: 'f1', reasoningEffort: 'low' }))
+      .toEqual({ provider: 'foreign-llm', model: 'f1', reasoningEffort: 'low' })
+    // A default the chosen harness cannot serve, or an empty one, leaves the harness its own default.
+    expect(await childRoute({ provider: 'mock', model: 'mock' }))
+      .toEqual({ provider: undefined, model: undefined, reasoningEffort: undefined })
+    expect(await childRoute({ provider: '', model: '' }))
+      .toEqual({ provider: undefined, model: undefined, reasoningEffort: undefined })
+    // Fields the request names stay: a named effort wins over the default's.
+    const { ctx, parent } = await setup([])
+    const foreign = mountWorkingForeignHarness(ctx, { modelProvider: 'foreign-llm' })
+    ctx.provide('agentDefaultModel', { currentSelection: () => ({ provider: 'foreign-llm', model: 'f1', reasoningEffort: 'low' }) } as never)
+    const named = await startInProcessRun(
+      { ...request(parent), harness: foreign.id, agentOptions: { reasoningEffort: ReasoningEffortId('high'), maxTokens: 64 } },
+      {},
+    )
+    expect(named.localAgent!.options).toMatchObject({ provider: 'foreign-llm', model: 'f1', reasoningEffort: 'high', maxTokens: 64 })
+    await named.result
+    await named.dispose()
   })
 
   it('keeps an explicitly chosen route for resolveChildHarness to reject', async () => {
