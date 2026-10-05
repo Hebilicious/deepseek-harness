@@ -97,7 +97,7 @@ kind: "package-reference"
 
 ### 会话绑定
 
-`bind()` 加入所属 harness 的共享连接，并在 dsh 会话发布之前创建 ACP 会话（`session/new`）或加载已记录的那个（`session/load`）。新会话追加带 agent 所发 id 的 `agent-acp/session`；恢复要求 agent 声明 `loadSession`，否则驱动器以 `session "<id>" cannot resume: the agent does not advertise loadSession` 明确失败。peer 只在加载响应之后注册，因此重放的历史绝不会重复提交。部分 agent 只在会话收到提示后才保存它（Claude Code 即如此），因此 harness 重启后，对从未运行过轮次的会话执行 `session/load` 会得到 `Resource not found`；此时驱动器创建新的 ACP 会话并追加一条替换用的 `agent-acp/session`，因为 agent 并未为它保存任何历史。已运行过轮次的会话仍保留该失败。会话声明还会重新发布该 harness 的模型目录。
+`bind()` 加入所属 harness 的共享连接，并在 dsh 会话发布之前创建 ACP 会话（`session/new`）或加载已记录的那个（`session/load`）。新会话追加带 agent 所发 id 的 `agent-acp/session`；恢复要求 agent 声明 `loadSession`，否则驱动器以 `session "<id>" cannot resume: the agent does not advertise loadSession` 明确失败。peer 只在加载响应之后注册，因此重放的历史绝不会重复提交。部分 agent 只在会话收到提示后才保存它（Claude Code 即如此），因此 harness 重启后，对从未运行过轮次的会话执行 `session/load` 会得到 `Resource not found`；此时驱动器创建新的 ACP 会话并追加一条替换用的 `agent-acp/session`，因为 agent 并未为它保存任何历史。已运行过轮次的会话仍保留该失败。harness 进程退出或其 ACP 连接关闭时，进行中的轮次失败，而每个已绑定会话的下一轮会重新连接：运行时启动新的 harness 进程，驱动器按相同规则在其上加载已记录的 ACP 会话，再发送提示。会话声明还会重新发布该 harness 的模型目录。
 
 ### 轮次驱动
 

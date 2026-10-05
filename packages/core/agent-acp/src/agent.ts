@@ -176,6 +176,24 @@ export class AcpAgent extends ExternalAgent implements AcpSessionPeer {
    * @param signal - fused caller/lifecycle cancellation.
    */
   async bind(signal: AbortSignal): Promise<void> {
+    await this.attach(signal)
+    // The harness asks for every tool call its mode does not cover, and a
+    // `never` policy rejects each ask, so a permission change made mid-turn
+    // reaches the harness now rather than at the next turn.
+    this.stopModeSync = this.ctx.on('session/event', (session, event) => {
+      const type: string = event.type
+      if (session !== this.session || (type !== 'approval/policy' && type !== 'sandbox/mode')) return
+      this.modeSync = this.modeSync.then(() => this.syncMode())
+    })
+  }
+
+  /**
+   * Join this harness's shared connection, create or load the ACP session,
+   * and register this agent as its peer.
+   * @param signal - fused caller/lifecycle cancellation.
+   * @returns the live connection and the bound ACP session id.
+   */
+  private async attach(signal: AbortSignal): Promise<{ connection: AcpClientConnection; sessionId: string }> {
     const connection = await this.runtime.connect(signal)
     this.connection = connection
     const capabilities = this.runtime.initializeInfo?.agentCapabilities
@@ -187,14 +205,31 @@ export class AcpAgent extends ExternalAgent implements AcpSessionPeer {
       : await this.loadSession(connection, existing, cwd, signal, capabilities?.loadSession === true)
     this.acpSessionId = sessionId
     this.detachSession = this.runtime.registerSession(sessionId, this)
-    // The harness asks for every tool call its mode does not cover, and a
-    // `never` policy rejects each ask, so a permission change made mid-turn
-    // reaches the harness now rather than at the next turn.
-    this.stopModeSync = this.ctx.on('session/event', (session, event) => {
-      const type: string = event.type
-      if (session !== this.session || (type !== 'approval/policy' && type !== 'sandbox/mode')) return
-      this.modeSync = this.modeSync.then(() => this.syncMode())
-    })
+    return { connection, sessionId }
+  }
+
+  /**
+   * The live connection and ACP session for the next turn. When the harness
+   * process or its connection died since the last turn, the runtime spawns a
+   * new process and the recorded ACP session is loaded on it, so a follow-up
+   * message continues the conversation instead of failing on the dead
+   * connection. Recovery follows the {@link loadSession} rules: it needs
+   * `loadSession`, and a failed load fails the turn.
+   * @param signal - the turn's abort signal.
+   * @returns the live connection and the bound ACP session id.
+   */
+  private async liveSession(signal: AbortSignal): Promise<{ connection: AcpClientConnection; sessionId: string }> {
+    const connection = this.connection
+    const sessionId = this.acpSessionId
+    // A recovery whose load failed left no peer registered, so the next turn
+    // attaches again rather than prompting a session the process never loaded.
+    if (connection !== undefined && !connection.closed && sessionId !== undefined && this.detachSession !== undefined) {
+      return { connection, sessionId }
+    }
+    this.ctx.logger.info(`${this.prefix}: the ACP connection closed; loading the session on a new harness process`)
+    this.detachSession?.()
+    this.detachSession = undefined
+    return await this.attach(signal)
   }
 
   /**
@@ -337,12 +372,6 @@ export class AcpAgent extends ExternalAgent implements AcpSessionPeer {
     messages: readonly UserMessage[],
     drive: ExternalTurnDrive,
   ): Promise<TurnEndReason> {
-    const connection = this.connection
-    const sessionId = this.acpSessionId
-    /* v8 ignore next -- the host binds before any turn can be driven */
-    if (connection === undefined || sessionId === undefined) {
-      throw new Error(`${this.prefix}: turn without a bound session`)
-    }
     const selection = this.currentSelection()
     // Only selections routed to this harness drive this agent; a
     // foreign-provider selection is not a value this harness's `model` option
@@ -368,6 +397,7 @@ export class AcpAgent extends ExternalAgent implements AcpSessionPeer {
     this.drainOutOfBand(active)
     let ending: TurnEndReason = { kind: 'error', error: { message: 'turn ended without a response', code: 'NO_RESPONSE' } }
     try {
+      const { connection, sessionId } = await this.liveSession(drive.signal)
       await this.applyConfigSelection(connection, sessionId, chosen, chosenEffort, drive.signal)
       // Post-apply `currentValue` is the agent's own report of what will run;
       // when no model option exists the harness's model is opaque to DSH.

@@ -451,6 +451,36 @@ describe('agent-acp driver', () => {
     expect(turnEndKind(agent)).not.toBe('completed')
   }, TEST_TIMEOUT)
 
+  it('reloads the recorded session on a new harness process when a follow-up arrives after the connection closed', async () => {
+    const crashOnce = join(await mkdtemp(join(tmpdir(), 'agent-acp-crash-once-')), 'crashed')
+    bench = await setup({
+      MOCK_CRASH_AFTER_CHUNK: '1',
+      MOCK_CRASH_ONCE_FILE: crashOnce,
+      MOCK_LOAD_SESSION: '1',
+      MOCK_TEXT: 'answer',
+    })
+    const info = vi.spyOn(bench.ctx.logger, 'info')
+    const { agent } = await bench.ctx.agents.create({ sessionId: SessionId('s14b'), agentOptions: {} })
+    send(agent, 'crash')
+    await agent.whenIdle()
+    expect(turnEndKind(agent)).not.toBe('completed')
+
+    send(agent, 'follow up')
+    await agent.whenIdle()
+
+    expect(turnEndKind(agent)).toBe('completed')
+    const bound = acpSessionOf(bench.ctx.sessionProjections, agent.session)
+    const calls = await recordedCalls(bench.recordFile)
+    expect(calls.filter(call => call.method === 'initialize')).toHaveLength(2)
+    const loads = calls.filter(call => call.method === 'session/load')
+    expect(loads.map(call => (call.params as { sessionId: string }).sessionId)).toEqual([bound])
+    const prompts = calls.filter(call => call.method === 'session/prompt')
+    expect(prompts.map(call => (call.params as { sessionId: string }).sessionId)).toEqual([bound, bound])
+    expect(eventsOf(agent, 'agent-acp/session')).toHaveLength(1)
+    expect(info.mock.calls.some(call => String(call[0]).includes('the ACP connection closed'))).toBe(true)
+    info.mockRestore()
+  }, TEST_TIMEOUT)
+
   it('rolls creation back when initialize crashes', async () => {
     bench = await setup({ MOCK_CRASH_ON_INITIALIZE: '1' })
     await expect(bench.ctx.agents.create({ sessionId: SessionId('s15'), agentOptions: {} }))

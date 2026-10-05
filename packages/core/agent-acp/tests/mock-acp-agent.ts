@@ -96,6 +96,9 @@
  *                         kill it or prove it exited.
  * - `MOCK_CRASH_AFTER_CHUNK`   — exit after streaming the assistant chunk, so
  *                         partial output survives a fatal connection loss.
+ * - `MOCK_CRASH_ONCE_FILE`     — with `MOCK_CRASH_AFTER_CHUNK`, exit only
+ *                         while this file is absent and create it first, so
+ *                         the respawned child serves the next prompt.
  * - `MOCK_MISSING_SESSION_ID`  — return `{}` from `session/new`.
  * - `MOCK_HANG_SESSION_NEW`    — never answer `session/new`, so the catalog
  *                         probe's own deadline is the only thing that ends it.
@@ -115,7 +118,7 @@
  */
 
 import { randomUUID } from 'node:crypto'
-import { accessSync, appendFileSync, writeFileSync } from 'node:fs'
+import { accessSync, appendFileSync, existsSync, writeFileSync } from 'node:fs'
 import { Readable, Writable } from 'node:stream'
 import {
   agent as createAcpAgentApp,
@@ -193,6 +196,7 @@ const WANT_PERMISSION = process.env.MOCK_PERMISSION === '1'
 const ELICIT = process.env.MOCK_ELICIT === '1'
 const CRASH_ON_INITIALIZE = process.env.MOCK_CRASH_ON_INITIALIZE === '1'
 const CRASH_AFTER_CHUNK = process.env.MOCK_CRASH_AFTER_CHUNK === '1'
+const CRASH_ONCE_FILE = process.env.MOCK_CRASH_ONCE_FILE
 const READY_FILE = process.env.MOCK_READY_FILE
 const LOAD_SESSION = process.env.MOCK_LOAD_SESSION === '1'
 const CLOSE = process.env.MOCK_CLOSE === '1'
@@ -260,6 +264,11 @@ const PLAN = jsonEnv('MOCK_PLAN') as
 function record(method: string, params: unknown): void {
   if (RECORD_FILE === undefined) return
   appendFileSync(RECORD_FILE, `${JSON.stringify({ method, params })}\n`)
+}
+
+/** Whether an earlier child already took the one `MOCK_CRASH_ONCE_FILE` crash. */
+function crashedBefore(): boolean {
+  return CRASH_ONCE_FILE !== undefined && existsSync(CRASH_ONCE_FILE)
 }
 
 // Every ACP-mode child records its own startup facts, so a test driving
@@ -685,7 +694,8 @@ function makeAgent() {
         const idleDelay = Number(process.env.MOCK_IDLE_DELAY_MS ?? '150')
         setTimeout(() => { void emitIdleUpdates(conn, params.sessionId, IDLE_UPDATE_FILE) }, idleDelay)
       }
-      if (CRASH_AFTER_CHUNK) {
+      if (CRASH_AFTER_CHUNK && !crashedBefore()) {
+        if (CRASH_ONCE_FILE !== undefined) writeFileSync(CRASH_ONCE_FILE, 'crashed')
         await new Promise<void>((resolve) => { setImmediate(resolve) })
         process.exit(17)
       }
