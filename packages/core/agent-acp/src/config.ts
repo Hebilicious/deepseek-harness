@@ -51,6 +51,13 @@ export interface AcpHarnessEntry {
    */
   probeCatalog?: boolean
   /**
+   * Spawn one harness process per dsh session instead of one shared process
+   * (default false). A harness that keeps MCP servers process-wide (opencode)
+   * needs it: in a shared process every session could call every other
+   * session's tool-bridge endpoint, running bridged tools as the wrong agent.
+   */
+  processPerSession?: boolean
+  /**
    * Auth-status CLI arguments (default `['auth', 'status']`). An explicitly
    * empty list declares that this harness reports authorization through its
    * ACP methods and has no status verb, so nothing is spawned for it.
@@ -119,6 +126,8 @@ export interface ResolvedAcpHarnessEntry {
   readonly catalogArgs?: readonly string[]
   /** Whether a throwaway session may be opened to read the catalog before any session binds. */
   readonly probeCatalog: boolean
+  /** Whether every dsh session runs its own harness process. */
+  readonly processPerSession: boolean
   /** Auth-status CLI arguments. */
   readonly authStatusArgs: readonly string[]
   /** Auth-logout CLI arguments. */
@@ -164,6 +173,7 @@ export const acpHarnessEntrySchema = z.object({
   reasoningEffort: z.string(),
   catalogArgs: z.array(z.string()),
   probeCatalog: z.boolean().default(true),
+  processPerSession: z.boolean().default(false),
   authStatusArgs: z.array(z.string()).default([...DEFAULT_AUTH_STATUS_ARGS]),
   authLogoutArgs: z.array(z.string()).default([...DEFAULT_AUTH_LOGOUT_ARGS]),
 })
@@ -217,6 +227,7 @@ export function resolveHarnessEntries(config: Config): readonly ResolvedAcpHarne
         ? {}
         : { catalogArgs: entry.catalogArgs },
       probeCatalog: entry.probeCatalog ?? true,
+      processPerSession: entry.processPerSession ?? false,
       authStatusArgs: entry.authStatusArgs ?? [...DEFAULT_AUTH_STATUS_ARGS],
       authLogoutArgs: entry.authLogoutArgs ?? [...DEFAULT_AUTH_LOGOUT_ARGS],
     }

@@ -1341,6 +1341,117 @@ describe('SessionStore', () => {
     expect(ctx.sessions.get(SessionId('lifecycle'))).toBeUndefined()
   })
 
+  it('holds a deferred entry\'s dispatch and replays it in log order at publish', async () => {
+    const ctx = new Context()
+    await ctx.plugin(SessionStore)
+    const dispatched: string[] = []
+    ctx.on('session/event', (session, event) => {
+      // Replay runs after the append committed: the log already holds the event.
+      expect(session.snapshotEvents().at(event.seq)).toBe(event)
+      dispatched.push(event.type)
+    })
+
+    const session = ctx.sessions.prepare(SessionId('deferred'))
+    const detach = ctx.sessions.enter(session, { deferPublication: true })
+    expect(ctx.sessions.get(SessionId('deferred'))).toBe(session)
+    expect(() => { ctx.sessions.publish(session) }).toThrow(/before its creation announcement/)
+
+    let reentrantError = ''
+    ctx.on('session/created', (created) => {
+      try {
+        ctx.sessions.publish(created)
+      } catch (error: unknown) {
+        reentrantError = String(error)
+      }
+    })
+    ctx.sessions.announce(session)
+    expect(reentrantError).toMatch(/before its creation announcement/)
+
+    session.append('turn/start', { turn: 1 })
+    session.append('step/start', { turn: 1, step: 1 })
+    expect(dispatched).toEqual([])
+
+    ctx.sessions.publish(session)
+    expect(dispatched).toEqual(['turn/start', 'step/start'])
+    expect(() => { ctx.sessions.publish(session) }).toThrow(/no deferred publication/)
+    const live = ctx.sessions.create()
+    expect(() => { ctx.sessions.publish(live) }).toThrow(/no deferred publication/)
+
+    session.append('step/end', { turn: 1, step: 1 })
+    expect(dispatched).toEqual(['turn/start', 'step/start', 'step/end'])
+    detach()
+  })
+
+  it('never dispatches the held appends of a deferred entry that rolls back', async () => {
+    const ctx = new Context()
+    await ctx.plugin(SessionStore)
+    const lifecycle: string[] = []
+    ctx.on('session/created', () => void lifecycle.push('created'))
+    ctx.on('session/event', (_session, event) => void lifecycle.push(`event:${event.type}`))
+    ctx.on('session/disposed', () => void lifecycle.push('disposed'))
+
+    const session = ctx.sessions.prepare(SessionId('rolled-back'))
+    const detach = ctx.sessions.enter(session, { deferPublication: true })
+    ctx.sessions.announce(session)
+    session.append('turn/start', { turn: 1 })
+
+    detach()
+    expect(lifecycle).toEqual(['created', 'disposed'])
+    expect(ctx.sessions.get(SessionId('rolled-back'))).toBeUndefined()
+  })
+
+  it('holds a deferred entry\'s flush until publish dispatches the held appends', async () => {
+    const ctx = new Context()
+    await ctx.plugin(SessionStore)
+    const order: string[] = []
+    ctx.on('session/event', (_session, event) => void order.push(`event:${event.type}`))
+    ctx.on('session/flush', () => { order.push('flush') })
+    const session = ctx.sessions.prepare(SessionId('deferred-flush'))
+    const detach = ctx.sessions.enter(session, { deferPublication: true })
+    ctx.sessions.announce(session)
+    session.append('turn/start', { turn: 1 })
+
+    const flushed = ctx.sessions.flush(session)
+    await Promise.resolve()
+    expect(order).toEqual([])
+    ctx.sessions.publish(session)
+    await expect(flushed).resolves.toBe(true)
+    expect(order).toEqual(['event:turn/start', 'flush'])
+    detach()
+  })
+
+  it('reports no flush participant for a deferred entry that rolls back', async () => {
+    const ctx = new Context()
+    await ctx.plugin(SessionStore)
+    ctx.on('session/flush', () => undefined)
+    const session = ctx.sessions.prepare(SessionId('deferred-rollback-flush'))
+    const detach = ctx.sessions.enter(session, { deferPublication: true })
+    ctx.sessions.announce(session)
+    const flushed = ctx.sessions.flush(session)
+    detach()
+    await expect(flushed).resolves.toBe(false)
+  })
+
+  it('finishes a replay before honoring a detach requested by one of its observers', async () => {
+    const ctx = new Context()
+    await ctx.plugin(SessionStore)
+    const lifecycle: string[] = []
+    const session = ctx.sessions.prepare(SessionId('replay-detach'))
+    const detach = ctx.sessions.enter(session, { deferPublication: true })
+    ctx.on('session/event', (_session, event) => {
+      lifecycle.push(`event:${event.type}`)
+      detach()
+    })
+    ctx.on('session/disposed', () => void lifecycle.push('disposed'))
+    ctx.sessions.announce(session)
+    session.append('turn/start', { turn: 1 })
+    session.append('step/start', { turn: 1, step: 1 })
+
+    ctx.sessions.publish(session)
+    expect(lifecycle).toEqual(['event:turn/start', 'event:step/start', 'disposed'])
+    expect(ctx.sessions.get(SessionId('replay-detach'))).toBeUndefined()
+  })
+
   it('prevents simultaneous attachment of one session object to two stores', async () => {
     const firstCtx = new Context()
     const secondCtx = new Context()

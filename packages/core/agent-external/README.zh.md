@@ -57,7 +57,7 @@ class MyHost extends ExternalAgentHost<MyAgent> {
 }
 ```
 
-在服务构造函数中构造 `MyHost` 会注册 `turnBoundary` 投影、工厂持有的生命周期 teardown，以及工厂槽位本身，全部以该服务的 fiber 为作用域。`bind()` 在发布之前运行，因此被拒绝的握手会回滚整个创建过程，该会话 id 仍可再次使用。
+在服务构造函数中构造 `MyHost` 会注册 `turnBoundary` 投影、工厂持有的生命周期 teardown，以及工厂槽位本身，全部以该服务的 fiber 为作用域。两个创建宣告都在 `bind()` 之前运行——先 `session/created` 再 `agent/created`，后者的 scoped 组合监听器会在握手快照工具集之前装好该 agent 的工具——同时会话的 `session/event` 分发保持暂扣，因此被拒绝的握手会回滚创建过程，不留下任何已存储或已观察的内容，该会话 id 仍可再次使用。
 
 -----
 
@@ -73,7 +73,7 @@ class MyHost extends ExternalAgentHost<MyAgent> {
 
 ### 生命周期事务
 
-挂载后端时，`createAgent()` 准备私有会话、通过 `persistence.create()` 取得持久写所有权、在所有者 fiber 上构造驱动器、运行调用方 setup、在未发布状态下等待 `bind()`、冲刷发布前的后缀，此后才进入两个注册表、宣告会话与 agent、发出 `agent/session-start`，并返回已发布的句柄。`resume()` 先打开写句柄（从而排除同 id 的并发恢复）、读取物理上有效的日志、追加 `interruptedTurnClosers`，并以 `resume` 来源走同一条发布路径。任何失败、取消或所有者 dispose 都会回滚事务而不发布任一身份；共享 teardown 是记忆化的：停止驱动器、`unbind()`、撤销 agent 作用域、排空并关闭写句柄，最后 detach 两个注册表。
+`createAgent()` 准备私有会话，挂载后端时通过 `persistence.create()` 取得持久写所有权，在所有者 fiber 上构造驱动器，并运行调用方 setup。未设置 `announceBeforeBind` 构造的宿主（进程内 loop）随后调用 `bind()`、追加 `agent/harness`、存储尚未存储的日志，并以实时分发进入并宣告两个注册表。设置了 `announceBeforeBind` 的宿主（其握手会快照工具集的 ACP 与 Codex 驱动器）则追加 `agent/harness`，进入两个注册表——会话经 `SessionStore.enter(session, { deferPublication: true })` 进入，该调用暂扣其 `session/event` 分发——宣告 `session/created`，并等待串行 `agent/created` 监听器，使它们安装的工具进入 `bind()` 握手。`bind()` 成功后，宿主通过写句柄存储进入存储之前的日志，并调用 `SessionStore.publish()`，它按日志顺序把每个暂扣的追加分发给所有观察者；持久化经其实时路径写入这些追加。`resume()` 先打开写句柄（从而排除同 id 的并发恢复）、读取物理上有效的日志、追加 `interruptedTurnClosers`，并以 `resume` 来源走同一条路径。任何失败、取消或所有者 dispose 都会回滚事务且不分发暂扣的追加——bind 失败会 dispose 已宣告的一对，配对发出 `agent/disposed` 与 `session/disposed`；共享 teardown 是记忆化的：停止驱动器、`unbind()`、撤销 agent 作用域、排空并关闭写句柄，最后 detach 两个注册表。
 
 ### 持久收件箱与投影
 
@@ -81,7 +81,7 @@ class MyHost extends ExternalAgentHost<MyAgent> {
 
 ### 轮次投影
 
-`ExternalTurnProjector` 是 harness 观测结果变为持久事件的唯一位置：`beginAssistant()` 打开一条流式尝试，它发出 `agent/assistant-stream` 帧，并结算为 `assistant/message` 或仅日志的 `assistant/attempt`；`toolCall()`／`toolResult()` 提交成对事件；`noteRoute()` 在上报路由变化时记录 `request/header`。
+`ExternalTurnProjector` 是 harness 观测结果变为持久事件的唯一位置：`beginAssistant()` 打开一条流式尝试，它发出 `agent/assistant-stream` 帧，并结算为 `assistant/message` 或仅日志的 `assistant/attempt`；`toolCall()`／`toolResult()` 提交成对事件；`noteRoute()` 在上报路由变化时记录 `request/header`。每次 `toolCall()` 都会先在一条已提交的 `assistant/message` 上公告其 `tool-call` 块——若仍有流式尝试未结算，则折入其中并以 `finish: tool-calls` 结算，否则单独提交一条仅含该块的消息——因此每次外部调用都保持与 dsh 循环调用一致的已公告生命周期持久形态。当已挂载的 [`agentToolBridge`](../agent-tool-bridge/README.zh.md) 能解析上报的工具名——或 harness 另行携带的 `alias`，例如 Devin `_meta` 中的规范名——调用就以 dsh 工具名记录，其结果带上已结算桥接执行的 `meta`；无法识别的名称按原样记录。
 
 ### Harness 进程
 

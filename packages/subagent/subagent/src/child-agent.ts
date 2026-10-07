@@ -9,11 +9,12 @@
  */
 
 import type { Context } from '@deepseek-ai/cordis'
-import type { Agent, AgentOptions, CreateAgentOptions } from '@deepseek-ai/dsh-agent'
+import { harnessesServing, harnessOwning } from '@deepseek-ai/dsh-agent'
+import type { Agent, AgentOptions, CreateAgentOptions, HarnessId } from '@deepseek-ai/dsh-agent'
 import type { SandboxMode } from '@deepseek-ai/dsh-sandbox'
-import type { Session, SessionId } from '@deepseek-ai/dsh-session'
+import type { Session, SessionEvent, SessionId } from '@deepseek-ai/dsh-session'
 import type {} from '@deepseek-ai/dsh-system-prompt'
-import type { ToolRestriction } from '@deepseek-ai/dsh-tools'
+import type { ObjectJsonSchema, ToolRestriction } from '@deepseek-ai/dsh-tools'
 // Type-only: make `ctx.get('sandboxPolicy')`, `ctx.get('approval')`, and
 // `ctx.get('permissionPresets')` resolve to their services when composed — delegation consumes them
 // opportunistically (the documented `ctx.get` pattern), never as a hard dep —
@@ -21,6 +22,7 @@ import type { ToolRestriction } from '@deepseek-ai/dsh-tools'
 import type {} from '@deepseek-ai/dsh-sandbox-policy'
 import type {} from '@deepseek-ai/dsh-user-approval'
 import type {} from '@deepseek-ai/dsh-permission-presets'
+import type {} from '@deepseek-ai/dsh-agent-default-model'
 // Type-only: make `ctx.get('agentPresets')` resolve to the preset roster when
 // composed — a child inherits its parent's composition opportunistically (the
 // documented `ctx.get` pattern), never as a hard dep. A rosterless deployment
@@ -28,6 +30,7 @@ import type {} from '@deepseek-ai/dsh-permission-presets'
 // them through the tool registry's global layer.
 import type {} from '@deepseek-ai/dsh-agent-preset-registry'
 import { delegationDepthOf } from './depth.ts'
+import { SubagentError } from './error.ts'
 
 /** Thrown when starting a child would exceed the requested depth cap. */
 export class SubagentDepthError extends Error {
@@ -117,6 +120,175 @@ export function resolveChildAgentOptions(
   const routeChanged = resolved.provider !== parentProvider || resolved.model !== parentModel
   if (routeChanged && requested?.reasoningEffort === undefined) delete resolved.reasoningEffort
   return resolved
+}
+
+/**
+ * Drop route fields a fresh child inherited but never named when an explicit
+ * `harness` choice moves the child to a harness other than the parent's
+ * recorded owner and the inherited route cannot serve it: an unspecified
+ * route lets the chosen harness apply its own default, and a harness with no
+ * catalog route of its own (the loop) takes the deployment default model
+ * (`ctx.agentDefaultModel`) when that harness serves it. A compatible
+ * inherited route still applies, and route fields the request named
+ * explicitly stay for `resolveChildHarness` to honor or reject.
+ * @param ctx - context the mounted harness list is read from.
+ * @param parent - the delegating parent whose route the child inherited.
+ * @param requested - the request's explicit `harness` choice, or `undefined`.
+ * @param resolved - the child options from `resolveChildAgentOptions`, adjusted in place.
+ * @param named - the request's own `agentOptions`, telling named fields from inherited ones.
+ */
+export function dropCrossHarnessInheritedRoute(
+  ctx: Context,
+  parent: Agent,
+  requested: HarnessId | undefined,
+  resolved: AgentOptions,
+  named: AgentOptions | undefined,
+): void {
+  if (requested === undefined) return
+  // A harness choice reaches here only after the service resolved it on the agents service.
+  const owner = ctx.agents.resolveHarness(harnessOwning(ctx, parent.session), 'create')?.id
+  if (requested === owner) return
+  const provider = resolved.provider
+  const mounted = ctx.agents.harnesses()
+  if (provider !== undefined && harnessesServing(mounted, provider).includes(requested)) return
+  if (named?.provider === undefined) delete resolved.provider
+  if (named?.model === undefined) delete resolved.model
+  if (named?.reasoningEffort === undefined) delete resolved.reasoningEffort
+  if (named?.maxTokens === undefined) delete resolved.maxTokens
+  if (resolved.provider !== undefined) return
+  // A harness without its own catalog route (the loop) has no default of its
+  // own; the deployment default model applies when that harness serves it.
+  const fallback = ctx.get('agentDefaultModel')?.currentSelection()
+  if (fallback === undefined || fallback.provider === '' || fallback.model === '') return
+  if (!harnessesServing(mounted, fallback.provider).includes(requested)) return
+  resolved.provider = fallback.provider
+  resolved.model = fallback.model
+  if (fallback.reasoningEffort !== undefined && resolved.reasoningEffort === undefined) {
+    resolved.reasoningEffort = fallback.reasoningEffort
+  }
+}
+
+/**
+ * The delegation options a resolved child harness must honor or refuse. These
+ * are the inputs harness ownership constrains, not the whole start request.
+ */
+export interface HarnessBoundChildOptions {
+  /** The child's fully resolved Agent options, parent inheritance included. */
+  readonly agentOptions: AgentOptions | undefined
+  /** Per-child persona request, loop-only composition. */
+  readonly persona: string | undefined
+  /** Per-child tool restriction request, loop-only composition. */
+  readonly toolFilter: ToolRestriction | undefined
+  /** Structured-output request, loop-only composition. */
+  readonly outputSchema: ObjectJsonSchema | undefined
+}
+
+/**
+ * The harness choice for one fresh child, resolved against the mounted set.
+ */
+export interface ChildHarnessResolution {
+  /**
+   * The id to pass to `ctx.agents.create()`: the request's explicit choice or
+   * the parent session's recorded owner. `undefined` applies the registry's
+   * own resolution (the sole mounted harness, or its loud failure).
+   */
+  readonly harness: HarnessId | undefined
+  /**
+   * The harness creation resolves to when it is already known here: `harness`,
+   * else the sole mounted harness. `undefined` means the create call itself
+   * cannot resolve one and fails before any factory runs.
+   */
+  readonly effective: HarnessId | undefined
+  /**
+   * Whether the `effective` harness hosts the loop's scoped composition
+   * (`hostsLoopComposition`), which `applyChildComposition` and the
+   * structured-output runtime install into. `true` while nothing resolves,
+   * because the create call then fails first.
+   */
+  readonly isLoop: boolean
+}
+
+/**
+ * Resolve the harness a fresh child runs under and reject delegation options
+ * that harness cannot honor. The request's explicit `harness` wins; omission
+ * inherits the harness owning the parent's session.
+ *
+ * `persona`, `toolFilter`, and `outputSchema` install through the loop's
+ * scoped services, which only a harness declaring `hostsLoopComposition`
+ * consumes — passing them to any other child would silently drop them, so they
+ * reject here. The effective harness is the Agent registry's own
+ * `resolveHarness` answer for the create call. The
+ * resolved provider route is checked with {@link harnessesServing}: a harness
+ * that declares a `modelProvider` owns that catalog route alone, and a route
+ * with no owner serves only harnesses declaring none.
+ * @param ctx - context the mounted harness list is read from.
+ * @param parent - the delegating parent whose recorded harness is the fallback.
+ * @param requested - the request's explicit `harness` choice, or `undefined`.
+ * @param options - the child's resolved agent options and composition requests.
+ * @returns the create-call harness id and whether it hosts the loop composition.
+ * @throws {SubagentError} `INVALID_REQUEST` naming the dishonored option.
+ */
+export function resolveChildHarness(
+  ctx: Context,
+  parent: Agent,
+  requested: HarnessId | undefined,
+  options: HarnessBoundChildOptions,
+): ChildHarnessResolution {
+  const harness = requested ?? harnessOwning(ctx, parent.session)
+  const mounted = ctx.get('agents')?.harnesses() ?? []
+  const resolved = ctx.get('agents')?.resolveHarness(harness, 'create')
+  const effective = resolved?.id
+  const isLoop = resolved === undefined || resolved.hostsLoopComposition === true
+  if (!isLoop) {
+    const loopOnly: string[] = []
+    if (options.persona !== undefined) loopOnly.push('persona')
+    if (options.toolFilter !== undefined) loopOnly.push('toolFilter')
+    if (options.outputSchema !== undefined) loopOnly.push('outputSchema')
+    if (loopOnly.length > 0) {
+      throw new SubagentError(
+        `subagent option(s) ${loopOnly.join(', ')} require a harness that hosts the loop composition; `
+        + `the child would run under "${effective}"`,
+        'INVALID_REQUEST',
+      )
+    }
+  }
+  const provider = options.agentOptions?.provider
+  if (provider !== undefined && effective !== undefined
+    && !harnessesServing(mounted, provider).includes(effective)) {
+    throw new SubagentError(
+      `provider "${provider}" does not serve agent harness "${effective}"`,
+      'INVALID_REQUEST',
+    )
+  }
+  return { harness, effective, isLoop }
+}
+
+/**
+ * Reject an explicit harness choice on a seeded child: the seed is a prefix of
+ * the parent's durable log, which only the harness owning that log can
+ * continue. An unrecorded parent resolves through the same sole-mounted
+ * fallback `create` would apply to it.
+ * @param ctx - context the mounted harness list is read from.
+ * @param parent - the delegating parent whose harness owns the seed.
+ * @param seed - the parent-log prefix the child is seeded with, if any.
+ * @param requested - the request's explicit `harness` choice, or `undefined`.
+ * @throws {SubagentError} `INVALID_REQUEST` when the choice cannot own the seed.
+ */
+export function assertSeededChildHarness(
+  ctx: Context,
+  parent: Agent,
+  seed: readonly SessionEvent[] | undefined,
+  requested: HarnessId | undefined,
+): void {
+  if (seed === undefined || requested === undefined) return
+  const owner = ctx.get('agents')?.resolveHarness(harnessOwning(ctx, parent.session), 'create')?.id
+  if (requested === owner) return
+  throw new SubagentError(
+    owner === undefined
+      ? `a seeded subagent child cannot verify that harness "${requested}" owns its parent session`
+      : `a seeded subagent child must run under its parent session's harness "${owner}", not "${requested}"`,
+    'INVALID_REQUEST',
+  )
 }
 
 /**

@@ -37,6 +37,7 @@ export class CodexAgentHost extends ExternalAgentHost<CodexAgent> {
     super(ctx, `${CODEX_PREFIX}[${agentConfig.harness.id}]`, {
       harness: agentConfig.harness,
       effectPrefix: `codexAppServer.${agentConfig.harness.id}`,
+      announceBeforeBind: true,
     })
     ctx.sessionProjections.register(codexThreadProjection)
   }

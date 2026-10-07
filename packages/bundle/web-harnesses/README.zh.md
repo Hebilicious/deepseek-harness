@@ -49,7 +49,8 @@ dsh plugin --profile <name> remove @deepseek-ai/dsh-web-harnesses
 | `agent-default-model` | `provider: ''`、`model: ''`：部署级默认值只属于某一个 harness 的目录路由，因此在选择器或 `model/selection` 选定之前，会话不携带默认值 |
 | `session-title-llm` | 固定为 `deepseek-official` / `deepseek-flash`，因为外部 harness 的会话记录路由是仅提供目录的 adapter，不提供流式输出 |
 | `agent-codex` | 插入：每个 profile 一个共享 app-server，每个会话一个 Codex 线程 |
-| `agent-acp` | 插入五条 harness 条目，各一个进程：`devin`、`grok`、`opencode`、`mimo`、`claude` |
+| `agent-acp` | 插入五条 harness 条目，各一个进程：`devin`、`grok`、`opencode`、`mimo`、`claude`；`opencode` 按进程范围保存 MCP 服务器，因此每个会话运行一个进程（`processPerSession`） |
+| `agent-tool-bridge` | 插入：为每个 agent 提供一个经认证的回环 MCP 端点，把会话作用域内可见的 dsh 工具提供给外部 harness，排除每个 harness 原生已有或只有进程内循环才能驱动的工具名 |
 
 harness 行本身就是普通的 profile 配置。在 profile 自己的 `cordis.patch.yml` 中改写、添加或移除 ACP 条目，选择器会跟随已挂载的集合。
 
@@ -69,7 +70,7 @@ Claude Code 自身不使用 Agent Client Protocol，因此 `claude` 条目运行
 
 ### 补丁语义
 
-补丁会替换目标行的整个 `config`，`insert` 列表追加新行。因此本 bundle 只声明自己拥有的内容：两项 id 定位的覆盖与两行插入。profile 自己的 `cordis.patch.yml`、home 级补丁以及任何 `--patch` 覆盖仍在本层之后应用，因此部署可以在不修改 bundle 的情况下新增 harness、改写可执行文件或调整沙箱策略。
+补丁会替换目标行的整个 `config`，`insert` 列表追加新行。因此本 bundle 只声明自己拥有的内容：两项 id 定位的覆盖与三行插入。profile 自己的 `cordis.patch.yml`、home 级补丁以及任何 `--patch` 覆盖仍在本层之后应用，因此部署可以在不修改 bundle 的情况下新增 harness、改写可执行文件或调整沙箱策略。
 
 ### 为什么多个 harness 可以共存
 
@@ -83,7 +84,7 @@ Claude Code 自身不使用 Agent Client Protocol，因此 `claude` 条目运行
 
 | 文件 | 作用 |
 |---|---|
-| [`cordis.patch.yml`](cordis.patch.yml) | 整个层：两项覆盖与两行插入的驱动器行 |
+| [`cordis.patch.yml`](cordis.patch.yml) | 整个层：两项覆盖与插入的桥接与驱动器行 |
 | [`src/index.ts`](src/index.ts) | 仅模块标记；该包不提供运行时 API |
 | [`packages/boot/app-boot/src/profile.ts`](../../boot/app-boot/src/profile.ts) | 叠放本 bundle 的 `web` 与 `web-harnesses` profile 模板 |
 
@@ -98,6 +99,7 @@ Claude Code 自身不使用 Agent Client Protocol，因此 `claude` 条目运行
 
 - [dsh-agent-acp](../../core/agent-acp/README.zh.md)——本层为 Devin、Grok Build、opencode 与 mimocode 挂载的 ACP 驱动器。
 - [dsh-agent-codex](../../core/agent-codex/README.zh.md)——本层挂载的 Codex app-server 驱动器。
+- [dsh-agent-tool-bridge](../../core/agent-tool-bridge/README.zh.md)——把作用域内 dsh 工具提供给已挂载外部 harness 的回环 MCP 桥。
 - [dsh-agent](../../core/agent/README.zh.md)——每个驱动器注册所用的 harness 注册表。
 - [dsh-web-app](../web-app/README.zh.md)——本层所基于的浏览器界面。
 - [Bundle 包地图](../README.zh.md)——基于同一核心构建的各个界面。

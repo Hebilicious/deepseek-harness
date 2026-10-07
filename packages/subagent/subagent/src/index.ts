@@ -37,7 +37,7 @@ import { scopeTarget } from '@deepseek-ai/dsh-scope'
 import type { Scoped } from '@deepseek-ai/dsh-scope'
 import { assertObjectJsonSchema } from '@deepseek-ai/dsh-tools'
 import type { ContentBlock, MessageId, MessageSource } from '@deepseek-ai/dsh-llm'
-import type { Agent } from '@deepseek-ai/dsh-agent'
+import type { Agent, HarnessId } from '@deepseek-ai/dsh-agent'
 import type { SessionId } from '@deepseek-ai/dsh-session'
 import { canonicalClientTimeZone } from '@deepseek-ai/dsh-util-time'
 import { Remote, RemoteError, TypertRemoteService } from '@deepseek-ai/dsh-typert-protocol'
@@ -120,14 +120,22 @@ export { assertSubagentMaxDepth, delegationDepthOf } from './depth.ts'
 export {
   appendDelegatedPolicyOverrides,
   applyChildComposition,
+  assertSeededChildHarness,
   captureDelegatedPolicyOverrides,
   childSessionMeta,
+  dropCrossHarnessInheritedRoute,
   parentAgentOptionsForDelegation,
   resolveChildAgentOptions,
   resolveChildDepth,
+  resolveChildHarness,
   SubagentDepthError,
 } from './child-agent.ts'
-export type { ChildComposition, DelegatedPolicyOverrides } from './child-agent.ts'
+export type {
+  ChildComposition,
+  ChildHarnessResolution,
+  DelegatedPolicyOverrides,
+  HarnessBoundChildOptions,
+} from './child-agent.ts'
 export type { AgentMessageSource, SubagentSettledMessageSource } from './continuation-messages.ts'
 export type * from './control-types.ts'
 export type { SubagentDescendantListEntry } from './list-children.ts'
@@ -259,7 +267,11 @@ export class SubagentRuntime extends TypertRemoteService {
    * @throws when continuation services are unavailable or materialization fails.
    */
   async startContinuable(spec: ContinuableStartSpec): Promise<ContinuableStart> {
-    return this.requireContinuations().startContinuable(spec)
+    const continuations = this.requireContinuations()
+    if (spec.request.harness !== undefined) {
+      this.assertHarnessChoice(this.expectProvider(spec.provider), spec.request)
+    }
+    return continuations.startContinuable(spec)
   }
 
   /**
@@ -559,6 +571,7 @@ export class SubagentRuntime extends TypertRemoteService {
   async start(name: string, request: SubagentStartRequest): Promise<SubagentRun> {
     const provider = this.expectProvider(name)
     this.assertCapabilities(provider, request)
+    this.assertHarnessChoice(provider, request)
     assertSubagentMaxDepth(request.maxDepth)
     if (request.outputSchema !== undefined) assertObjectJsonSchema(request.outputSchema)
     const descriptor = snapshotSubagentDescriptor({
@@ -640,7 +653,11 @@ export class SubagentRuntime extends TypertRemoteService {
     return createActivationObserver(this.emitLifecycle, provider, childId, parent)
   }
 
-  /** Reject the first requested capability that the provider lacks. */
+  /**
+   * Reject the first requested capability that the provider lacks. `harness`
+   * is covered by {@link assertHarnessChoice}, which the continuable path
+   * calls without this check.
+   */
   private assertCapabilities(provider: SubagentProvider, request: SubagentStartRequest): void {
     const needs: { when: boolean; cap: keyof SubagentCapabilities }[] = [
       { when: request.agentOptions !== undefined, cap: 'agentOptions' },
@@ -656,6 +673,37 @@ export class SubagentRuntime extends TypertRemoteService {
           'UNSUPPORTED_CAPABILITY',
         )
       }
+    }
+  }
+
+  /**
+   * Reject an explicit `harness` choice the provider does not accept or the
+   * Agent registry cannot resolve, before any child work begins.
+   */
+  private assertHarnessChoice(
+    provider: SubagentProvider,
+    request: { readonly harness?: HarnessId | undefined },
+  ): void {
+    const harness = request.harness
+    if (harness === undefined) return
+    if (!provider.capabilities.harness) {
+      throw new SubagentError(
+        `subagent provider "${provider.name}" does not support the "harness" capability`,
+        'UNSUPPORTED_CAPABILITY',
+      )
+    }
+    const mounted = this.ctx.get('agents')?.harnesses()
+    if (mounted === undefined) {
+      throw new SubagentError(
+        `agent harness "${harness}" cannot be resolved without the agents service`,
+        'INVALID_REQUEST',
+      )
+    }
+    if (!mounted.some(entry => entry.id === harness)) {
+      throw new SubagentError(
+        `agent harness "${harness}" is not mounted (mounted: ${mounted.map(entry => entry.id).join(', ') || 'none'})`,
+        'INVALID_REQUEST',
+      )
     }
   }
 }

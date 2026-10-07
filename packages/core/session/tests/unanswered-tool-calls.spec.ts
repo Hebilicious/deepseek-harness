@@ -103,6 +103,16 @@ describe('derived history without unanswerable tool calls', () => {
     expect(session.deriveMessages()[1]?.content).toEqual([{ type: 'text', text: 'working' }])
   })
 
+  it('keeps a call whose log records no step boundary', () => {
+    const session = Session.create(SessionId('stepless-call'))
+    userText(session, 'go')
+    assistantCall(session, 'working', ['a'])
+    userText(session, 'next')
+
+    // Without a boundary marker the step state is unknown, so the call stays pending.
+    expect([...session.unanswerableToolCalls()]).toEqual([])
+  })
+
   it('keeps a call recorded before the step still running', () => {
     const session = Session.create(SessionId('earlier-step-call'))
     session.append('turn/start', { turn: 1 })

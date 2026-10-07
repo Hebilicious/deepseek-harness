@@ -286,6 +286,8 @@ export class TeamRoster {
         request: {
           prompt: request.prompt,
           parent: root,
+          ...request.harness === undefined ? {} : { harness: request.harness },
+          ...request.agentOptions === undefined ? {} : { agentOptions: request.agentOptions },
         },
         signal,
       })

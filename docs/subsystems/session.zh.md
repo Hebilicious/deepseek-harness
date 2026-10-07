@@ -778,6 +778,24 @@ interface TurnEndReasonMap {
 
 消费此约定的后端见 [persistence.md](persistence.zh.md)。
 
+## 延迟发布——`SessionEnterOptions`
+
+`enter(session, { deferPublication: true })` 接纳会话并暂扣其 `session/event` 分发：追加仍提交到内存日志，但没有观察者收到它们。`publish(session)` 按日志顺序把每个暂扣的追加分发给所有观察者，之后在追加提交时逐条分发；在 `publish` 之前 detach 的会话永不分发其暂扣的追加。延迟进入的会话上的 `flush(session)` 会先等待 `publish` 或 detach，再分发 `session/flush`，因此创建事务中的代码不得等待其自身会话的 flush。`publish` 要求 `session/created` 宣告已完成，并拒绝未以 `deferPublication` 进入或已发布的会话。外部 harness 的 agent 工厂用它在 `bind()` 握手之前运行创建边：它通过写句柄存储进入存储之前的日志，持久化则在发布时经其实时 `session/event` 路径写入暂扣的追加（[dsh-agent-external](../../packages/core/agent-external/README.zh.md)）。
+
+```ts type-equiv
+/** Options for {@link SessionStore.enter}. */
+interface SessionEnterOptions {
+  /**
+   * When `true`, `session/event` dispatch is held until
+   * {@link SessionStore.publish}, which dispatches every held append in log
+   * order. An agent factory whose commit point follows the creation edges
+   * (the harness handshake) uses this so a rolled-back creation never
+   * dispatched an event, while a committed one reaches every observer in order.
+   */
+  readonly deferPublication?: boolean
+}
+```
+
 ## Remote 目录与 workspace 打开
 
 `ModelCatalog` 是 `session/modelCatalog` 返回的 Host generation 模型目录：它携带部署默认值、可路由 provider id、成功的 provider 分组与相互隔离的 provider 失败。它不由某个 Session 派生，因此与 Session projection 分开保存。
@@ -1076,12 +1094,14 @@ prepare(id?: SessionId, options?: PrepareSessionOptions): Session
  * assume that.
  *
  * @param session - a {@link prepare}d session not yet in the store.
+ * @param options - `deferPublication` holds the session's `session/event`
+ *   dispatch until {@link publish}.
  * @returns the detach disposer (publication hooks + store removal). When called from
  *   a synchronous `session/created` listener, removal and disposal wait until
  *   that creation dispatch unwinds.
  * @throws if a session with this id is already in the store.
  */
-enter(session: Session): () => void
+enter(session: Session, options?: SessionEnterOptions): () => void
 
 /** Emit `session/created` exactly once for an {@link enter}ed session (with
  * the carrier {@link enter} captured). Separate from {@link enter} so the
@@ -1093,6 +1113,18 @@ enter(session: Session): () => void
 announce(session: Session): void
 
 /**
+ * Commit a {@link SessionEnterOptions.deferPublication deferred} entry:
+ * dispatch every held append on `session/event` in log order, then dispatch
+ * later appends as they commit. An entry detached before this call never
+ * dispatches its held appends.
+ * @param session - the entered, announced session to publish.
+ * @throws if the session is not live in this store, its creation announcement
+ *   has not completed, or it was not entered with `deferPublication` or was
+ *   already published.
+ */
+publish(session: Session): void
+
+/**
  * Dispatch the awaited `session/flush` durability checkpoint for `session`,
  * with the carrier captured at {@link enter}. THE flush entry point: the
  * store owns the carrier, so callers (the checkpoint policy's per-request
@@ -1100,6 +1132,10 @@ announce(session: Session): void
  * that flush themselves before reading storage) must come through here
  * rather than dispatch a raw `ctx.parallel('session/flush', …)` — one owner,
  * one spelling, and the scoped-dispatch invariant can pin it.
+ * A `deferPublication` entry first waits for {@link publish} to dispatch its
+ * held appends, so the checkpoint covers them; one that detaches unpublished
+ * has nothing durable and reports no participant. Creation-transaction code
+ * must therefore not await a flush of its own session.
  * @param session - the session whose buffered events must reach durable storage.
  * @returns whether at least one durability listener participated, after every
  *   listener has settled successfully.
@@ -1300,13 +1336,16 @@ Source: [`packages/core/session/src/index.ts`](../../packages/core/session/src/i
 
 #### `session/event` — emit
 
-Post-commit, fire-and-forget append feed. The listener snapshot resolves before the log push, but callbacks run after it; observer failures are logged and contained without making the committed append fail. Scope-filtered dispatch (`@deepseek-ai/dsh-scope`): agent-scoped listeners receive only events from sessions entered through that agent's context.
+Post-commit, fire-and-forget append feed. The listener snapshot resolves before the log push, but callbacks run after it; observer failures are logged and contained without making the committed append fail. A session entered with SessionEnterOptions.deferPublication holds its appends and dispatches them, in log order, when SessionStore.publish commits it. Scope-filtered dispatch (`@deepseek-ai/dsh-scope`): agent-scoped listeners receive only events from sessions entered through that agent's context.
 
 ```ts cordis-catalog
 /**
  * Post-commit, fire-and-forget append feed. The listener snapshot resolves
  * before the log push, but callbacks run after it; observer failures are
  * logged and contained without making the committed append fail.
+ * A session entered with {@link SessionEnterOptions.deferPublication}
+ * holds its appends and dispatches them, in log order, when
+ * {@link SessionStore.publish} commits it.
  * Scope-filtered dispatch (`@deepseek-ai/dsh-scope`): agent-scoped listeners
  * receive only events from sessions entered through that agent's context.
  * @param session - the session whose log grew.

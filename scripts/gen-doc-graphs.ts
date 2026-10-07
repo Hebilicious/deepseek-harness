@@ -612,6 +612,14 @@ const SERVICE_ROLES: ServiceRole[] = [
     note: 'One shared app-server process per configured Codex instance; every session binds its own thread, and each instance registers its own ctx.agents factory and model route, so one profile can run several accounts beside the in-process loop.',
   },
   {
+    key: 'agentToolBridge',
+    pkg: 'agent-tool-bridge',
+    title: 'External-harness tool bridge',
+    mode: 'bundle',
+    consumers: ['agent-acp', 'web-harnesses'],
+    note: 'Projects an agent\'s scoped tools onto one bearer-credentialed loopback MCP endpoint per agent; every call executes through ctx.tools under the agent\'s identity, so the shared policy pipeline applies unchanged.',
+  },
+  {
     key: 'agentLoop',
     pkg: 'agent-loop',
     title: 'Concrete loop driver',

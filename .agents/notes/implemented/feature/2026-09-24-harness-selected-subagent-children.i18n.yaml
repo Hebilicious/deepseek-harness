@@ -1,0 +1,22 @@
+# Bilingual-pair consistency record for 2026-09-24-harness-selected-subagent-children.md (docs/i18n/README.md): per heading
+# section, a hash of its English and Chinese blocks outside code blocks and generated regions.
+# After editing either side, bring the other along and re-record with:
+#   pnpm run verify-translation-pairing --write .agents/notes/implemented/feature/2026-09-24-harness-selected-subagent-children.md
+/agent-note-harness-selected-subagent-children:
+  en: bab33129d899acfc
+  zh: 95c6a65fb9d03189
+/agent-note-harness-selected-subagent-children/problem:
+  en: 16f5f6c54f106f82
+  zh: 5601545112935983
+/agent-note-harness-selected-subagent-children/decision:
+  en: 900bd9a7f3ac7914
+  zh: 789716b450564a1b
+/agent-note-harness-selected-subagent-children/alternatives-considered:
+  en: 1adddcabea5cd3fa
+  zh: 6eee2581fca3dac8
+/agent-note-harness-selected-subagent-children/consequences:
+  en: 7aad42a7a015da77
+  zh: e307965f3243e8ef
+/agent-note-harness-selected-subagent-children/testing:
+  en: e5f3a2338d549923
+  zh: a82e7e97f438d354

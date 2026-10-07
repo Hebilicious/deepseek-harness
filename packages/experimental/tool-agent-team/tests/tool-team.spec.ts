@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { Context } from '@deepseek-ai/cordis'
-import type { Agent } from '@deepseek-ai/dsh-agent'
+import { HarnessId, type Agent } from '@deepseek-ai/dsh-agent'
 import AgentLoop from '@deepseek-ai/dsh-agent-loop'
 import { mountAgentLoopTestDependencies, unsupportedInbox } from '@deepseek-ai/dsh-agent-loop-testkit'
 import { ToolCallId, createUserMessage } from '@deepseek-ai/dsh-llm'
@@ -63,7 +63,11 @@ afterEach(async () => {
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true })
 })
 
-async function setup(script: ConstructorParameters<typeof MockAdapter>[0], legacyControl = false) {
+async function setup(
+  script: ConstructorParameters<typeof MockAdapter>[0],
+  legacyControl = false,
+  options: { extraHarness?: boolean } = {},
+) {
   const ctx = new Context()
   contexts.add(ctx)
   await mountAgentLoopTestDependencies(ctx)
@@ -80,6 +84,16 @@ async function setup(script: ConstructorParameters<typeof MockAdapter>[0], legac
   const fiber = await ctx.plugin(toolTeam)
   const adapter = new MockAdapter(script)
   ctx.llm.registerAdapter(['mock'], adapter)
+  if (options.extraHarness === true) {
+    ctx.agents.registerHarness({
+      id: HarnessId('other'),
+      name: 'Other',
+      factory: {
+        createAgent: () => Promise.reject(new Error('other harness refused creation')),
+        resume: () => Promise.reject(new Error('other harness refused resume')),
+      },
+    })
+  }
   const lead = await ctx.agentLoop.create(SessionId('tool-team-lead'), { provider: 'mock', model: 'mock' })
   return { ctx, lead, fiber, adapter }
 }
@@ -223,6 +237,9 @@ describe('dsh-tool-team', () => {
     expect(leadPrompt).toContain('returns noProgress immediately')
     expect(leadPrompt).not.toContain('Your Team role')
     expect(renderContextSnapshot(leadAssembly)).toBe('')
+    // A single mounted runtime leaves no choice, so `harness` stays out of the schema.
+    const spawnSchema = leadAssembly.tools.find(schema => schema.name === 'spawn_teammate')
+    expect(JSON.stringify(spawnSchema?.parameters)).not.toContain('"harness"')
 
     const spawned = await execute(ctx, lead, 'spawn_teammate', {
       name: 'tool-worker',
@@ -638,6 +655,20 @@ describe('dsh-tool-team', () => {
     await fiber.dispose()
     const legacySchema = (await assembly(ctx, lead)).tools.find(schema => schema.name === 'send_message')
     expect(JSON.stringify(legacySchema)).toContain('agent_id')
+  })
+
+  it('exposes the harness parameter when a second runtime is mounted and forwards the choice', async () => {
+    const { ctx, lead } = await setup([], false, { extraHarness: true })
+    const spawnSchema = (await assembly(ctx, lead)).tools.find(schema => schema.name === 'spawn_teammate')
+    expect(JSON.stringify(spawnSchema?.parameters)).toContain('"harness"')
+
+    const denied = await execute(ctx, lead, 'spawn_teammate', {
+      name: 'other-worker',
+      description: 'cross-runtime teammate',
+      prompt: 'run on other',
+      harness: 'other',
+    })
+    expect(text(denied)).toContain('other harness refused creation')
   })
 
   it('rolls back partial scoped installation after a same-scope collision', async () => {

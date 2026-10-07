@@ -1,0 +1,52 @@
+# Bilingual-pair consistency record for README.md (docs/i18n/README.md): per heading
+# section, a hash of its English and Chinese blocks outside code blocks and generated regions.
+# After editing either side, bring the other along and re-record with:
+#   pnpm run verify-translation-pairing --write packages/core/agent-tool-bridge/README.md
+/:
+  en: 526975a27ab15cdd
+  zh: 74416a960f4e4f33
+/deepseek-ai-dsh-agent-tool-bridge:
+  en: 84ff219e313d2218
+  zh: ce4c1d17889ecbfe
+/deepseek-ai-dsh-agent-tool-bridge/summary:
+  en: 5ebed1c0518c07cf
+  zh: 139eac96c0b11546
+/deepseek-ai-dsh-agent-tool-bridge/table-of-contents:
+  en: d152484eb41ac6b4
+  zh: bda879a892f240f0
+/deepseek-ai-dsh-agent-tool-bridge/use-this-package:
+  en: 514c8693dcd765f3
+  zh: 194f2ccbfb42db05
+/deepseek-ai-dsh-agent-tool-bridge/use-this-package/configuration:
+  en: e342596d81125281
+  zh: 65f34e5d96ba9850
+/deepseek-ai-dsh-agent-tool-bridge/use-this-package/bridge-tools-to-a-harness:
+  en: 88f00792b51a8ffb
+  zh: bc21ee414d120d11
+/deepseek-ai-dsh-agent-tool-bridge/understand-the-implementation:
+  en: 5ba3dc4d25b43f7c
+  zh: f5fbcfdfa21ebb43
+/deepseek-ai-dsh-agent-tool-bridge/further-exploration:
+  en: d3b3ce2c4f56e2c2
+  zh: c32cdc4970996717
+/deepseek-ai-dsh-agent-tool-bridge/model-experience:
+  en: 215e7ba838619b7b
+  zh: a311da3843709f90
+/deepseek-ai-dsh-agent-tool-bridge/model-experience/bridged-tool-list:
+  en: df60925d63f2c47e
+  zh: 1f54b58bbc710032
+/deepseek-ai-dsh-agent-tool-bridge/model-experience/bridged-tool-list/what-the-model-sees:
+  en: 7301f778f3feb09b
+  zh: c89e564e9508c99c
+/deepseek-ai-dsh-agent-tool-bridge/model-experience/bridged-tool-list/token-effect:
+  en: 7867dac9f314db2a
+  zh: 0dd5a8a27814a30c
+/deepseek-ai-dsh-agent-tool-bridge/model-experience/bridged-tool-list/kv-cache-effect:
+  en: acd6809bf5cb0162
+  zh: 7b4faca5b0cf6c93
+/deepseek-ai-dsh-agent-tool-bridge/known-limitations-and-deferred-work:
+  en: dafac4c736dc3b33
+  zh: b5bf92d06b0789da
+/deepseek-ai-dsh-agent-tool-bridge/known-limitations-and-deferred-work/dev-note:
+  en: e67f633dc6fe7773
+  zh: 3bb0c20c93f16f98

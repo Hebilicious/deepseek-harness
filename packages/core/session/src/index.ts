@@ -15,7 +15,7 @@ import type { Scoped } from '@deepseek-ai/dsh-scope'
 import type { Message, ToolCallId } from '@deepseek-ai/dsh-llm'
 import { SESSION_FORMAT_VERSION, SessionLogOffset, SessionSeq } from './types.ts'
 import type { TypertLookup } from '@deepseek-ai/dsh-typert-protocol'
-import type { CreateSessionOptions, EpochHeader, PrepareSessionOptions, RequestContext, SessionEvent, SessionEventMap, SessionEventType, SessionHeader, SessionId, SessionSeedEventState, SurfaceIntent, SurfaceEventType } from './types.ts'
+import type { CreateSessionOptions, EpochHeader, PrepareSessionOptions, RequestContext, SessionEnterOptions, SessionEvent, SessionEventMap, SessionEventType, SessionHeader, SessionId, SessionSeedEventState, SurfaceIntent, SurfaceEventType } from './types.ts'
 import { SurfaceManager, validateSessionEventData, validateSurfaceMetadata, withoutUnanswerableToolCalls } from './surface.ts'
 import type { SessionSurface, SessionMessageProjection } from './surface.ts'
 import { foldRequestHeader } from './request-header.ts'
@@ -67,6 +67,9 @@ declare module '@deepseek-ai/cordis' {
      * Post-commit, fire-and-forget append feed. The listener snapshot resolves
      * before the log push, but callbacks run after it; observer failures are
      * logged and contained without making the committed append fail.
+     * A session entered with {@link SessionEnterOptions.deferPublication}
+     * holds its appends and dispatches them, in log order, when
+     * {@link SessionStore.publish} commits it.
      * Scope-filtered dispatch (`@deepseek-ai/dsh-scope`): agent-scoped listeners
      * receive only events from sessions entered through that agent's context.
      * @param session - the session whose log grew.
@@ -428,6 +431,13 @@ interface SessionEntry {
   announced: boolean
   announcing: boolean
   appending: boolean
+  /**
+   * Appends held for dispatch while a `deferPublication` entry awaits
+   * {@link SessionStore.publish}; undefined once dispatch is live.
+   */
+  held: SessionEvent[] | undefined
+  /** Settles when a `deferPublication` entry publishes or detaches; {@link SessionStore.flush} awaits it. */
+  readonly settled: PromiseWithResolvers<void> | undefined
   detachRequested: boolean
   detach(): void
 }
@@ -755,11 +765,12 @@ export class Session {
     try {
       let callbacks: SessionCallback[] | undefined
       const callbackArgs: unknown[] = [this, event]
-      if (entry !== undefined) {
+      if (entry !== undefined && entry.held === undefined) {
         callbacks = collectSessionCallbacks(entry.emitCtx, [entry.carrier, 'session/event', ...callbackArgs])
       }
       this.log.push(event as SessionEvent)
       this.eventsSnapshot = undefined
+      entry?.held?.push(event as SessionEvent)
       if (callbacks !== undefined && entry !== undefined) {
         invokeContainedSessionObservers(entry.emitCtx, 'session/event', entry.id, callbackArgs, callbacks)
       }
@@ -1170,12 +1181,14 @@ export class SessionStore extends Service {
    * assume that.
    *
    * @param session - a {@link prepare}d session not yet in the store.
+   * @param options - `deferPublication` holds the session's `session/event`
+   *   dispatch until {@link publish}.
    * @returns the detach disposer (publication hooks + store removal). When called from
    *   a synchronous `session/created` listener, removal and disposal wait until
    *   that creation dispatch unwinds.
    * @throws if a session with this id is already in the store.
    */
-  enter(session: Session): () => void {
+  enter(session: Session, options?: SessionEnterOptions): () => void {
     const id = session.id
     const carrier = scopeTarget(session, scopeOf(this.ctx))
     // This is the authoritative collision boundary after arbitrary unpublished
@@ -1190,6 +1203,8 @@ export class SessionStore extends Service {
       announced: false,
       announcing: false,
       appending: false,
+      held: options?.deferPublication === true ? [] : undefined,
+      settled: options?.deferPublication === true ? Promise.withResolvers<void>() : undefined,
       detachRequested: false,
       detach: () => { this.detachEntered(entry) },
     }
@@ -1220,6 +1235,7 @@ export class SessionStore extends Service {
     if (this.store.get(entry.id) !== entry) return
     this.store.delete(entry.id)
     attachments.delete(entry.session)
+    entry.settled?.resolve()
     if (entry.announced) this.emitDisposed(entry)
   }
 
@@ -1260,6 +1276,38 @@ export class SessionStore extends Service {
     }
   }
 
+  /**
+   * Commit a {@link SessionEnterOptions.deferPublication deferred} entry:
+   * dispatch every held append on `session/event` in log order, then dispatch
+   * later appends as they commit. An entry detached before this call never
+   * dispatches its held appends.
+   * @param session - the entered, announced session to publish.
+   * @throws if the session is not live in this store, its creation announcement
+   *   has not completed, or it was not entered with `deferPublication` or was
+   *   already published.
+   */
+  publish(session: Session): void {
+    const entry = this.liveEntryFor(session)
+    if (!entry.announced || entry.announcing) {
+      throw new Error(`session "${entry.id}" cannot publish before its creation announcement completes`)
+    }
+    const held = entry.held
+    if (held === undefined) throw new Error(`session "${entry.id}" has no deferred publication to commit`)
+    entry.appending = true
+    try {
+      for (const event of held) {
+        const callbackArgs: unknown[] = [session, event]
+        const callbacks = collectSessionCallbacks(entry.emitCtx, [entry.carrier, 'session/event', ...callbackArgs])
+        invokeContainedSessionObservers(entry.emitCtx, 'session/event', entry.id, callbackArgs, callbacks)
+      }
+    } finally {
+      entry.held = undefined
+      entry.appending = false
+      entry.settled?.resolve()
+      if (entry.detachRequested) entry.detach()
+    }
+  }
+
   /** Emit the paired teardown notification with per-listener containment. */
   private emitDisposed(entry: SessionEntry): void {
     const callbackArgs: unknown[] = [entry.session]
@@ -1279,13 +1327,22 @@ export class SessionStore extends Service {
    * that flush themselves before reading storage) must come through here
    * rather than dispatch a raw `ctx.parallel('session/flush', …)` — one owner,
    * one spelling, and the scoped-dispatch invariant can pin it.
+   * A `deferPublication` entry first waits for {@link publish} to dispatch its
+   * held appends, so the checkpoint covers them; one that detaches unpublished
+   * has nothing durable and reports no participant. Creation-transaction code
+   * must therefore not await a flush of its own session.
    * @param session - the session whose buffered events must reach durable storage.
    * @returns whether at least one durability listener participated, after every
    *   listener has settled successfully.
    * @throws the first registered listener failure after every listener settles.
    */
   async flush(session: Session): Promise<boolean> {
-    const { carrier } = this.liveEntryFor(session)
+    const entry = this.liveEntryFor(session)
+    if (entry.held !== undefined) {
+      await entry.settled?.promise
+      if (this.store.get(entry.id) !== entry) return false
+    }
+    const { carrier } = entry
     const callbackArgs: unknown[] = [session]
     const callbacks = collectSessionCallbacks(this.ctx, [carrier, 'session/flush', session])
     const results = await Promise.allSettled(callbacks.map((callback) => {

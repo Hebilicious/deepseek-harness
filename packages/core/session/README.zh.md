@@ -37,6 +37,8 @@ ctx.sessions.get(sessionId)      // the live session
 ctx.sessions.list()              // every live session, in creation order
 ```
 
+拥有创建事务的工厂会分别调用 `prepare()`、`enter()` 与 `announce()`。`enter(session, { deferPublication: true })` 暂扣会话的 `session/event` 分发，直到 `publish(session)` 按日志顺序把每个暂扣的追加分发给所有观察者；在 `publish()` 之前 detach 的会话永不分发它们。[子系统参考](../../../docs/subsystems/session.zh.md)定义了 `SessionEnterOptions`。
+
 ### 追加与派生
 
 `session.append(type, data, opts?)` 提交一个类型化事件——它先快照并冻结载荷、校验其为无损 JSON，再通知观察者。`session.deriveMessages()` 把日志投影为模型看到的 `Message[]`，采用增量且有缓存的方式：

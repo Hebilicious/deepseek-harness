@@ -27,7 +27,8 @@
  *                         newer ACP session model state.
  * - `MOCK_CURRENT_MODEL`  — `models.currentModelId`; defaults to the first
  *                         `MOCK_SESSION_MODELS` entry.
- * - `MOCK_TEXT`         — assistant text streamed as `agent_message_chunk`s.
+ * - `MOCK_TEXT`         — assistant text streamed as `agent_message_chunk`s;
+ *                         an empty value emits no chunk.
  * - `MOCK_THOUGHT`      — text streamed as one `agent_thought_chunk` first.
  * - `MOCK_PLAN`         — JSON `[{content, status}]` emitted as a `plan` update.
  * - `MOCK_TOOL`         — emit `tool_call` then a completed `tool_call_update`.
@@ -36,6 +37,9 @@
  *                         for one allow-once permission request.
  * - `MOCK_TOOL_OPEN`    — emit `tool_call` with no terminal update, so the
  *                         driver's settlement must close it as an error result.
+ * - `MOCK_INTERLEAVED`  — stream the value as one `agent_message_chunk` before
+ *                         the tool pair; `MOCK_TEXT` still streams after it,
+ *                         so one turn interleaves text, call, and text.
  * - `MOCK_TOOL_BARE`    — emit a `tool_call` with no name/title/rawInput and a
  *                         failed `tool_call_update` carrying only rawOutput.
  * - `MOCK_CONFIG_UPDATE`— emit a `config_option_update` during the prompt.
@@ -80,6 +84,9 @@
  *                         driver's unnamed-tool fallback).
  * - `MOCK_PERMISSION`   — call `session/request_permission` before answering;
  *                         `MOCK_PERMISSION_OPTIONS` overrides the option list.
+ *                         `{{server}}` in the title or an option name becomes
+ *                         the name of the session's first http `mcpServers`
+ *                         entry.
  * - `MOCK_ELICIT`       — call `elicitation/create` with a flat form schema
  *                         (`MOCK_ELICIT_MODE` selects a non-form mode).
  * - `MOCK_STOP`         — the `stopReason` `session/prompt` returns
@@ -100,6 +107,25 @@
  * - `MOCK_HANG_SESSION_NEW`    — never answer `session/new`, so the catalog
  *                         probe's own deadline is the only thing that ends it.
  * - `MOCK_AUTH_METHODS` — JSON auth-method array for the initialize response.
+ * - `MOCK_MCP_HTTP`   — advertise `agentCapabilities.mcpCapabilities.http`.
+ * - `MOCK_MCP_PROBE`  — probe every http entry a session request's `mcpServers`
+ *                       carries: a credential-less POST (`mcp-unauthorized`),
+ *                       then initialize, `tools/list` (`mcp-tools`), and the
+ *                       `MOCK_MCP_CALL` (`{name, arguments}`) `tools/call`
+ *                       (`mcp-call`) under the entry's headers.
+ * - `MOCK_MCP_PROMPT_CALL` — JSON `{name, arguments}` called on the session's
+ *                       first http `mcpServers` entry during `session/prompt`,
+ *                       then reported as a `tool_call`/`tool_call_update` pair
+ *                       in Devin's shape: `title` is display text and the
+ *                       canonical `mcp__<server>__<tool>` name rides
+ *                       `_meta['cognition.ai/toolName']`.
+ * - `MOCK_MCP_PROMPT_ONCE` — fire `MOCK_MCP_PROMPT_CALL` only on the first
+ *                       `session/prompt` this process serves; sessions that
+ *                       share the process, such as a bridged subagent's child,
+ *                       answer later prompts without the call.
+ * - `MOCK_MCP_PROMPT_STYLE` — `claude` reports the same call in Claude Code's
+ *                       shape instead: the canonical name is the `title` and
+ *                       `_meta` is absent.
  * - `MOCK_LOGOUT`       — advertise `agentCapabilities.auth.logout` and serve
  *                         the ACP `logout` request; off by default because real
  *                         Devin advertises `auth: {}` and serves no logout.
@@ -200,6 +226,7 @@ const DELETE = process.env.MOCK_DELETE === '1'
 const CLOSE_ERROR = process.env.MOCK_CLOSE_ERROR === '1'
 const EMIT_TOOL = process.env.MOCK_TOOL === '1'
 const EMIT_TOOL_OPEN = process.env.MOCK_TOOL_OPEN === '1'
+const INTERLEAVED = process.env.MOCK_INTERLEAVED
 const FLUSH_ON_EOF = process.env.MOCK_FLUSH_ON_EOF
 const INITIALIZE_DELAY_MS = Number(process.env.MOCK_INITIALIZE_DELAY_MS ?? '0')
 const WANT_LOGOUT = process.env.MOCK_LOGOUT === '1'
@@ -218,6 +245,14 @@ const HANG_ONCE = process.env.MOCK_HANG_ONCE === '1'
 const PERMISSION_TITLE = process.env.MOCK_PERMISSION_TITLE ?? 'mock side effect'
 const ELICIT_EXTRA = process.env.MOCK_ELICIT_EXTRA === '1'
 const ELICIT_NO_PROPERTIES = process.env.MOCK_ELICIT_NO_PROPERTIES === '1'
+const MCP_HTTP = process.env.MOCK_MCP_HTTP === '1'
+const MCP_PROBE = process.env.MOCK_MCP_PROBE === '1'
+const MCP_CALL = jsonEnv('MOCK_MCP_CALL') as { name: string; arguments?: unknown } | undefined
+const MCP_PROMPT_CALL = jsonEnv('MOCK_MCP_PROMPT_CALL') as { name: string; arguments?: unknown } | undefined
+const MCP_PROMPT_ONCE = process.env.MOCK_MCP_PROMPT_ONCE === '1'
+const MCP_PROMPT_STYLE = process.env.MOCK_MCP_PROMPT_STYLE ?? 'devin'
+/** The http `mcpServers` entries the latest session request carried. */
+let sessionMcpServers: readonly ProbedMcpServer[] = []
 
 function jsonEnv(name: string): unknown {
   const raw = process.env[name]
@@ -369,6 +404,155 @@ async function emitIdleUpdates(conn: AgentContext, sessionId: string, marker: st
   writeFileSync(marker, 'sent')
 }
 
+/** One http `mcpServers` entry a session request carried. */
+interface ProbedMcpServer {
+  readonly type?: string
+  readonly name?: string
+  readonly url?: string
+  readonly headers?: readonly { name: string; value: string }[]
+}
+
+/** Replace `{{server}}` with the name of the session's first http `mcpServers` entry. */
+function withServerName(text: string): string {
+  const server = sessionMcpServers.find(entry => entry.type === 'http')
+  return text.replaceAll('{{server}}', server?.name ?? '')
+}
+
+/** POST one MCP JSON-RPC message; returns the status and any result/error payload. */
+async function mcpPost(
+  url: string,
+  headers: Record<string, string>,
+  message: Record<string, unknown>,
+): Promise<{ status: number; result?: unknown; error?: unknown }> {
+  const response = await fetch(url, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', accept: 'application/json, text/event-stream', ...headers },
+    body: JSON.stringify(message),
+  })
+  const text = await response.text()
+  if (!response.ok || text === '') return { status: response.status }
+  const messages = (response.headers.get('content-type') ?? '').includes('text/event-stream')
+    ? text.split('\n').filter(line => line.startsWith('data:')).map(line => JSON.parse(line.slice(5).trim()) as { result?: unknown; error?: unknown })
+    : [JSON.parse(text) as { result?: unknown; error?: unknown }]
+  const reply = messages.find(entry => entry !== null && ('result' in entry || 'error' in entry)) ?? {}
+  return { status: response.status, ...reply }
+}
+
+/**
+ * Probe every http `mcpServers` entry a session request carried, so a test
+ * reads from the record whether the endpoint is reachable, requires its
+ * bearer credential, and serves the bridged tools. A probe failure lands as
+ * `mcp-error` rather than failing the session request.
+ */
+async function probeMcpServers(params: { mcpServers?: readonly unknown[] }): Promise<void> {
+  const init = {
+    jsonrpc: '2.0',
+    id: 1,
+    method: 'initialize',
+    params: {
+      protocolVersion: '2025-06-18',
+      capabilities: {},
+      clientInfo: { name: 'mock-acp-agent', version: '0' },
+    },
+  }
+  for (const entry of params.mcpServers ?? []) {
+    const server = entry as ProbedMcpServer
+    if (server.type !== 'http' || server.url === undefined) continue
+    const headers = Object.fromEntries((server.headers ?? []).map(header => [header.name, header.value]))
+    try {
+      record('mcp-unauthorized', await mcpPost(server.url, {}, init))
+      record('mcp-initialize', await mcpPost(server.url, headers, init))
+      await mcpPost(server.url, headers, { jsonrpc: '2.0', method: 'notifications/initialized' })
+      record('mcp-tools', await mcpPost(server.url, headers, { jsonrpc: '2.0', id: 2, method: 'tools/list', params: {} }))
+      if (MCP_CALL !== undefined) {
+        record('mcp-call', await mcpPost(server.url, headers, {
+          jsonrpc: '2.0',
+          id: 3,
+          method: 'tools/call',
+          params: { name: MCP_CALL.name, arguments: MCP_CALL.arguments ?? {} },
+        }))
+      }
+    } catch (error) {
+      record('mcp-error', String(error))
+    }
+  }
+}
+
+/**
+ * Call `MOCK_MCP_PROMPT_CALL` on the session's first http `mcpServers` entry
+ * and report it to the client as one `tool_call` plus its terminal
+ * `tool_call_update`, in the shape Devin emits for MCP calls: `title` is
+ * display text and the canonical `mcp__<server>__<tool>` name rides
+ * `_meta['cognition.ai/toolName']`.
+ */
+async function promptMcpCall(conn: AgentContext, sessionId: string): Promise<void> {
+  if (MCP_PROMPT_CALL === undefined) return
+  const server = sessionMcpServers.find(entry => entry.type === 'http' && entry.url !== undefined)
+  if (server === undefined) {
+    record('mcp-prompt-call', { error: 'no http mcpServers entry' })
+    return
+  }
+  const headers = Object.fromEntries((server.headers ?? []).map(header => [header.name, header.value]))
+  const called = await mcpPost(server.url!, headers, {
+    jsonrpc: '2.0',
+    id: 1,
+    method: 'initialize',
+    params: {
+      protocolVersion: '2025-06-18',
+      capabilities: {},
+      clientInfo: { name: 'mock-acp-agent', version: '0' },
+    },
+  })
+  if (called.error !== undefined || called.result === undefined) {
+    record('mcp-prompt-call', called)
+    return
+  }
+  await mcpPost(server.url!, headers, { jsonrpc: '2.0', method: 'notifications/initialized' })
+  const result = await mcpPost(server.url!, headers, {
+    jsonrpc: '2.0',
+    id: 2,
+    method: 'tools/call',
+    params: { name: MCP_PROMPT_CALL.name, arguments: MCP_PROMPT_CALL.arguments ?? {} },
+  })
+  record('mcp-prompt-call', result)
+  const payload = result.result as { content?: { type: string; text?: string }[]; isError?: boolean } | undefined
+  const canonical = `mcp__${server.name ?? 'dsh'}__${MCP_PROMPT_CALL.name}`
+  // Devin keeps the canonical name in `_meta`; Claude Code reports it as the
+  // `title` and sends no `_meta`.
+  const claude = MCP_PROMPT_STYLE === 'claude'
+  await conn.notify(methods.client.session.update, {
+    sessionId,
+    update: {
+      sessionUpdate: 'tool_call',
+      toolCallId: 'mcp-call-1',
+      title: claude ? canonical : `Calling ${MCP_PROMPT_CALL.name} from ${server.name ?? 'dsh'}`,
+      rawInput: MCP_PROMPT_CALL.arguments ?? {},
+      ...claude ? {} : {
+        _meta: {
+          'cognition.ai/toolName': canonical,
+          'cognition.ai/eventType': 'mcp_tool_call',
+          'cognition.ai/inferenceToolName': canonical,
+        },
+      },
+    },
+  })
+  await conn.notify(methods.client.session.update, {
+    sessionId,
+    update: {
+      sessionUpdate: 'tool_call_update',
+      toolCallId: 'mcp-call-1',
+      status: payload?.isError === true || result.error !== undefined ? 'failed' : 'completed',
+      content: (payload?.content ?? []).map(block => ({
+        type: 'content' as const,
+        content: block.type === 'text'
+          ? { type: 'text' as const, text: block.text ?? '' }
+          : { type: 'text' as const, text: JSON.stringify(block) },
+      })),
+      ...claude ? {} : { _meta: { 'cognition.ai/inferenceToolName': canonical } },
+    },
+  })
+}
+
 function makeAgent() {
   // Pending cancel resolver for the HANG path: `session/cancel` resolves the
   // prompt with `cancelled`.
@@ -389,6 +573,7 @@ function makeAgent() {
           ...LOAD_SESSION ? { loadSession: true } : {},
           ...CLOSE ? { sessionCapabilities: { close: {} } } : {},
           ...DELETE ? { sessionCapabilities: { delete: {} } } : {},
+          ...MCP_HTTP ? { mcpCapabilities: { http: true } } : {},
           // Real Devin answers `auth: {}` (no logout method); MOCK_LOGOUT
           // advertises it so the driver's ACP logout arm stays exercised.
           ...WANT_LOGOUT ? { auth: { logout: {} } } : {},
@@ -400,20 +585,24 @@ function makeAgent() {
       if (INITIALIZE_DELAY_MS === 0) return Promise.resolve(response)
       return new Promise((resolve) => { setTimeout(() => { resolve(response) }, INITIALIZE_DELAY_MS) })
     },
-    newSession(params: NewSessionRequest): Promise<NewSessionResponse> {
+    async newSession(params: NewSessionRequest): Promise<NewSessionResponse> {
       record('session/new', params)
+      sessionMcpServers = params.mcpServers ?? []
+      if (MCP_PROBE) await probeMcpServers(params)
       if (process.env.MOCK_HANG_SESSION_NEW === '1') return new Promise(() => {})
-      if (process.env.MOCK_MISSING_SESSION_ID === '1') return Promise.resolve({} as NewSessionResponse)
+      if (process.env.MOCK_MISSING_SESSION_ID === '1') return {} as NewSessionResponse
       const models = sessionModels()
       const response = {
         sessionId: process.env.MOCK_SESSION_ID ?? randomUUID(),
         ...NO_CONFIG_OPTIONS ? {} : { configOptions },
         ...models === undefined ? {} : { models },
       }
-      return Promise.resolve(response)
+      return response
     },
-    loadSession(params: LoadSessionRequest): Promise<LoadSessionResponse> {
+    async loadSession(params: LoadSessionRequest): Promise<LoadSessionResponse> {
       record('session/load', params)
+      sessionMcpServers = params.mcpServers ?? []
+      if (MCP_PROBE) await probeMcpServers(params)
       if (!LOAD_SESSION) {
         const error = new Error('loadSession is not advertised') as Error & { code: number }
         error.code = -32601
@@ -493,8 +682,8 @@ function makeAgent() {
       if (WANT_PERMISSION) {
         const decision = await conn.request(methods.client.session.requestPermission, {
           sessionId: params.sessionId,
-          toolCall: { toolCallId: 'mock-call', title: PERMISSION_TITLE },
-          options: PERMISSION_OPTIONS ?? [
+          toolCall: { toolCallId: 'mock-call', title: withServerName(PERMISSION_TITLE) },
+          options: PERMISSION_OPTIONS?.map(option => ({ ...option, name: withServerName(option.name) })) ?? [
             { optionId: 'yes', name: 'Allow once', kind: 'allow_once' as const },
             { optionId: 'always', name: 'Always allow', kind: 'allow_always' as const },
             { optionId: 'no', name: 'Reject', kind: 'reject_once' as const },
@@ -548,6 +737,12 @@ function makeAgent() {
               priority: entry.priority ?? 'medium',
             })),
           },
+        })
+      }
+      if (INTERLEAVED !== undefined) {
+        await conn.notify(methods.client.session.update, {
+          sessionId: params.sessionId,
+          update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: INTERLEAVED } },
         })
       }
       if (EMIT_TOOL || EMIT_TOOL_OPEN) {
@@ -612,6 +807,15 @@ function makeAgent() {
           update: { sessionUpdate: 'tool_call_update', toolCallId: 'empty-call', status: 'completed' },
         })
       }
+      if (!MCP_PROMPT_ONCE || prompts === 1) {
+        try {
+          await promptMcpCall(conn, params.sessionId)
+        } catch (error) {
+          // A bridged call that never reached the endpoint emits no tool pair;
+          // the record carries the failure for the test.
+          record('mcp-prompt-call', { error: String(error) })
+        }
+      }
       if (UNREGISTERED_REQUEST) {
         // Requests addressed to a session this client carries no peer for: the
         // driver answers each from its unregistered-session default.
@@ -657,7 +861,7 @@ function makeAgent() {
             : { type: 'text' as const, text: TEXT },
         },
       }
-      await conn.notify(methods.client.session.update, messageChunk)
+      if (TEXT !== '' || TEXT_IMAGE) await conn.notify(methods.client.session.update, messageChunk)
       if (REPEAT_CHUNKS) {
         // A second chunk per open lane, and a second plan update.
         await conn.notify(methods.client.session.update, messageChunk)

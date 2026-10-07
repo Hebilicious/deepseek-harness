@@ -9,8 +9,8 @@
   en: 425344cec61f5c70
   zh: 48e8f2a2e3c1f418
 /deepseek-ai-dsh-subagent/summary:
-  en: 300242b82e87aa3e
-  zh: a4a1319487072484
+  en: 73770b6a5f6162de
+  zh: d37b1c13a5d6da6b
 /deepseek-ai-dsh-subagent/table-of-contents:
   en: d152484eb41ac6b4
   zh: 09388d293f9be9cb
@@ -45,11 +45,11 @@
   en: d9afc0d9548afe58
   zh: 0e11526b6c001dc6
 /deepseek-ai-dsh-subagent/understand-the-implementation/one-shot-flow:
-  en: 9439bd15ee2129c9
-  zh: 6c275cf484efa0cf
+  en: 3915b579e4226cc4
+  zh: 783739a0d7967353
 /deepseek-ai-dsh-subagent/understand-the-implementation/continuable-flow:
-  en: 9703c868342826cc
-  zh: e300484cecf15835
+  en: c2c1304cdc86119a
+  zh: f2556944377da5c8
 /deepseek-ai-dsh-subagent/understand-the-implementation/ownership-and-invariants:
   en: 7384d01be46a2f0a
   zh: 83373486ad10d6d5
@@ -87,8 +87,8 @@
   en: 59e848fca82a46fb
   zh: fcd6a8a2bb58609f
 /deepseek-ai-dsh-subagent/known-limitations-and-deferred-work:
-  en: b2182809471f0780
-  zh: cfab217025442ae8
+  en: 3ec22a9e9cd0ba73
+  zh: 985b2639eae8562c
 /deepseek-ai-dsh-subagent/known-limitations-and-deferred-work/dev-note:
-  en: 25cc0909348666bb
-  zh: 95517f12de100049
+  en: 9c151eac553c780c
+  zh: 11ca3b185dd190ae

@@ -75,6 +75,9 @@
       "path": "../../interaction/permission-presets"
     },
     {
+      "path": "../../core/agent-default-model"
+    },
+    {
       "path": "../../util/chunked-list"
     }
   ]

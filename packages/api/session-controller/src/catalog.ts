@@ -5,12 +5,12 @@ import { credentialRef } from '@deepseek-ai/dsh-credentials'
 import type {} from '@deepseek-ai/dsh-settings'
 import type { LlmModelInfo } from '@deepseek-ai/dsh-llm'
 import type { Context } from '@deepseek-ai/cordis'
+import { harnessesServing } from '@deepseek-ai/dsh-agent'
 import type {
   ModelCatalog,
   ModelReasoning,
   ModelSelection,
 } from './types.ts'
-import { harnessesServing } from './harness-models.ts'
 
 /**
  * Build the browser model catalog without requiring a Session.

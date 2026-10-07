@@ -2,8 +2,9 @@
  * Codex session driver: one {@link ExternalAgent} bound to one Codex thread on
  * its instance's app-server connection. Owns the thread lifecycle
  * (start/resume/unsubscribe), turn driving (`turn/start` → `turn/completed`),
- * live steering and injection, item→session-event projection, and approval /
- * question routing into the DSH seams.
+ * live steering and injection, item→session-event projection, approval /
+ * question routing into the DSH seams, and the `agentToolBridge` MCP endpoint
+ * that exposes the session's dsh tools to the thread.
  *
  * @module @deepseek-ai/dsh-agent-codex/agent
  */
@@ -31,6 +32,8 @@ import {
   type UserMessage,
 } from '@deepseek-ai/dsh-llm'
 import type { SandboxMode } from '@deepseek-ai/dsh-sandbox'
+import type {} from '@deepseek-ai/dsh-agent-tool-bridge'
+import type { BridgeMcpEndpoint } from '@deepseek-ai/dsh-agent-tool-bridge/types'
 import { JsonRpcResponseError } from '@deepseek-ai/dsh-sdk-protocol'
 import type { Session, SessionId, TurnEndReason } from '@deepseek-ai/dsh-session'
 import type { JsonValue } from '@deepseek-ai/dsh-util-values'
@@ -64,6 +67,17 @@ export interface CodexAgentConfig {
   readonly loginWithApiKey?: () => Promise<void>
 }
 
+/** One agentMessage item's open assistant stream bookkeeping. */
+interface TrackedMessage {
+  readonly attempt: AssistantStreamAttempt
+  /** Block index of this attempt's text block. */
+  readonly textIndex: number
+  /** Item-text characters earlier settled attempts of this item committed. */
+  readonly prefix: number
+  /** Delta characters streamed into this attempt's text block. */
+  emitted: number
+}
+
 /** One in-flight harness turn's driver-side tracking state. */
 interface ActiveTurn {
   readonly drive: ExternalTurnDrive
@@ -80,7 +94,7 @@ interface ActiveTurn {
   /** Reasoning item texts completed since the last assistant message. */
   readonly pendingReasoning: string[]
   /** Open assistant streams keyed by agentMessage item id. */
-  readonly attempts: Map<string, { attempt: AssistantStreamAttempt; textIndex: number }>
+  readonly attempts: Map<string, TrackedMessage>
   /** Item ids that already have a `tool/call` committed and await their result. */
   readonly openToolItems: Set<string>
   /** Set once the terminal frame settled `completion`, or the drive ended. */
@@ -101,6 +115,24 @@ interface ThreadRequest {
   readonly cwd: string | undefined
   readonly permission: { sandbox: SandboxMode; approvalPolicy: 'on-request' | 'never' }
   readonly selection: CodexRoute
+  /** `config` overrides carrying the tool-bridge MCP server, when the bridge is mounted. */
+  readonly config: JsonObject | undefined
+}
+
+/**
+ * The `thread/start` and `thread/resume` members that carry the same bind-time
+ * settings; the request-specific members stay at each call site.
+ * @param request - resolved bind-time thread settings.
+ * @returns the shared wire params.
+ */
+function threadRequestParams(request: ThreadRequest): JsonObject {
+  return {
+    ...request.cwd === undefined ? {} : { cwd: request.cwd },
+    sandbox: request.permission.sandbox,
+    approvalPolicy: request.permission.approvalPolicy,
+    ...request.selection.model === undefined ? {} : { model: request.selection.model },
+    ...request.config === undefined ? {} : { config: request.config },
+  }
 }
 
 function optionalString(value: unknown): string | undefined {
@@ -142,6 +174,8 @@ export class CodexAgent extends ExternalAgent implements CodexThreadPeer {
   private threadId: string | undefined
   private detachThread: (() => void) | undefined
   private connection: CodexAppServerConnection | undefined
+  /** This agent's tool-bridge endpoint while the Codex thread is bound. */
+  private bridgeEndpoint: BridgeMcpEndpoint | undefined
   private active: ActiveTurn | undefined
   /** Last turn retired by settlement, still able to supply its id to a late `turn/started`. */
   private retired: ActiveTurn | undefined
@@ -184,16 +218,70 @@ export class CodexAgent extends ExternalAgent implements CodexThreadPeer {
       cwd: this.session.header.cwd,
       permission: this.effectivePermissions(),
       selection: this.effectiveSelection(),
+      config: await this.openToolBridge(),
     }
-    const recorded = codexThreadOf(this.ctx.sessionProjections, this.session)
-    // The durable binding is appended at bind time, so a session that was
-    // created and never prompted owns a thread with no rollout on disk; that
-    // thread cannot be resumed and is replaced by a fresh one.
-    const resumed = recorded === undefined
-      ? undefined
-      : await this.resumeThread(connection, recorded, request, signal)
-    const threadId = resumed ?? await this.startThread(connection, request, signal)
-    this.detachThread = this.runtime.registerThread(threadId, this)
+    try {
+      const recorded = codexThreadOf(this.ctx.sessionProjections, this.session)
+      // The durable binding is appended at bind time, so a session that was
+      // created and never prompted owns a thread with no rollout on disk; that
+      // thread cannot be resumed and is replaced by a fresh one.
+      const resumed = recorded === undefined
+        ? undefined
+        : await this.resumeThread(connection, recorded, request, signal)
+      const threadId = resumed ?? await this.startThread(connection, request, signal)
+      this.detachThread = this.runtime.registerThread(threadId, this)
+    } catch (error: unknown) {
+      // A rolled-back bind never announces the agent, so no agent/disposed
+      // arrives to revoke the endpoint; close it here.
+      await this.closeBridgeEndpoint()
+      throw error
+    }
+  }
+
+  /**
+   * Open this agent's tool-bridge endpoint when the deployment mounts the
+   * `agentToolBridge` service, and shape it as the `config` overrides both
+   * `thread/start` and `thread/resume` accept: one `mcp_servers.<name>` entry
+   * whose `http_headers` carry the endpoint's bearer credential and whose
+   * tools are pre-approved (`default_tools_approval_mode: approve`): every
+   * bridged call already runs through the dsh approval pipeline, and Codex
+   * otherwise refuses an MCP call outright under the `never` approval policy
+   * a delegated child carries. Codex
+   * resolves config overrides per thread request, so the fresh credential a
+   * rebind mints reaches a resumed thread — `thread/resume` carries no
+   * `dynamicTools` member, so the endpoint rides the `config` override both
+   * requests accept rather than `thread/start.dynamicTools`.
+   * @returns the `config` member for the thread requests, or undefined.
+   */
+  private async openToolBridge(): Promise<JsonObject | undefined> {
+    const bridge = this.ctx.get('agentToolBridge')
+    if (bridge === undefined) return undefined
+    const endpoint = await bridge.openMcpEndpoint(this)
+    this.bridgeEndpoint = endpoint
+    const headers: JsonObject = {}
+    for (const { name, value } of endpoint.headers) headers[name] = value
+    return {
+      [`mcp_servers.${endpoint.name}.url`]: endpoint.url,
+      [`mcp_servers.${endpoint.name}.http_headers`]: headers,
+      [`mcp_servers.${endpoint.name}.default_tools_approval_mode`]: 'approve',
+    }
+  }
+
+  /**
+   * Revoke this agent's tool-bridge endpoint when one is open. A close
+   * failure is warned rather than thrown: the endpoint is already lost, and
+   * the caller's own outcome — a clean unbind or the bind error being rolled
+   * back — must still report.
+   */
+  private async closeBridgeEndpoint(): Promise<void> {
+    const endpoint = this.bridgeEndpoint
+    this.bridgeEndpoint = undefined
+    if (endpoint === undefined) return
+    try {
+      await endpoint.close()
+    } catch (error: unknown) {
+      this.ctx.logger.warn(`${CODEX_PREFIX}: tool-bridge endpoint close failed: ${errorChain(error)}`)
+    }
   }
 
   /**
@@ -207,11 +295,8 @@ export class CodexAgent extends ExternalAgent implements CodexThreadPeer {
   ): Promise<string> {
     const response = codexObject(
       await connection.request('thread/start', {
-        ...request.cwd === undefined ? {} : { cwd: request.cwd },
+        ...threadRequestParams(request),
         ephemeral: false,
-        sandbox: request.permission.sandbox,
-        approvalPolicy: request.permission.approvalPolicy,
-        ...request.selection.model === undefined ? {} : { model: request.selection.model },
       }, signal),
       'thread/start response',
       CODEX_PREFIX,
@@ -244,10 +329,7 @@ export class CodexAgent extends ExternalAgent implements CodexThreadPeer {
         await connection.request('thread/resume', {
           threadId: existing,
           excludeTurns: true,
-          ...request.cwd === undefined ? {} : { cwd: request.cwd },
-          sandbox: request.permission.sandbox,
-          approvalPolicy: request.permission.approvalPolicy,
-          ...request.selection.model === undefined ? {} : { model: request.selection.model },
+          ...threadRequestParams(request),
         }, signal),
         'thread/resume response',
         CODEX_PREFIX,
@@ -286,6 +368,7 @@ export class CodexAgent extends ExternalAgent implements CodexThreadPeer {
         this.ctx.logger.warn(`${CODEX_PREFIX}: thread/unsubscribe for "${threadId}" failed: ${errorChain(error)}`)
       }
     }
+    await this.closeBridgeEndpoint()
     detach?.()
     this.detachThread = undefined
     this.connection = undefined
@@ -384,8 +467,10 @@ export class CodexAgent extends ExternalAgent implements CodexThreadPeer {
       active.openToolItems.clear()
       // Attempts left open by an aborted or failed turn still settle: an
       // attempt with visible content commits its interrupted prefix as an
-      // assistant/message; an empty one records the bare attempt.
+      // assistant/message; an empty one records the bare attempt. An attempt
+      // a tool-call advertisement already settled needs nothing further.
       for (const { attempt } of active.attempts.values()) {
+        if (attempt.ended) continue
         try {
           if (attempt.interruptedBlocks().length > 0) {
             attempt.push({
@@ -629,8 +714,9 @@ export class CodexAgent extends ExternalAgent implements CodexThreadPeer {
 
   /**
    * Answer one server→client request for this agent's thread: approvals route
-   * to the DSH approval seam, interactive input to the user-questions seam,
-   * and dynamic tool calls refuse loudly.
+   * to the DSH approval seam and interactive input to the user-questions seam.
+   * `item/tool/call` stays refused: bridged tools reach the thread as an MCP
+   * server, so no `dynamicTools` are ever declared for it to invoke.
    */
   async request(method: string, params: JsonObject): Promise<unknown> {
     switch (method) {
@@ -721,6 +807,7 @@ export class CodexAgent extends ExternalAgent implements CodexThreadPeer {
         const delta = codexString(params.delta, 'agentMessage delta', CODEX_PREFIX)
         const tracked = this.ensureAttempt(active, itemId)
         tracked.attempt.push({ type: 'text-delta', index: tracked.textIndex, text: delta })
+        tracked.emitted += delta.length
         return
       }
       case 'item/reasoning/textDelta':
@@ -739,13 +826,18 @@ export class CodexAgent extends ExternalAgent implements CodexThreadPeer {
 
   // ---- item projection ----
 
-  /** Open the assistant stream for one agentMessage item, folding buffered reasoning first. */
+  /**
+   * Open the assistant stream for one agentMessage item, folding buffered
+   * reasoning first. An entry whose attempt a tool-call advertisement already
+   * settled is replaced: the item's deltas continue on a fresh attempt whose
+   * `prefix` skips the text the settled attempt committed.
+   */
   private ensureAttempt(
     active: ActiveTurn,
     itemId: string,
-  ): { attempt: AssistantStreamAttempt; textIndex: number } {
+  ): TrackedMessage {
     const tracked = active.attempts.get(itemId)
-    if (tracked !== undefined) return tracked
+    if (tracked !== undefined && !tracked.attempt.ended) return tracked
     const attempt = active.drive.projector.beginAssistant()
     let index = 0
     for (const text of active.pendingReasoning.splice(0)) {
@@ -755,12 +847,22 @@ export class CodexAgent extends ExternalAgent implements CodexThreadPeer {
       index += 1
     }
     attempt.push({ type: 'block-start', index, blockType: 'text' })
-    const entry = { attempt, textIndex: index }
+    const entry: TrackedMessage = {
+      attempt,
+      textIndex: index,
+      prefix: tracked === undefined ? 0 : tracked.prefix + tracked.emitted,
+      emitted: 0,
+    }
     active.attempts.set(itemId, entry)
     return entry
   }
 
-  /** `item/started`: open assistant streams for text items; commit `tool/call` for tool items. */
+  /**
+   * `item/started`: open assistant streams for text items; commit `tool/call`
+   * for tool items. An item joins `openToolItems` only once its `tool/call`
+   * committed, so a failed projection cannot settle a result for a call that
+   * never logged.
+   */
   private itemStarted(active: ActiveTurn, item: JsonObject): void {
     const type = item.type
     const id = codexString(item.id, `${String(type)} item id`, CODEX_PREFIX)
@@ -775,64 +877,64 @@ export class CodexAgent extends ExternalAgent implements CodexThreadPeer {
         return
       case 'commandExecution': {
         const command = optionalString(item.command) ?? ''
-        active.openToolItems.add(id)
         active.drive.projector.toolCall(id, 'shell', JSON.stringify({
           command,
           ...optionalString(item.cwd) === undefined ? {} : { cwd: item.cwd },
         }))
+        active.openToolItems.add(id)
         return
       }
       case 'fileChange': {
-        active.openToolItems.add(id)
         active.drive.projector.toolCall(id, 'apply_patch', JSON.stringify({
           changes: item.changes ?? [],
         }))
+        active.openToolItems.add(id)
         return
       }
       case 'mcpToolCall': {
         const server = optionalString(item.server) ?? 'unknown'
         const tool = optionalString(item.tool) ?? 'unknown'
-        active.openToolItems.add(id)
         active.drive.projector.toolCall(id, `mcp__${server}__${tool}`, JSON.stringify(item.arguments ?? {}))
+        active.openToolItems.add(id)
         return
       }
       case 'dynamicToolCall': {
         const tool = optionalString(item.tool) ?? 'unknown'
         const namespace = optionalString(item.namespace)
-        active.openToolItems.add(id)
         active.drive.projector.toolCall(
           id,
           namespace === undefined ? tool : `${namespace}.${tool}`,
           JSON.stringify(item.arguments ?? {}),
         )
+        active.openToolItems.add(id)
         return
       }
       case 'collabAgentToolCall': {
         const tool = optionalString(item.tool) ?? 'unknown'
-        active.openToolItems.add(id)
         active.drive.projector.toolCall(id, `collab_${tool}`, JSON.stringify({
           ...optionalString(item.prompt) === undefined ? {} : { prompt: item.prompt },
           ...optionalString(item.model) === undefined ? {} : { model: item.model },
         }))
+        active.openToolItems.add(id)
         return
       }
       case 'webSearch': {
-        active.openToolItems.add(id)
         active.drive.projector.toolCall(id, 'web_search', JSON.stringify({
           ...optionalString(item.query) === undefined ? {} : { query: item.query },
         }))
+        active.openToolItems.add(id)
         return
       }
       case 'imageGeneration': {
-        active.openToolItems.add(id)
         active.drive.projector.toolCall(id, 'image_generation', '{}')
+        active.openToolItems.add(id)
         return
       }
       case 'plan': {
-        active.openToolItems.add(id)
         active.drive.projector.toolCall(id, 'update_plan', JSON.stringify({
           ...optionalString(item.text) === undefined ? {} : { plan: item.text },
         }))
+        active.openToolItems.add(id)
         return
       }
       case 'reasoning':
@@ -844,8 +946,8 @@ export class CodexAgent extends ExternalAgent implements CodexThreadPeer {
       default:
         // Merge-extensible item union: unrecognized items fall back to a
         // generic tool card so nothing model-visible goes unlogged.
-        active.openToolItems.add(id)
         active.drive.projector.toolCall(id, `codex_${String(type)}`, JSON.stringify(item))
+        active.openToolItems.add(id)
     }
   }
 
@@ -859,12 +961,28 @@ export class CodexAgent extends ExternalAgent implements CodexThreadPeer {
         // A completion without a streamed `item/started` still opens an
         // attempt so completed reasoning items fold into the same message.
         const tracked = this.ensureAttempt(active, id)
-        tracked.attempt.push({ type: 'block-end', index: tracked.textIndex, block: { type: 'text', text } })
-        tracked.attempt.push({ type: 'finish', reason: { kind: 'stop' } })
-        active.drive.projector.commitAssistant(tracked.attempt, {
-          provider: this.driverConfig.harness.id,
-          model: active.model,
-        })
+        // The completion's text is the whole item's; a mid-stream tool-call
+        // advertisement already committed the `prefix` share, so this attempt
+        // claims only the remainder. A continuation that adds nothing at all
+        // settles as a bare attempt rather than an empty assistant/message.
+        const remainder = text.slice(tracked.prefix)
+        const silent = tracked.prefix > 0
+          && remainder === ''
+          && tracked.attempt.blocks().every(block => block.type === 'text' && block.text === '')
+        if (silent) {
+          active.drive.projector.commitAttempt(tracked.attempt)
+        } else {
+          tracked.attempt.push({
+            type: 'block-end',
+            index: tracked.textIndex,
+            block: { type: 'text', text: remainder },
+          })
+          tracked.attempt.push({ type: 'finish', reason: { kind: 'stop' } })
+          active.drive.projector.commitAssistant(tracked.attempt, {
+            provider: this.driverConfig.harness.id,
+            model: active.model,
+          })
+        }
         active.attempts.delete(id)
         return
       }

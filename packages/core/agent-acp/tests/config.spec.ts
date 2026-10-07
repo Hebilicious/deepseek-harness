@@ -23,6 +23,7 @@ describe('resolveHarnessEntries', () => {
       authStatusArgs: ['auth', 'status'],
       authLogoutArgs: ['auth', 'logout'],
       probeCatalog: true,
+      processPerSession: false,
     }])
   })
 
@@ -42,6 +43,7 @@ describe('resolveHarnessEntries', () => {
         model: 'grok-4.7',
         reasoningEffort: 'high',
         catalogArgs: ['models', 'list'],
+        processPerSession: true,
         authStatusArgs: ['auth', 'status', '--json'],
         authLogoutArgs: ['auth', 'logout', '--yes'],
       }],
@@ -65,6 +67,7 @@ describe('resolveHarnessEntries', () => {
       authStatusArgs: ['auth', 'status', '--json'],
       authLogoutArgs: ['auth', 'logout', '--yes'],
       probeCatalog: true,
+      processPerSession: true,
     }])
   })
 

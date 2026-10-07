@@ -1,0 +1,10 @@
+version: 1
+scenario: acp-bridged-subagent
+profile: headless
+composition: acp-bridged-subagent
+recording: live
+header:
+  class: acp-harness
+  pin: true
+  systemPromptSource: text-turn
+  toolSchemasSource: text-turn

@@ -17,6 +17,7 @@ import { SessionId } from '@deepseek-ai/dsh-session'
 import { setSandboxMode } from '@deepseek-ai/dsh-sandbox-policy'
 import { setApprovalPolicy } from '@deepseek-ai/dsh-user-approval'
 import { AcpCatalogAdapter, AcpHarness, acpSessionOf } from '../src/index.ts'
+import type { AcpHarnessEntry } from '../src/index.ts'
 import type { AcpRuntime } from '../src/runtime.ts'
 import {
   type Bench,
@@ -171,17 +172,25 @@ describe('agent-acp driver', () => {
     })
     expect(order).toEqual([
       'text',
+      // Each call first commits its standalone tool-call advertisement.
+      'text',
       'call c1 {"command":"ls"}',
       'result c1',
+      'text',
       'call c2 {}',
       // The thought streamed after c2, before c3.
       'text',
+      'text',
       'call c3 {}',
       'result c3',
+      'text',
       'call c4 {"command":"rm x"}',
+      'text',
       'call c5 {}',
+      'text',
       'call c6 {}',
       // The plan streamed after c6, before c7.
+      'text',
       'text',
       'call c7 {}',
       // Calls with no terminal update close at settlement, before the final text.
@@ -226,10 +235,151 @@ describe('agent-acp driver', () => {
       return []
     })
     expect(steps).toEqual([
-      'step 1', 'text', 'call a', 'text', 'result',
-      'step 2', 'call b', 'call c', 'result', 'result',
+      // Each call's standalone advertisement precedes its `tool/call`.
+      'step 1', 'text', 'text', 'call a', 'text', 'result',
+      'step 2', 'text', 'call b', 'text', 'call c', 'result', 'result',
       'step 3', 'text', 'text',
     ])
+  }, TEST_TIMEOUT)
+
+  describe('an assistant lane that opened with no text', () => {
+    const image = (messageId: string) => ({ sessionUpdate: 'agent_message_chunk', messageId, content: { type: 'image', data: 'AQ==', mimeType: 'image/png' } })
+    const call = (toolCallId: string) => ({ sessionUpdate: 'tool_call', toolCallId, name: 'Bash', title: 'Bash', kind: 'execute', rawInput: { command: toolCallId } })
+    const done = (toolCallId: string) => ({ sessionUpdate: 'tool_call_update', toolCallId, status: 'completed', content: [] })
+    const transcript = (agent: Parameters<typeof events>[0]) => events(agent).flatMap((event) => {
+      const data = event.data as {
+        step?: number
+        callId?: string
+        message?: { content: { type: string; text?: string; id?: string }[]; isError?: boolean }
+      }
+      switch (event.type) {
+        case 'step/start': return [`step ${data.step}`]
+        case 'tool/call': return [`call ${data.callId}`]
+        case 'tool/result': return [data.message!.isError === true ? 'error result' : 'result']
+        case 'assistant/attempt': return ['attempt']
+        case 'assistant/message': return data.message!.content.map(block => block.type === 'text' ? `text ${block.text}` : `${block.type} ${block.id}`)
+        default: return []
+      }
+    })
+
+    it('carries text that follows a tool call on the same message id as a new message', async () => {
+      bench = await setup({
+        MOCK_TEXT: '',
+        MOCK_SCRIPT: JSON.stringify([
+          image('m1'),
+          // The call's advertisement settles m1's still-empty attempt.
+          call('c1'),
+          { sessionUpdate: 'agent_message_chunk', messageId: 'm1', content: { type: 'text', text: 'while running' } },
+          done('c1'),
+        ]),
+      })
+      const { agent } = await bench.ctx.agents.create({ sessionId: SessionId('s4u'), agentOptions: {} })
+      send(agent, 'reuse a lane')
+      await agent.whenIdle()
+
+      expect(transcript(agent)).toEqual([
+        'step 1', 'tool-call c1', 'call c1', 'text while running', 'result',
+      ])
+      expect(turnEndKind(agent)).toBe('completed')
+    }, TEST_TIMEOUT)
+
+    it('commits nothing more at turn end for a lane a tool call already settled', async () => {
+      bench = await setup({
+        MOCK_TEXT: '',
+        MOCK_SCRIPT: JSON.stringify([image('m1'), call('c1')]),
+      })
+      const { agent } = await bench.ctx.agents.create({ sessionId: SessionId('s4v'), agentOptions: {} })
+      send(agent, 'leave a call open')
+      await agent.whenIdle()
+
+      expect(transcript(agent)).toEqual([
+        'step 1', 'tool-call c1', 'call c1', 'error result',
+      ])
+      expect(turnEndKind(agent)).toBe('completed')
+    }, TEST_TIMEOUT)
+
+    it('records the empty lane as an attempt in its step before the next model response', async () => {
+      bench = await setup({
+        MOCK_TEXT: '',
+        MOCK_SCRIPT: JSON.stringify([
+          call('c1'),
+          image('m1'),
+          done('c1'),
+          { sessionUpdate: 'agent_message_chunk', messageId: 'm2', content: { type: 'text', text: 'next response' } },
+        ]),
+      })
+      const { agent } = await bench.ctx.agents.create({ sessionId: SessionId('s4w'), agentOptions: {} })
+      send(agent, 'empty lane across steps')
+      await agent.whenIdle()
+
+      expect(transcript(agent)).toEqual([
+        'step 1', 'tool-call c1', 'call c1', 'result', 'attempt',
+        'step 2', 'text next response',
+      ])
+      const [attempt] = eventsOf(agent, 'assistant/attempt')
+      expect((attempt!.data as { step: number }).step).toBe(1)
+      expect(turnEndKind(agent)).toBe('completed')
+    }, TEST_TIMEOUT)
+  })
+
+  it('interleaves text, a tool call, and post-call text in one turn', async () => {
+    bench = await setup({ MOCK_TOOL: '1', MOCK_INTERLEAVED: 'before tool ', MOCK_TEXT: 'after tool' })
+    const { agent } = await bench.ctx.agents.create({ sessionId: SessionId('s4i'), agentOptions: {} })
+    send(agent, 'run a tool')
+    await agent.whenIdle()
+
+    const log = events(agent)
+    const sequence = log.map(event => event.type)
+    // The call's announcement commits the streamed text first; its settled
+    // input lands on a standalone advertisement right before the `tool/call`.
+    const messages = sequence.flatMap((type, index) => type === 'assistant/message' ? [index] : [])
+    expect(messages).toHaveLength(3)
+    const callIndex = sequence.indexOf('tool/call')
+    const resultIndex = sequence.indexOf('tool/result')
+    expect(messages[0]! < messages[1]! && messages[1]! < callIndex
+      && callIndex < resultIndex && resultIndex < messages[2]!).toBe(true)
+
+    const first = log[messages[0]!]
+    expect(first!.type === 'assistant/message' && first!.data['message']).toMatchObject({
+      content: [{ type: 'text', text: 'before tool ' }],
+    })
+    const advert = log[messages[1]!]
+    expect(advert!.type === 'assistant/message' && advert!.data['message']).toMatchObject({
+      content: [
+        { type: 'tool-call', id: 'mock-tool-1', name: 'mock tool', arguments: '{"command":"true"}' },
+      ],
+    })
+    const second = log[messages[2]!]
+    expect(second!.type === 'assistant/message' && second!.data['message']).toMatchObject({
+      content: [{ type: 'text', text: 'after tool' }],
+    })
+    expect(turnEndKind(agent)).toBe('completed')
+  }, TEST_TIMEOUT)
+
+  it('settles an ad-closed stream lane without reopening when no more text arrives', async () => {
+    bench = await setup({ MOCK_TOOL: '1', MOCK_INTERLEAVED: 'before tool ', MOCK_TEXT: '' })
+    const { agent } = await bench.ctx.agents.create({ sessionId: SessionId('s4j'), agentOptions: {} })
+    send(agent, 'run a tool')
+    await agent.whenIdle()
+
+    const log = events(agent)
+    const sequence = log.map(event => event.type)
+    // The pre-call text message and the standalone advertisement are the only
+    // assistant messages; settlement commits no third, empty message.
+    const messages = sequence.flatMap((type, index) => type === 'assistant/message' ? [index] : [])
+    expect(messages).toHaveLength(2)
+    expect(messages[0]! < messages[1]! && messages[1]! < sequence.indexOf('tool/call')).toBe(true)
+    const first = log[messages[0]!]
+    expect(first!.type === 'assistant/message' && first!.data['message']).toMatchObject({
+      content: [{ type: 'text', text: 'before tool ' }],
+    })
+    const advert = log[messages[1]!]
+    expect(advert!.type === 'assistant/message' && advert!.data['message']).toMatchObject({
+      content: [
+        { type: 'tool-call', id: 'mock-tool-1', name: 'mock tool', arguments: '{"command":"true"}' },
+      ],
+    })
+    expect(turnEndKind(agent)).toBe('completed')
   }, TEST_TIMEOUT)
 
   it('closes an open tool call as an error result at turn settlement', async () => {
@@ -610,7 +760,7 @@ describe('agent-acp driver', () => {
     warn.mockRestore()
   }, TEST_TIMEOUT)
 
-  it('maps the never approval policy to the auto-approve mode', async () => {
+  it('maps the never approval policy to the auto-approve mode only over danger-full-access', async () => {
     bench = await setup({
       MOCK_CONFIG_OPTIONS: JSON.stringify([
         {
@@ -621,7 +771,7 @@ describe('agent-acp driver', () => {
           options: [{ value: 'accept-edits', name: 'Code' }, { value: 'bypass', name: 'Bypass Permissions' }],
         },
       ]),
-    }, { config: { approval: 'never' } })
+    }, { config: { approval: 'never', sandbox: 'danger-full-access' } })
     const { agent } = await bench.ctx.agents.create({ sessionId: SessionId('s23'), agentOptions: {} })
     send(agent, 'no prompts')
     await agent.whenIdle()
@@ -639,15 +789,24 @@ describe('agent-acp driver', () => {
       currentValue: 'default',
       options: ['default', 'acceptEdits', 'plan', 'auto', 'bypassPermissions'].map(value => ({ value, name: value })),
     }])
-    bench = await setup({ MOCK_CONFIG_OPTIONS: claudeModes }, { config: { approval: 'never' } })
-    const never = await bench.ctx.agents.create({ sessionId: SessionId('s23c'), agentOptions: {} })
-    send(never.agent, 'no prompts')
-    await never.agent.whenIdle()
     const modes = async () => (await recordedCalls(bench!.recordFile))
       .filter(call => call.method === 'session/set_config_option')
       .map(call => (call.params as { value: string }).value)
-    expect(await modes()).toEqual(['bypassPermissions'])
-    await teardown(bench)
+    const run = async (id: string, config: Partial<AcpHarnessEntry>): Promise<string[]> => {
+      bench = await setup({ MOCK_CONFIG_OPTIONS: claudeModes }, { config })
+      const handle = await bench.ctx.agents.create({ sessionId: SessionId(id), agentOptions: {} })
+      send(handle.agent, 'go')
+      await handle.agent.whenIdle()
+      const applied = await modes()
+      await teardown(bench)
+      bench = undefined
+      return applied
+    }
+    expect(await run('s23c', { approval: 'never', sandbox: 'danger-full-access' })).toEqual(['bypassPermissions'])
+    // A delegated child pins `never`; over a confined sandbox it runs the
+    // harness's guarded autonomous mode, never the unconfined auto-approve one.
+    expect(await run('s23h', { approval: 'never', sandbox: 'workspace-write' })).toEqual(['auto'])
+    expect(await run('s23i', { approval: 'never', sandbox: 'read-only' })).toEqual(['plan'])
 
     bench = await setup({ MOCK_CONFIG_OPTIONS: claudeModes }, { config: { approval: 'ask' } })
     const ask = await bench.ctx.agents.create({ sessionId: SessionId('s23d'), agentOptions: {} })
@@ -680,12 +839,13 @@ describe('agent-acp driver', () => {
     expect(await modes()).toEqual(['acceptEdits'])
 
     // Another session's switch changes only that session's mode.
+    setSandboxMode(other.agent.session, 'danger-full-access')
     setApprovalPolicy(other.agent.session, 'never')
+    setSandboxMode(agent.session, 'danger-full-access')
     setApprovalPolicy(agent.session, 'never')
     await vi.waitFor(async () => { expect(await modes()).toEqual(['acceptEdits', 'bypassPermissions']) })
-    // A sandbox change that keeps the chosen mode sends nothing, and a turn
-    // waits for the queued write before comparing modes.
-    setSandboxMode(agent.session, 'danger-full-access')
+    // A turn waits for any queued write before comparing modes, and an
+    // unchanged mode sends nothing.
     send(agent, 'second')
     await agent.whenIdle()
     expect(await modes()).toEqual(['acceptEdits', 'bypassPermissions'])
@@ -711,7 +871,7 @@ describe('agent-acp driver', () => {
         options: ['acceptEdits', 'bypassPermissions'].map(value => ({ value, name: value })),
       }]),
       MOCK_SET_OPTION_EMPTY: '1',
-    }, { approval: true })
+    }, { approval: true, config: { sandbox: 'danger-full-access' } })
     const { agent } = await bench.ctx.agents.create({ sessionId: SessionId('s23g'), agentOptions: {} })
     setApprovalPolicy(agent.session, 'never')
     await vi.waitFor(async () => {
@@ -721,6 +881,31 @@ describe('agent-acp driver', () => {
     send(agent, 'still bound')
     await agent.whenIdle()
     expect(eventsOf(agent, 'turn/end')).toHaveLength(1)
+  }, TEST_TIMEOUT)
+
+  it('runs one harness process per session when processPerSession is set', async () => {
+    bench = await setup({
+      MOCK_SESSION_MODELS: JSON.stringify([{ modelId: 'pps-model', name: 'Per-session Model' }]),
+    }, { config: { processPerSession: true, probeCatalog: false } })
+    const first = await bench.ctx.agents.create({ sessionId: SessionId('pps-a'), agentOptions: {} })
+    const second = await bench.ctx.agents.create({ sessionId: SessionId('pps-b'), agentOptions: {} })
+    send(first.agent, 'one')
+    await first.agent.whenIdle()
+    send(second.agent, 'two')
+    await second.agent.whenIdle()
+
+    // Each session spawned its own harness process.
+    const processes = async () => (await recordedCalls(bench!.recordFile)).filter(call => call.method === 'process')
+    expect(await processes()).toHaveLength(2)
+    // Adverts from the private processes still reach the shared catalog route.
+    expect((await bench.ctx.llm.listModels('devin')).map(model => model.id)).toEqual(['pps-model'])
+
+    // Disposing one session ends its process without touching the other.
+    await first.dispose()
+    send(second.agent, 'three')
+    await second.agent.whenIdle()
+    expect(eventsOf(second.agent, 'turn/end')).toHaveLength(2)
+    expect(await processes()).toHaveLength(2)
   }, TEST_TIMEOUT)
 
   it('closes the ACP session on dispose and warns when close fails', async () => {

@@ -272,13 +272,15 @@ async function writeHeaderSidecars(
     const schemas = normalizedToolSchemas(primary.content, ctx)
     const promptOwner = scenario.manifest.header.systemPromptSource ?? scenario.name
     const schemaOwner = scenario.manifest.header.toolSchemasSource ?? scenario.name
-    if (promptOwner === scenario.name) {
+    // An external-harness pin owns no prompt or schema sidecar: the foreign
+    // agent owns its prompt and tools, so its sessions carry neither.
+    if (promptOwner === scenario.name && prompts.length > 0) {
       await writeFile(
         join(scenario.dir, 'system-prompt.expected.md'),
         formatSystemPromptSnapshot(prompts[0] as string, prompts.slice(1)),
       )
     }
-    if (schemaOwner === scenario.name) {
+    if (schemaOwner === scenario.name && schemas.length > 0) {
       await writeFile(
         join(scenario.dir, 'tool-schemas.expected.json'),
         formatToolSchemasSnapshot(schemas[0] as unknown[], schemas.slice(1)),
@@ -759,19 +761,30 @@ async function verifyHeaders(scenario: HeadlessScenario, actualLogs: readonly Se
   const changes = pin.manifest.header.changes ?? 0
   expect(pinned, `${scenario.name}: pin header count`).toHaveLength(1 + changes)
 
-  const promptOwner = scenarioByName.get(pin.manifest.header.systemPromptSource ?? pin.name)
-  const schemaOwner = scenarioByName.get(pin.manifest.header.toolSchemasSource ?? pin.name)
-  if (promptOwner === undefined || schemaOwner === undefined) {
-    throw new Error(`${scenario.name}: header sidecar source is not a headless scenario`)
+  // A session driven by an external harness logs request/header as a route
+  // record only: the foreign agent owns its prompt and tools, so the class
+  // has no system/message and its headers carry no {{tools}} token.
+  const harnessRecord = records(fixture).find(record => record.type === 'agent/harness')
+  const harness = (harnessRecord?.data as JsonObject | undefined)?.harness
+  const pinExternal = typeof harness === 'string' && harness !== 'dsh'
+
+  let prompt = ''
+  let reconstructed = pinned
+  if (!pinExternal) {
+    const promptOwner = scenarioByName.get(pin.manifest.header.systemPromptSource ?? pin.name)
+    const schemaOwner = scenarioByName.get(pin.manifest.header.toolSchemasSource ?? pin.name)
+    if (promptOwner === undefined || schemaOwner === undefined) {
+      throw new Error(`${scenario.name}: header sidecar source is not a headless scenario`)
+    }
+    prompt = await readFile(join(promptOwner.dir, 'system-prompt.expected.md'), 'utf8')
+    const schemas = parseToolSchemasSnapshot(await readFile(join(schemaOwner.dir, 'tool-schemas.expected.json'), 'utf8'))
+    const schemaSets = [schemas.initial, ...schemas.changes]
+    expect(schemaSets, `${scenario.name}: pin tool-schema count`).toHaveLength(pinned.length)
+    reconstructed = pinned.map((header, index) => restorePinnedToolSchemas(
+      header,
+      schemaSets[index] as unknown[],
+    ))
   }
-  const prompt = await readFile(join(promptOwner.dir, 'system-prompt.expected.md'), 'utf8')
-  const schemas = parseToolSchemasSnapshot(await readFile(join(schemaOwner.dir, 'tool-schemas.expected.json'), 'utf8'))
-  const schemaSets = [schemas.initial, ...schemas.changes]
-  expect(schemaSets, `${scenario.name}: pin tool-schema count`).toHaveLength(pinned.length)
-  const reconstructed = pinned.map((header, index) => restorePinnedToolSchemas(
-    header,
-    schemaSets[index] as unknown[],
-  ))
 
   const childPrompts = new Map<number, string>()
   const childSchemas = new Map<number, unknown[][]>()
@@ -786,7 +799,12 @@ async function verifyHeaders(scenario: HeadlessScenario, actualLogs: readonly Se
   for (const [logIndex, log] of actualLogs.entries()) {
     const headers = normalizedHeaders(log.content, ctx)
     const prompts = normalizedSystemPrompts(log.content, ctx)
-    if (headers.length > 0) {
+    // Prompt gates key off each log's own harness record: a mixed-harness
+    // scenario (external parent, dsh child) must not inherit the pin's class.
+    const logHarnessRecord = records(log.content).find(record => record.type === 'agent/harness')
+    const logHarness = (logHarnessRecord?.data as JsonObject | undefined)?.harness
+    const external = typeof logHarness === 'string' && logHarness !== 'dsh'
+    if (headers.length > 0 && !external) {
       expect(systemPromptPrecedesRequests(log.content), `${scenario.name}: a system/message precedes the first request/header`).toBe(true)
       expect(prompts.length, `${scenario.name}: system/message count`)
         .toBe(1 + (logIndex === 0 ? pin.manifest.header.promptChanges ?? 0 : 0))

@@ -37,6 +37,8 @@ ctx.sessions.get(sessionId)      // the live session
 ctx.sessions.list()              // every live session, in creation order
 ```
 
+A factory that owns a creation transaction calls `prepare()`, `enter()`, and `announce()` separately. `enter(session, { deferPublication: true })` holds the session's `session/event` dispatch until `publish(session)` dispatches every held append in log order to all observers; a session detached before `publish()` never dispatches them. The [subsystem reference](../../../docs/subsystems/session.md) defines `SessionEnterOptions`.
+
 ### Append and derive
 
 `session.append(type, data, opts?)` commits one typed event — it snapshots and freezes the payload, validates it as lossless JSON, and notifies observers. `session.deriveMessages()` projects the log into the `Message[]` the model sees, incrementally and cached:

@@ -67,6 +67,7 @@ kind: "package-reference"
 | `harnesses[].reasoningEffort` | — | 位于会话选择之下的部署默认值 |
 | `harnesses[].catalogArgs` | — | 模型目录 CLI 参数；省略时目录取自会话声明 |
 | `harnesses[].probeCatalog` | `true` | 在任何会话绑定之前，通过开启一个一次性会话来读取目录 |
+| `harnesses[].processPerSession` | `false` | 每个 dsh 会话启动一个独立的 harness 进程；按进程范围保存 MCP 服务器的 harness（opencode）必须开启，否则共享进程会让一个会话调用另一个会话的工具桥接端点 |
 | `catalogCacheMs` | `300000` | 复用某 harness 目录读取结果的时长 |
 | `catalogFailureCacheMs` | `30000` | 记住某 harness 目录读取失败的时长，超过后才会再次尝试 |
 | `harnesses[].authStatusArgs` | `['auth', 'status']` | 认证状态命令参数；显式空列表表示没有 CLI 命令 |
@@ -99,6 +100,8 @@ kind: "package-reference"
 
 `bind()` 加入所属 harness 的共享连接，并在 dsh 会话发布之前创建 ACP 会话（`session/new`）或加载已记录的那个（`session/load`）。新会话追加带 agent 所发 id 的 `agent-acp/session`；恢复要求 agent 声明 `loadSession`，否则驱动器以 `session "<id>" cannot resume: the agent does not advertise loadSession` 明确失败。peer 只在加载响应之后注册，因此重放的历史绝不会重复提交。部分 agent 只在会话收到提示后才保存它（Claude Code 即如此），因此 harness 重启后，对从未运行过轮次的会话执行 `session/load` 会得到 `Resource not found`；此时驱动器创建新的 ACP 会话并追加一条替换用的 `agent-acp/session`，因为 agent 并未为它保存任何历史。已运行过轮次的会话仍保留该失败。会话声明还会重新发布该 harness 的模型目录。
 
+当挂载了 [`ctx.agentToolBridge`](../agent-tool-bridge/README.zh.md) 且 agent 声明 `mcpCapabilities.http` 时，`bind()` 会打开一个桥接端点，并在 `session/new` 与 `session/load` 中都以 `http` `mcpServers` 条目传入它，使 harness 在其自身的 MCP 集成下获得该会话 agent 作用域内可见的 dsh 工具。端点凭证按 agent 生成，并随 agent 关闭。当桥已挂载而 agent 不支持 HTTP MCP 时，驱动器记录一条警告，会话在没有桥接工具的情况下运行；一次性目录探测会话始终以 `mcpServers: []` 开启，因为它先于持久 agent 存在。桥接的 `tool_call` 会以 dsh 工具名记录：无论 harness 把 `mcp__<server>__<tool>` 放在更新的 `name`/`title`（Claude Code）还是 `_meta` 的 `cognition.ai/toolName`/`inferenceToolName`（Devin）里，驱动器都会解析它；当工具声明了 `presentationMeta` 时，结果携带该执行的 `meta`。
+
 ### 轮次驱动
 
 一次 `session/prompt` 是一个持久的 dsh 轮次；当 agent 开始新的模型响应时，驱动器会开启新的步骤，即在当前步骤的每个工具调用都已有结果之后，又收到文本、思考、计划或工具调用。`agent_message_chunk` 与 `agent_thought_chunk` 更新汇入 assistant 流，`tool_call` 与 `tool_call_update` 提交持久的工具事件对，`plan` 渲染为文本块，`config_option_update` 刷新会话已知的配置选项。agent 可能在工具输入流式传完之前就宣告调用（Claude Code 适配器先发送 `{}`，再经 `tool_call_update` 补全），因此输入为空的调用会在以下时机中最早的一个提交其 `tool/call`：第一个携带输入的补全更新、其权限请求、其终态更新、agent 的下一个分块、计划或调用，或轮次结束。新的调用会先提交在它之前流出的 assistant 文本，因此日志保持 agent 产生文本与工具调用的顺序。响应的停止原因映射为轮次结束：`end_turn` 完成，`max_tokens` 记录上限，`cancelled` 以用户原因中止，`refusal` 或 `max_turn_requests` 以固定错误码失败。若轮次结束时仍有未关闭的工具调用或 assistant 流，驱动器会为其收尾，因此不会留下悬空的模型可见内容。当 harness 在该响应之后自行开始一个周期时——Claude Code 对任务通知（已结束的后台命令、Monitor 的一行输出，或一次定时唤醒）以及 peer、coordinator、observer 或 observer-activity 消息会这样做——驱动器会另开一个没有用户消息的持久轮次，把同样的更新投影进去，并在收到 `_meta._claude/origin.kind` 为 `task-notification`、`peer`、`coordinator`、`observer` 或 `observer-activity` 的 `usage_update` 时关闭它。来源缺失，或来源为 `auto-continuation`、`human`、`channel`、`unclassified` 的 `usage_update` 会让该轮次保持打开。在轮次已预留期间到达的输出，包括配置选择期间和 `session/prompt` 仍在进行时，留在该轮次里；Claude Code 适配器把 prompt 保持打开以容纳的后台 subagent 工作也留在那里。安静的 inject 会等到该周期的结束 `usage_update`；一次会唤醒的后续消息或 steer 会先结束该周期。DSH 自己的定时提醒、作业完成通知和 subagent 结算通知是普通的后续消息，本来就会开启轮次；它们不走这条路径。
@@ -109,7 +112,7 @@ kind: "package-reference"
 
 ### 权限、模式与推理强度
 
-`session/request_permission` 路由进 `ctx.approval`；`form` 模式的 `elicitation/create` 在其 schema 是字符串与枚举字段的扁平对象时路由进 `ctx.userQuestions`。没有审批服务、没有活动轮次或 schema 更复杂时，驱动器选择拒绝或取消而不是猜测。每次提示词之前，驱动器用 `session/set_config_option` 应用会话的选择，且仅限会话声明过的选项：`model` 携带持久选择或部署默认值，已声明的推理强度选项（Devin 的 `thought_level`、Grok Build 的 `reasoning_effort`，或任何属于 ACP `thought_level` 分类的选项）携带会话强度或部署默认值，`mode` 携带 DSH 沙箱与审批旋钮。harness 未声明的请求值会被记录一次日志，并附上实际会运行的值，绝不静默丢弃。`never` 审批策略选择 harness 的自动批准模式（Devin 上为 `bypass`，Claude Code 适配器上为 `bypassPermissions`），因为 harness 会为其模式未覆盖的每次工具调用请求许可，而 `never` 会拒绝每一次请求；可写的 `ask` 会话选择接受编辑的模式（`accept-edits`、`acceptEdits` 或 `build`）。`approval/policy` 或 `sandbox/mode` 变更会立即重新应用 `mode`，而不是等到下一次提示词，且每次只执行一个写入；写入失败会记录日志，并由下一次提示词重试。
+`session/request_permission` 路由进 `ctx.approval`；`form` 模式的 `elicitation/create` 在其 schema 是字符串与枚举字段的扁平对象时路由进 `ctx.userQuestions`。没有审批服务、没有活动轮次或 schema 更复杂时，驱动器选择拒绝或取消而不是猜测。每次提示词之前，驱动器用 `session/set_config_option` 应用会话的选择，且仅限会话声明过的选项：`model` 携带持久选择或部署默认值，已声明的推理强度选项（Devin 的 `thought_level`、Grok Build 的 `reasoning_effort`，或任何属于 ACP `thought_level` 分类的选项）携带会话强度或部署默认值，`mode` 携带 DSH 沙箱与审批旋钮。harness 未声明的请求值会被记录一次日志，并附上实际会运行的值，绝不静默丢弃。`read-only` 沙箱在任一审批策略下都选择不编辑的模式（`ask` 或 `plan`）。只有 `danger-full-access` 下的 `never` 审批策略才选择 harness 的自动批准模式（Devin 上为 `bypass`，Claude Code 适配器上为 `bypassPermissions`），因为没有任何 harness 模式能把其原生工具限制在 dsh 工作区内。`workspace-write` 下的 `never`（每个委派子级携带的策略）选择 harness 自有的受控自主模式（Claude Code 适配器上为 `auto`，Devin 上为 `smart`，opencode 上为 `build`），使子级能够运行命令；可写沙箱上的 `ask` 会话选择接受编辑的模式（`accept-edits`、`acceptEdits` 或 `build`），由审批策略回答其余每次请求。`approval/policy` 或 `sandbox/mode` 变更会立即重新应用 `mode`，而不是等到下一次提示词，且每次只执行一个写入；写入失败会记录日志，并由下一次提示词重试。
 
 ### 认证操作
 
