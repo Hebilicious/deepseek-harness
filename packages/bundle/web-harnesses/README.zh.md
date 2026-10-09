@@ -55,7 +55,7 @@ harness 行本身就是普通的 profile 配置。在 profile 自己的 `cordis.
 
 ### Claude Code 通过适配器运行
 
-Claude Code 自身不使用 Agent Client Protocol，因此 `claude` 条目运行 [Agent Client Protocol 项目的适配器](https://github.com/agentclientprotocol/claude-agent-acp)，由该适配器在底层驱动 `claude` CLI。条目固定了适配器版本并用 `npx` 解析；若机器已全局安装适配器，可把这两个字段替换为 `executable: claude-agent-acp` 且不带参数。该适配器通过 ACP 方法而非 CLI 命令报告授权状态，因此两个命令列表为空，并且服务进程的 `PATH` 中必须有 `claude`。
+Claude Code 自身不使用 Agent Client Protocol，因此 `claude` 条目运行 [Agent Client Protocol 项目的适配器](https://github.com/agentclientprotocol/claude-agent-acp)，由该适配器在底层驱动 `claude` CLI。条目固定了适配器版本并用 `npx` 解析；若机器已全局安装适配器，可把这两个字段替换为 `executable: claude-agent-acp` 且不带参数。该适配器通过 ACP 方法而非 CLI 命令报告授权状态，因此两个命令列表为空。条目设置 `CLAUDE_CODE_EXECUTABLE: claude`，使适配器驱动服务进程 `PATH` 中的 `claude`，而非其 SDK 依赖固定的二进制；因此模型选择器列出已安装 CLI 的模型，且 `PATH` 中必须有 `claude`。
 
 驱动器约定、配置与限制见 [`dsh-agent-codex`](../../core/agent-codex/README.zh.md) 与 [`dsh-agent-acp`](../../core/agent-acp/README.zh.md)。
 

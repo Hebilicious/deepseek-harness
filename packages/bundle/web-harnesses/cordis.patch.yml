@@ -69,12 +69,16 @@
           # the adapter on first use; a machine that installs it globally can
           # replace both fields with `executable: claude-agent-acp` and no args.
           # The adapter reports authorization through its ACP methods, so both
-          # CLI verb lists are empty, and the `claude` binary must be on PATH.
+          # CLI verb lists are empty. `CLAUDE_CODE_EXECUTABLE` makes the adapter
+          # drive the `claude` on PATH instead of the binary pinned by its SDK
+          # dependency, so the model picker lists the installed CLI's models.
           - id: claude
             name: Claude Code
             description: Anthropic Claude Code runs the session over the Agent Client Protocol
             executable: npx
-            args: ['-y', '@agentclientprotocol/claude-agent-acp@0.81.1']
+            args: ['-y', '@agentclientprotocol/claude-agent-acp@0.87.0']
+            env:
+              CLAUDE_CODE_EXECUTABLE: claude
             authStatusArgs: []
             authLogoutArgs: []
           # mimocode installs its launcher outside the usual bin directories

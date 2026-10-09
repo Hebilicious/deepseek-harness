@@ -1,0 +1,21 @@
+import { chromium } from './node_modules/.pnpm/playwright@1.61.1/node_modules/playwright/index.mjs'
+const [url, oldSession] = process.argv.slice(2)
+const browser = await chromium.launch()
+const page = await browser.newPage()
+const diag = []
+page.on('console', m => { const t = m.text(); if (t.includes('[harness-chip]')) diag.push(t.replace('[harness-chip] ', '')) })
+page.on('pageerror', e => console.log('PAGEERROR', String(e).slice(0, 200)))
+// Land on the Session created earlier in this home (blank=false, codex recorded).
+await page.addInitScript(value => { window.localStorage.setItem('dsh.sessions.current', JSON.stringify(value)) }, { sessionId: oldSession })
+await page.goto(url, { waitUntil: 'load' })
+await page.waitForSelector('[class*="frame"]', { timeout: 30000 })
+await page.waitForTimeout(3500)
+console.log('opened old session ->', JSON.stringify(diag.slice(-1)))
+const chip = async () => page.evaluate(() => [...document.querySelectorAll('[class*="heroWorkspaceRow"] button')].at(-1)?.textContent?.trim())
+console.log('chip on old session =', await chip())
+await page.getByRole('button', { name: 'New Session' }).first().click()
+await page.waitForTimeout(4000)
+console.log('after New Session ->', JSON.stringify(diag.slice(-2)))
+console.log('chip now =', await chip())
+console.log('selected =', await page.evaluate(() => JSON.parse(window.localStorage.getItem('dsh.sessions.current') ?? '{}').sessionId))
+await browser.close()

@@ -55,7 +55,7 @@ The harness rows themselves are ordinary profile configuration. Repoint, add, or
 
 ### Claude Code runs through an adapter
 
-Claude Code speaks no Agent Client Protocol of its own, so the `claude` entry runs the [Agent Client Protocol project's adapter](https://github.com/agentclientprotocol/claude-agent-acp) and that adapter drives the `claude` CLI underneath. The entry pins the adapter version and resolves it with `npx`; a machine that installs it globally replaces both fields with `executable: claude-agent-acp` and no args. The adapter reports authorization through its ACP methods rather than a CLI verb, which is why both verb lists are empty, and the `claude` binary must be on the serving process's `PATH`.
+Claude Code speaks no Agent Client Protocol of its own, so the `claude` entry runs the [Agent Client Protocol project's adapter](https://github.com/agentclientprotocol/claude-agent-acp) and that adapter drives the `claude` CLI underneath. The entry pins the adapter version and resolves it with `npx`; a machine that installs it globally replaces both fields with `executable: claude-agent-acp` and no args. The adapter reports authorization through its ACP methods rather than a CLI verb, which is why both verb lists are empty. The entry sets `CLAUDE_CODE_EXECUTABLE: claude` so the adapter drives the `claude` binary on the serving process's `PATH` instead of the binary pinned by its SDK dependency; the model picker therefore lists the installed CLI's models, and that binary must be on `PATH`.
 
 The driver contracts, configuration, and limitations live in [`dsh-agent-codex`](../../core/agent-codex/README.md) and [`dsh-agent-acp`](../../core/agent-acp/README.md).
 
