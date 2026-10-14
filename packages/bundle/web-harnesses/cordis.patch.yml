@@ -72,11 +72,16 @@
           # CLI verb lists are empty. `CLAUDE_CODE_EXECUTABLE` makes the adapter
           # drive the `claude` on PATH instead of the binary pinned by its SDK
           # dependency, so the model picker lists the installed CLI's models.
+          # `npx` puts `node_modules/.bin` of its working directory and every
+          # parent on PATH, which the adapter and every Claude session inherit;
+          # `cwd: /` adds only the root-owned `/node_modules/.bin`, so commands
+          # in a session never resolve to the serving checkout's dependencies.
           - id: claude
             name: Claude Code
             description: Anthropic Claude Code runs the session over the Agent Client Protocol
             executable: npx
             args: ['-y', '@agentclientprotocol/claude-agent-acp@0.87.0']
+            cwd: /
             env:
               CLAUDE_CODE_EXECUTABLE: claude
             authStatusArgs: []
