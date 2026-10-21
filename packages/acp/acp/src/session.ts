@@ -91,6 +91,28 @@ function selectionFor(
 }
 
 /**
+ * Keep a resumed session's model when it is still configured. A session whose
+ * provider or model was removed would otherwise fail every turn, so it moves
+ * to the agent's configured model, and its next turn records the new model.
+ */
+async function availableSelection(
+  ctx: Context,
+  selection: ModelSelection | undefined,
+  fallback: ModelSelection | undefined,
+  signal: AbortSignal | undefined,
+): Promise<ModelSelection | undefined> {
+  if (selection === undefined || selection === fallback) return selection
+  try {
+    await ctx.llm.resolveModelInfo(selection.provider, selection.model, signal)
+    return selection
+  } catch (error: unknown) {
+    signal?.throwIfAborted()
+    ctx.logger.warn(`acp: ${selection.provider}/${selection.model} is not configured; resuming on ${fallback === undefined ? 'the route default' : `${fallback.provider}/${fallback.model}`}: ${errorChain(error)}`)
+    return fallback
+  }
+}
+
+/**
  * Per-session ACP module. It owns the unpublished Agent composition, selected
  * route, one-prompt admission slot, ordered standard updates, and memoized
  * quiescent teardown.
@@ -159,7 +181,12 @@ export class AcpSession {
       setup: async (agentCtx, agent) => {
         modelControl = new AcpModelControl(
           ctx.llm,
-          selectionFor(agent.session.requestHeader(), options.fallbackSelection),
+          await availableSelection(
+            ctx,
+            selectionFor(agent.session.requestHeader(), options.fallbackSelection),
+            options.fallbackSelection,
+            options.signal,
+          ),
         )
         modelControl.install(agentCtx)
         await mountAcpMcpServers(agentCtx, options.mcpServers, options.cwd)
