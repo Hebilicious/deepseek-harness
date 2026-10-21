@@ -33,6 +33,8 @@ import {
   type InitializeResponse,
   type ListSessionsRequest,
   type ListSessionsResponse,
+  type LoadSessionRequest,
+  type LoadSessionResponse,
   type NewSessionRequest,
   type NewSessionResponse,
   type PromptRequest,
@@ -45,11 +47,11 @@ import {
   type SessionNotification,
   type Stream,
 } from '@agentclientprotocol/sdk'
-import type { SessionId } from '@deepseek-ai/dsh-session'
+import type { SessionEvent, SessionId } from '@deepseek-ai/dsh-session'
 import type {} from '@deepseek-ai/dsh-session-persistence'
 // Side-effect type import: declaration-merges the approval waterfall answered below.
 import type {} from '@deepseek-ai/dsh-user-approval'
-import { supportsAcpImagePrompts } from './content.ts'
+import { assistantBlockToAcp, supportsAcpImagePrompts } from './content.ts'
 import { AcpMcpConfigError } from './mcp.ts'
 import { AcpModelConfigError } from './model-control.ts'
 import { AcpSession } from './session.ts'
@@ -186,6 +188,7 @@ export function apply(ctx: Context, config: AcpConfig): void {
         agentCapabilities: {
           mcpCapabilities: { http: true },
           promptCapabilities: { image: imagePromptEnabled, audio: false, embeddedContext: false },
+          loadSession: true,
           sessionCapabilities: { close: {}, list: {}, resume: {} },
         },
         authMethods: [],
@@ -234,6 +237,63 @@ export function apply(ctx: Context, config: AcpConfig): void {
       } catch (error: unknown) {
         sessions.delete(sessionId)
         await record.close('session/new activation failed')
+        throw error
+      }
+    },
+
+    async loadSession(params: LoadSessionRequest, signal: AbortSignal): Promise<LoadSessionResponse> {
+      // session/load is session/resume plus the history: replay what the user
+      // typed and what the agent answered before responding, so a client that
+      // opens a saved session can show it. The history comes from the stored
+      // log, so sessions run on another harness through dsh web (Claude,
+      // Codex, ...) still replay even though this agent cannot resume them.
+      assertOpen()
+      validateWorkspaceParams(params)
+      const sessionId = brandString<SessionId>(params.sessionId)
+      const persisted = (await persistence.stat(sessionId, { signal }))?.header
+      if (persisted === undefined || persisted.origin === 'subagent') {
+        throw invalidParams(`session is not loadable: ${sessionId}`)
+      }
+      if (!await sameDirectory(persisted.cwd, params.cwd)) {
+        throw invalidParams(`session cwd does not match: ${params.cwd}`)
+      }
+      const handle = await persistence.open(sessionId, 'read', { signal })
+      let events: readonly SessionEvent[]
+      try {
+        events = (await handle.read(0, undefined, { signal })).events
+      } finally {
+        await handle.close()
+      }
+      for (const event of events) {
+        if (event.type === 'user/message') {
+          const message = (event as SessionEvent<'user/message'>).data
+          if (message.source?.kind !== 'user') continue
+          for (const block of message.content) {
+            if (block.type !== 'text' || block.text.length === 0) continue
+            await notify({
+              sessionId: params.sessionId,
+              update: { sessionUpdate: 'user_message_chunk', messageId: message.id, content: { type: 'text', text: block.text } },
+            })
+          }
+        } else if (event.type === 'assistant/message') {
+          const message = (event as SessionEvent<'assistant/message'>).data.message
+          for (const block of message.content) {
+            if (block.type === 'reasoning') continue
+            const content = await assistantBlockToAcp(ctx, block)
+            if (content === undefined) continue
+            await notify({
+              sessionId: params.sessionId,
+              update: { sessionUpdate: 'agent_message_chunk', messageId: message.id, content },
+            })
+          }
+        }
+      }
+      try {
+        return await implementation.resumeSession(params, signal)
+      } catch (error: unknown) {
+        // A session another harness owns replays but cannot continue here.
+        const harness = events.findLast(event => event.type === 'agent/harness') as SessionEvent<'agent/harness'> | undefined
+        if (harness !== undefined && harness.data.harness !== 'dsh') return {}
         throw error
       }
     },
@@ -383,6 +443,7 @@ export function apply(ctx: Context, config: AcpConfig): void {
     })
     .onRequest(methods.agent.session.new, ({ params, signal }) => implementation.newSession(params, signal))
     .onRequest(methods.agent.session.list, ({ params, signal }) => implementation.listSessions(params, signal))
+    .onRequest(methods.agent.session.load, ({ params, signal }) => implementation.loadSession(params, signal))
     .onRequest(methods.agent.session.resume, ({ params, signal }) => implementation.resumeSession(params, signal))
     .onRequest(methods.agent.session.close, ({ params }) => implementation.closeSession(params))
     .onRequest(methods.agent.session.setConfigOption, ({ params, signal }) => implementation.setSessionConfigOption(params, signal))
