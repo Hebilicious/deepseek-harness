@@ -174,6 +174,19 @@ export function apply(ctx: Context, config: AcpConfig): void {
     })
   })
 
+  /** The harness a stored session ran on; sessions from before harnesses were recorded are dsh's. */
+  const recordedHarness = async (sessionId: SessionId, signal: AbortSignal): Promise<string> => {
+    const handle = await persistence.open(sessionId, 'read', { signal })
+    try {
+      // The harness is recorded once, among the first events of the log.
+      const { events } = await handle.read(0, 16, { signal })
+      const harness = events.find(event => event.type === 'agent/harness') as SessionEvent<'agent/harness'> | undefined
+      return harness?.data.harness ?? 'dsh'
+    } finally {
+      await handle.close()
+    }
+  }
+
   const implementation = {
     async initialize(_params: InitializeRequest): Promise<InitializeResponse> {
       // Single-version agent: the spec's "same version if supported, else
@@ -242,27 +255,12 @@ export function apply(ctx: Context, config: AcpConfig): void {
     async loadSession(params: LoadSessionRequest, signal: AbortSignal): Promise<LoadSessionResponse> {
       // session/load is session/resume plus the history: replay what the user
       // typed and what the agent answered before responding, so a client that
-      // opens a saved session can show it. The history comes from the stored
-      // log, so sessions run on another harness through dsh web (Claude,
-      // Codex, ...) still replay even though this agent cannot resume them.
-      assertOpen()
-      validateWorkspaceParams(params)
-      const sessionId = brandString<SessionId>(params.sessionId)
-      const persisted = (await persistence.stat(sessionId, { signal }))?.header
-      if (persisted === undefined || persisted.origin === 'subagent' || persisted.parentSession !== undefined) {
-        throw invalidParams(`session is not loadable: ${sessionId}`)
-      }
-      if (!await sameDirectory(persisted.cwd, params.cwd)) {
-        throw invalidParams(`session cwd does not match: ${params.cwd}`)
-      }
-      const handle = await persistence.open(sessionId, 'read', { signal })
-      let events: readonly SessionEvent[]
-      try {
-        events = (await handle.read(0, undefined, { signal })).events
-      } finally {
-        await handle.close()
-      }
-      for (const event of events) {
+      // opens a saved session (a T3 Code import) can show it.
+      const response = await implementation.resumeSession(params, signal)
+      const record = sessions.get(brandString<SessionId>(params.sessionId))
+      /* v8 ignore next -- resumeSession registered the record or threw. */
+      if (record === undefined) return response
+      for (const event of record.agent.session.ownEvents()) {
         if (event.type === 'user/message') {
           const message = (event as SessionEvent<'user/message'>).data
           if (message.source?.kind !== 'user') continue
@@ -286,14 +284,7 @@ export function apply(ctx: Context, config: AcpConfig): void {
           }
         }
       }
-      try {
-        return await implementation.resumeSession(params, signal)
-      } catch (error: unknown) {
-        // A session another harness owns replays but cannot continue here.
-        const harness = events.findLast(event => event.type === 'agent/harness') as SessionEvent<'agent/harness'> | undefined
-        if (harness !== undefined && harness.data.harness !== 'dsh') return {}
-        throw error
-      }
+      return response
     },
 
     async resumeSession(params: ResumeSessionRequest, signal: AbortSignal): Promise<ResumeSessionResponse> {
@@ -374,6 +365,9 @@ export function apply(ctx: Context, config: AcpConfig): void {
         if (params.cwd !== undefined && params.cwd !== null && !await sameDirectory(header.cwd, params.cwd)) {
           return undefined
         }
+        // dsh web also records sessions it ran on other harnesses (Claude,
+        // Codex, ...). This agent cannot resume those, so it does not list them.
+        if (await recordedHarness(header.id, signal) !== 'dsh') return undefined
         return { sessionId: header.id, cwd: header.cwd, createdAt: header.createdAt }
       }))
       const entries = filtered
