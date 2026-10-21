@@ -378,6 +378,11 @@ export function apply(ctx: Context, config: AcpConfig): void {
             || header.parentSession !== undefined
             || header.cwd === undefined
             || !isAbsolute(header.cwd)
+            // Interactive surfaces (dsh web, the TUI) start sessions with an
+            // agent preset; headless runs (`dsh -p` from scripts and other
+            // agents) and ACP clients' own sessions have none, and are not
+            // the user's conversations to pick up.
+            || header.agentPreset === undefined
         ) return undefined
         if (params.cwd !== undefined && params.cwd !== null && !await sameDirectory(header.cwd, params.cwd)) {
           return undefined
