@@ -255,12 +255,29 @@ export function apply(ctx: Context, config: AcpConfig): void {
     async loadSession(params: LoadSessionRequest, signal: AbortSignal): Promise<LoadSessionResponse> {
       // session/load is session/resume plus the history: replay what the user
       // typed and what the agent answered before responding, so a client that
-      // opens a saved session (a T3 Code import) can show it.
-      const response = await implementation.resumeSession(params, signal)
-      const record = sessions.get(brandString<SessionId>(params.sessionId))
-      /* v8 ignore next -- resumeSession registered the record or threw. */
-      if (record === undefined) return response
-      for (const event of record.agent.session.ownEvents()) {
+      // opens a saved session (a T3 Code import) can show it. The history is
+      // replayed from the stored log before resuming, so a session whose model
+      // is no longer configured still shows it even though it cannot resume.
+      assertOpen()
+      validateWorkspaceParams(params)
+      const sessionId = brandString<SessionId>(params.sessionId)
+      const persisted = (await persistence.stat(sessionId, { signal }))?.header
+      if (persisted === undefined || persisted.origin === 'subagent' || persisted.parentSession !== undefined) {
+        throw invalidParams(`session is not loadable: ${sessionId}`)
+      }
+      if (!await sameDirectory(persisted.cwd, params.cwd)) {
+        throw invalidParams(`session cwd does not match: ${params.cwd}`)
+      }
+      const harness = await recordedHarness(sessionId, signal)
+      if (harness !== 'dsh') throw invalidParams(`session belongs to agent harness "${harness}", not "dsh"`)
+      const handle = await persistence.open(sessionId, 'read', { signal })
+      let events: readonly SessionEvent[]
+      try {
+        events = (await handle.read(0, undefined, { signal })).events
+      } finally {
+        await handle.close()
+      }
+      for (const event of events) {
         if (event.type === 'user/message') {
           const message = (event as SessionEvent<'user/message'>).data
           if (message.source?.kind !== 'user') continue
@@ -284,7 +301,7 @@ export function apply(ctx: Context, config: AcpConfig): void {
           }
         }
       }
-      return response
+      return implementation.resumeSession(params, signal)
     },
 
     async resumeSession(params: ResumeSessionRequest, signal: AbortSignal): Promise<ResumeSessionResponse> {
