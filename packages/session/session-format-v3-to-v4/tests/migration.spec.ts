@@ -73,6 +73,15 @@ describe('V3 to V4 source preservation', () => {
     expect(restore([ignorable]).events).toEqual([{ ...ignorable, type: 'plugin:external/required' }])
   })
 
+  it.each([
+    ['agent/harness', { harness: 'dsh' }],
+    ['agent-acp/session', { harness: 'claude', sessionId: 'acp-session' }],
+    ['agent-codex/thread', { harness: 'codex', threadId: 'codex-thread' }],
+  ])('restores the fork-written V3 %s event as an ignorable plugin event', (type, data) => {
+    const row = { ...fact, type, data }
+    expect(restore([row]).events).toEqual([{ ...row, type: `plugin:${type}`, ignorable: true }])
+  })
+
   it('changes only the header version and retains event objects, payloads, timestamps, and coordinates', () => {
     const rows = [fact, delivery(3)]
     const before = JSON.stringify({ header, rows })

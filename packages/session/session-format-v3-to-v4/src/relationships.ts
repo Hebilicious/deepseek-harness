@@ -64,10 +64,19 @@ class Relationships {
   readonly startedRetries = new Set<string>()
   readonly commands = new Set<string>()
   readonly orphanCompactions = new Set<number>()
+  /**
+   * Earlier fork builds ran some Sessions on an external harness (ACP, Codex app-server), which
+   * runs the model turn itself; dsh recorded only the tool activity it reported, so those tool
+   * calls carry no assistant advertisement and need not settle per step.
+   */
+  readonly externalHarness: boolean
 
   constructor(readonly artifact: SessionFormatArtifact, readonly knownEventTypes: ReadonlySet<string>) {
     let start: number | undefined
+    let externalHarness = false
     for (const event of artifact.events) {
+      if (event.type === 'plugin:agent/harness' && isSessionFormatJsonObject(event.data)
+        && typeof event.data['harness'] === 'string' && event.data['harness'] !== 'dsh') externalHarness = true
       if (!knownEventTypes.has(event.type)) continue
       if (event.type === 'compaction/start') start = event.seq
       if (event.type === 'compaction/end') start = undefined
@@ -76,6 +85,7 @@ class Relationships {
         start = undefined
       }
     }
+    this.externalHarness = externalHarness
   }
 
   requireTurn(type: string): void {
@@ -89,7 +99,7 @@ class Relationships {
   }
 
   closeTools(type: string): void {
-    if (this.tools.size !== 0) throw new SessionFormatError(`${type} leaves unresolved tool call ${String(this.tools.keys().next().value)}`)
+    if (this.tools.size !== 0 && !this.externalHarness) throw new SessionFormatError(`${type} leaves unresolved tool call ${String(this.tools.keys().next().value)}`)
     this.tools.clear()
   }
 
@@ -165,6 +175,10 @@ class Relationships {
     const message = event.type === 'tool/result' ? record(data['message'], 'tool result message') : undefined
     const id = text(message === undefined ? data['callId'] : message['toolCallId'], 'tool call id')
     const pending = this.tools.get(id)
+    if (pending === undefined && this.externalHarness) {
+      if (message === undefined) this.tools.set(id, { name: data['name'], arguments: data['arguments'], started: true })
+      return
+    }
     if (pending === undefined) throw new SessionFormatError(`${event.type} ${id} has no advertised tool lifecycle`)
     if (message === undefined) {
       if (pending.started || pending.name !== data['name'] || pending.arguments !== data['arguments']) {

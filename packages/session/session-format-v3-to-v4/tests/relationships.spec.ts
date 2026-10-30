@@ -84,6 +84,13 @@ describe('mandatory V4 lifecycle restoration', () => {
     expect(() => reopen(rows)).toThrow()
   })
 
+  it('admits an external harness tool exchange without assistant advertisement or per-step settlement', () => {
+    const harness = (name: string): Row => ({ ...row('plugin:agent/harness', { harness: name }), ignorable: true })
+    const exchange = [...begin(), input(), toolCall(), result(), toolCall(), ...end()]
+    expect(() => reopen([harness('claude'), ...exchange])).not.toThrow()
+    expect(() => reopen([harness('dsh'), ...exchange])).toThrow('has no advertised tool lifecycle')
+  })
+
   it('accepts exact not-started repairs with preserved historical identity suffixes', () => {
     const repaired = result('call', { id: 'interrupted-tool-result-call-200', isError: true, content: [{ type: 'text', text: 'The tool call was interrupted before the Harness recorded it as started. Retry it if it is still needed.' }] })
     repaired.data['error'] = { name: 'ToolNotStartedError', code: 'TOOL_NOT_STARTED' }

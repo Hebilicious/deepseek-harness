@@ -68,11 +68,23 @@ export const RELEASED_V3_EVENT_TYPES: ReadonlySet<string> = new Set([
 /* jscpd:ignore-end */
 
 /**
- * Keep unknown ignorable events opaque after header promotion.
+ * Required events that earlier builds of the Hebilicious fork wrote into released V3
+ * logs for agent harnesses this build no longer mounts. They restore as ignorable
+ * `plugin:` events so those Sessions stay readable.
+ */
+export const FORK_V3_EVENT_TYPES: ReadonlySet<string> = new Set([
+  'agent-acp/session',
+  'agent-codex/thread',
+  'agent/harness',
+])
+
+/**
+ * Keep unknown ignorable events, and the fork's historical harness events, opaque after header promotion.
  * @param event - original V3 event; this incoming identity conversion is applied once.
  * @returns the same event or an ignorable namespaced event retaining its payload and coordinates.
  */
 export function namespaceV3OpaqueEvent(event: SessionFormatEvent): SessionFormatEvent {
+  if (FORK_V3_EVENT_TYPES.has(event.type)) return { ...event, type: `plugin:${event.type}`, ignorable: true }
   return event['ignorable'] === true && !RELEASED_V3_EVENT_TYPES.has(event.type)
     ? { ...event, type: `plugin:${event.type}`, ignorable: true }
     : event
