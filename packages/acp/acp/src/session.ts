@@ -85,6 +85,34 @@ async function composeAgent(agentCtx: Context, options: AcpSessionBuildOptions):
 }
 
 /**
+ * Keep a resumed session's model when it is still configured. A session whose
+ * provider or model was removed would otherwise fail every turn, so it moves
+ * to the deployment's configured model, and its next turn records the new model.
+ * @param ctx - ACP plugin context with the LLM service.
+ * @param agent - unpublished resumed Agent.
+ * @param options - deployment route used as the fallback.
+ * @param signal - resume request cancellation.
+ */
+async function keepAvailableModel(
+  ctx: Context,
+  agent: Agent,
+  options: AgentOptions,
+  signal: AbortSignal,
+): Promise<void> {
+  const selection = agent.model.current()
+  const { provider, model, reasoningEffort } = options
+  if (selection === undefined || provider === undefined || model === undefined) return
+  if (selection.provider === provider && selection.model === model) return
+  try {
+    await ctx.llm.resolveModelInfo(selection.provider, selection.model, signal)
+  } catch (error: unknown) {
+    signal.throwIfAborted()
+    ctx.logger.warn(`acp: ${selection.provider}/${selection.model} is not configured; resuming on ${provider}/${model}: ${errorChain(error)}`)
+    agent.model.select({ provider, model, ...reasoningEffort === undefined ? {} : { reasoningEffort } })
+  }
+}
+
+/**
  * Per-session ACP module. It owns the unpublished Agent composition, model
  * configuration view, one-prompt admission slot, ordered standard updates,
  * and memoized quiescent teardown.
@@ -128,8 +156,9 @@ export class AcpSession {
 
   /**
    * Restore a persisted Agent and compose the request's fresh MCP connections.
-   * The Session's recorded model selection survives; deployment options supply
-   * the route only when the Session records neither a selection nor a request.
+   * The Session's recorded model selection survives while it is still
+   * configured; deployment options supply the route when the Session records
+   * neither a selection nor a request, or when its recorded model is gone.
    * @param ctx - ACP plugin context with Agent, LLM, and persistence services.
    * @param options - persisted identity, workspace, initial route, MCP, and notifier.
    * @returns the restored per-session module.
@@ -139,7 +168,10 @@ export class AcpSession {
       resumeSessionId: options.sessionId,
       agentOptions: options.agentOptions,
       signal: options.signal,
-      setup: agentCtx => composeAgent(agentCtx, options),
+      setup: async (agentCtx, agent) => {
+        await keepAvailableModel(ctx, agent, options.agentOptions, options.signal)
+        await composeAgent(agentCtx, options)
+      },
     })
     return new AcpSession(ctx, handle, options.notify)
   }

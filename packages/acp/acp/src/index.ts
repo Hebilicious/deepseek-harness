@@ -177,6 +177,30 @@ export function apply(ctx: Context, config: AcpConfig): void {
     })
   })
 
+  /**
+   * The agent harness a stored session ran on. Earlier dsh-web builds recorded
+   * `agent/harness` among a log's first events, and ran some sessions on other
+   * harnesses (Claude, Codex, ...); format migration keeps that record as the
+   * ignorable `plugin:agent/harness`. A log without the record is dsh's.
+   * @param sessionId - stored session to inspect.
+   * @param signal - request cancellation.
+   * @returns the recorded harness id, or `dsh`.
+   */
+  const recordedHarness = async (sessionId: SessionId, signal: AbortSignal): Promise<string> => {
+    const handle = await persistence.open(sessionId, 'read', { signal })
+    try {
+      const { events } = await handle.read(0, 16, { signal })
+      for (const event of events as readonly { readonly type: string; readonly data: unknown }[]) {
+        if (event.type !== 'agent/harness' && event.type !== 'plugin:agent/harness') continue
+        const data = event.data as { readonly harness?: unknown } | null
+        if (typeof data?.harness === 'string') return data.harness
+      }
+      return 'dsh'
+    } finally {
+      await handle.close()
+    }
+  }
+
   const implementation = {
     async initialize(_params: InitializeRequest): Promise<InitializeResponse> {
       // Single-version agent: the spec's "same version if supported, else
@@ -244,9 +268,9 @@ export function apply(ctx: Context, config: AcpConfig): void {
     async loadSession(params: LoadSessionRequest, signal: AbortSignal): Promise<LoadSessionResponse> {
       // session/load is session/resume plus the history: replay what the user
       // typed and what the agent answered before responding, so a client that
-      // opens a saved session can show it. The history comes from the stored
-      // log, so sessions run on another harness through dsh web (Claude,
-      // Codex, ...) still replay even though this agent cannot resume them.
+      // opens a saved session (a T3 Code import) can show it. The history is
+      // replayed from the stored log before resuming, so a session whose model
+      // is no longer configured still shows it even though it cannot resume.
       assertOpen()
       validateWorkspaceParams(params)
       const sessionId = brandString<SessionId>(params.sessionId)
@@ -257,6 +281,8 @@ export function apply(ctx: Context, config: AcpConfig): void {
       if (!await sameDirectory(persisted.cwd, params.cwd)) {
         throw invalidParams(`session cwd does not match: ${params.cwd}`)
       }
+      const harness = await recordedHarness(sessionId, signal)
+      if (harness !== 'dsh') throw invalidParams(`session belongs to agent harness "${harness}", not "dsh"`)
       const handle = await persistence.open(sessionId, 'read', { signal })
       let events: readonly SessionEvent[]
       try {
@@ -288,14 +314,7 @@ export function apply(ctx: Context, config: AcpConfig): void {
           }
         }
       }
-      try {
-        return await implementation.resumeSession(params, signal)
-      } catch (error: unknown) {
-        // A session another harness owns replays but cannot continue here.
-        const harness = events.findLast(event => event.type === 'agent/harness') as SessionEvent<'agent/harness'> | undefined
-        if (harness !== undefined && harness.data.harness !== 'dsh') return {}
-        throw error
-      }
+      return implementation.resumeSession(params, signal)
     },
 
     async resumeSession(params: ResumeSessionRequest, signal: AbortSignal): Promise<ResumeSessionResponse> {
@@ -370,10 +389,17 @@ export function apply(ctx: Context, config: AcpConfig): void {
             || header.origin === 'subagent'
             || header.cwd === undefined
             || !isAbsolute(header.cwd)
+            // Interactive surfaces (dsh web, the TUI) start sessions with an
+            // agent preset; headless runs (`dsh -p` from scripts and other
+            // agents) and ACP clients' own sessions have none, and are not
+            // the user's conversations to pick up.
+            || header.agentPreset === undefined
         ) return undefined
         if (params.cwd !== undefined && params.cwd !== null && !await sameDirectory(header.cwd, params.cwd)) {
           return undefined
         }
+        // This agent cannot resume a session another harness ran, so it does not list it.
+        if (await recordedHarness(header.id, signal) !== 'dsh') return undefined
         return { sessionId: header.id, cwd: header.cwd, createdAt: header.createdAt }
       }))
       const entries = filtered
