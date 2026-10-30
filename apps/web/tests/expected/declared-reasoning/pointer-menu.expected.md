@@ -1,0 +1,18 @@
+- group "模型与推理等级":
+  - searchbox "搜索模型…"
+  - button "刷新模型列表"
+  - menu "模型":
+    - group "DeepSeek":
+      - text: DeepSeek
+      - menuitemradio "DeepSeek-V4-Flash"
+      - button "固定 DeepSeek-V4-Flash"
+      - menuitemradio "DeepSeek-V4-Flash-Vision-Exp"
+      - button "固定 DeepSeek-V4-Flash-Vision-Exp"
+    - group "Acme Gateway":
+      - text: Acme Gateway
+      - menuitemradio "Acme Think"
+      - button "固定 Acme Think"
+      - menuitemradio "Acme Swift" [checked]
+      - button "固定 Acme Swift"
+      - menuitemradio "Acme Lite"
+      - button "固定 Acme Lite"

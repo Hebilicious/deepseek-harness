@@ -1,6 +1,82 @@
-# Bilingual-pair consistency record (docs/i18n/README.md): the git blob hash of each
-# side as of the last confirmed-consistent state. Both languages carry equal authority;
-# after editing either side, bring the other along and re-record with:
+# Bilingual-pair consistency record for README.md (docs/i18n/README.md): per heading
+# section, a hash of its English and Chinese blocks outside code blocks and generated regions.
+# After editing either side, bring the other along and re-record with:
 #   pnpm run verify-translation-pairing --write packages/core/agent-external/README.md
-README.md: bc39651510910d59f3686ed2b5158547a24d4c27
-README.zh.md: 38a4a75e957007a3da12ededb50f6b1719679df2
+/:
+  en: 97bf841fd6215006
+  zh: ac6caf32ddfb267b
+/deepseek-ai-dsh-agent-external:
+  en: 3f0098b3cbabbab4
+  zh: bf5a6a4d843331fc
+/deepseek-ai-dsh-agent-external/summary:
+  en: 3c85b1865f97acc6
+  zh: 7cd4eae5cb30ad6c
+/deepseek-ai-dsh-agent-external/table-of-contents:
+  en: d152484eb41ac6b4
+  zh: 09388d293f9be9cb
+/deepseek-ai-dsh-agent-external/use-this-package:
+  en: bbff250eba0f1b89
+  zh: 0a618f05cc88ee2b
+/deepseek-ai-dsh-agent-external/use-this-package/when-to-use-it:
+  en: ab59b08083977b29
+  zh: 6267c3e8ff2dc447
+/deepseek-ai-dsh-agent-external/use-this-package/entry-point:
+  en: 81b4174fdccadbb9
+  zh: cfa445d84a421dbc
+/deepseek-ai-dsh-agent-external/understand-the-implementation:
+  en: 42b15ac6321706aa
+  zh: 7ae097f3abcc5d9c
+/deepseek-ai-dsh-agent-external/understand-the-implementation/design-concept:
+  en: f7a8fb5eec83c27f
+  zh: af0a03e74073bd99
+/deepseek-ai-dsh-agent-external/understand-the-implementation/lifecycle-transaction:
+  en: 6ee7cbb2cd4e6a47
+  zh: e0c81533faa8c841
+/deepseek-ai-dsh-agent-external/understand-the-implementation/durable-inbox-and-projections:
+  en: db8f9c4c6fae6ce1
+  zh: e088c74c884a54d9
+/deepseek-ai-dsh-agent-external/understand-the-implementation/turn-projection:
+  en: 93f016c8cdc6de9f
+  zh: c26a0a1a1c05d62d
+/deepseek-ai-dsh-agent-external/understand-the-implementation/harness-process:
+  en: 99c867fb54f8d79c
+  zh: 510a0a1672d0f931
+/deepseek-ai-dsh-agent-external/understand-the-implementation/source-map:
+  en: f753eb1945ce8fdd
+  zh: 96fde0a4fa95f426
+/deepseek-ai-dsh-agent-external/further-exploration:
+  en: 7e5d3844baed1d9f
+  zh: e4806e727ed1f55b
+/deepseek-ai-dsh-agent-external/model-experience:
+  en: 215e7ba838619b7b
+  zh: a311da3843709f90
+/deepseek-ai-dsh-agent-external/model-experience/per-turn-model-selection:
+  en: 5a9671b773fd3560
+  zh: a8c6245388429983
+/deepseek-ai-dsh-agent-external/model-experience/per-turn-model-selection/what-the-model-sees:
+  en: 3c78f8b1c221e360
+  zh: a0960f17658f29e1
+/deepseek-ai-dsh-agent-external/model-experience/per-turn-model-selection/token-effect:
+  en: 97711a549a428eb8
+  zh: 407eee636c2b879a
+/deepseek-ai-dsh-agent-external/model-experience/per-turn-model-selection/kv-cache-effect:
+  en: b9da481efc89bd10
+  zh: 0b6f0e55a9163edb
+/deepseek-ai-dsh-agent-external/model-experience/durable-route-record:
+  en: 95af1e92e7df1a38
+  zh: 2be5baa0c16aceba
+/deepseek-ai-dsh-agent-external/model-experience/durable-route-record/what-the-model-sees:
+  en: 3a545bdb9cf21cdb
+  zh: fb212ac6389d9064
+/deepseek-ai-dsh-agent-external/model-experience/durable-route-record/token-effect:
+  en: 641c3c79250cde74
+  zh: b46fb4dc8b778724
+/deepseek-ai-dsh-agent-external/model-experience/durable-route-record/kv-cache-effect:
+  en: 053d6d75b866012d
+  zh: 3846cfa689381d9c
+/deepseek-ai-dsh-agent-external/known-limitations-and-deferred-work:
+  en: 7af397dc075839c6
+  zh: 1a5f73237af0324a
+/deepseek-ai-dsh-agent-external/known-limitations-and-deferred-work/dev-note:
+  en: e67f633dc6fe7773
+  zh: 3bb0c20c93f16f98

@@ -16,7 +16,7 @@ import type { SnapshotStore } from '@deepseek-ai/dsh-client-store'
 import type { HarnessId } from '@deepseek-ai/dsh-agent/types'
 import type { SessionId } from '@deepseek-ai/dsh-session/types'
 import type { InjectFace, PropsLocale, PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
-import { IconChevronDownOutline14, Menu } from '@deepseek-ai/dsh-client-ui-primitives'
+import { IconChevronDownOutlineRegular, Menu } from '@deepseek-ai/dsh-client-ui-primitives'
 // Type-only: pulls the ui-conversation SlotMap merge (the hero seat).
 import type {} from '@deepseek-ai/dsh-client-ui-conversation/client'
 import type { AgentHarnessSeatState } from './seat-store.ts'
@@ -138,7 +138,7 @@ export function AgentHarnessSeat({
           onClick={() => { setOpen(value => !value) }}
         >
           <span className={css.seatLabel}>{chosen?.name ?? current ?? ''}</span>
-          <IconChevronDownOutline14 className={css.chevron} />
+          <IconChevronDownOutlineRegular className={css.chevron} />
         </button>
       )}
     />

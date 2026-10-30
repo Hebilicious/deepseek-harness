@@ -1,24 +1,18 @@
-/**
- * Real-composition guard for the dormant pi-ai posture: LlmRuntime,
- * settings-file, credentials-local, and a bare `llm-pi-ai` row boot from a
- * test-only cordis.yml through the actual Loader + Include path, an external
- * edit of settings.yaml registers the route live, and the next request
- * carries the credential the credentials document supplies. A hand-mounted `ctx.plugin` cannot
- * catch Loader export-shape failures, which is why the twin adapter has the
- * same guard.
- */
+/** Profile patch edits and credential updates reach the next real adapter request. */
 
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'
-import Loader from '@deepseek-ai/cordis-plugin-loader'
+import Loader, { type ModuleLoaderV2 } from '@deepseek-ai/cordis-plugin-loader'
 import Include from '@deepseek-ai/cordis-plugin-include'
 import LlmRuntime, { createMessage, createUserMessage, userAgent } from '@deepseek-ai/dsh-llm'
+import { SessionId } from '@deepseek-ai/dsh-session'
+import AuthorizationService from '@deepseek-ai/dsh-authorization'
 import LocalCredentialProvider from '@deepseek-ai/dsh-credentials-local'
-import FileSettingsProvider from '@deepseek-ai/dsh-settings-file'
+import { profileComposition } from '../../../settings/settings/tests/profile-composition.ts'
 import * as LlmPiAi from '@deepseek-ai/dsh-llm-pi-ai'
 import { writeCatalogSnapshot } from '../src/catalog-sync.ts'
 import { assemble } from './assemble.ts'
@@ -47,7 +41,7 @@ afterEach(async () => {
 
 /** The two optional inputs one composition case supplies before the Loader boots. */
 interface CompositionOptions {
-  /** The user settings document to boot with. */
+  /** The profile patch document to boot with. */
   settings?: string
   /** Seed the harness home, for a case that starts from a cache instead of a fetch. */
   prepare?: (home: string) => Promise<void>
@@ -63,8 +57,11 @@ async function loadComposition(
 ): Promise<{ ctx: Context; settingsPath: string; home: string }> {
   root = await mkdtemp(join(tmpdir(), 'dsh-pi-composition-'))
   vi.stubEnv('DSH_HOME', root)
-  const settingsPath = join(root, 'settings.yaml')
-  await writeFile(settingsPath, options.settings ?? '# personal settings\n')
+  if (options.settings !== undefined) {
+    // initProfile keeps an existing patch file, so this document is the one the profile boots with.
+    await mkdir(join(root, 'profile'), { recursive: true })
+    await writeFile(join(root, 'profile', 'cordis.patch.yml'), options.settings)
+  }
   await options.prepare?.(root)
   await writeFile(join(root, '.credentials.yaml'), 'version: 1\nrefs:\n  PI_COMPOSITION_KEY: key-from-store\n', { mode: 0o600 })
 
@@ -72,16 +69,13 @@ async function loadComposition(
   await writeFile(configPath, [
     '- id: llm',
     "  name: 'test-llm-service'",
-    '- id: settings',
-    "  name: '@deepseek-ai/dsh-settings-file'",
-    '  config:',
-    `    path: ${JSON.stringify(settingsPath)}`,
-    '    debounceMs: 10',
     '- id: credentials',
     "  name: '@deepseek-ai/dsh-credentials-local'",
     '  config:',
     `    path: ${JSON.stringify(join(root, '.credentials.yaml'))}`,
     '    debounceMs: 10',
+    '- id: authorization',
+    "  name: '@deepseek-ai/dsh-authorization'",
     '- id: llm-pi-ai',
     "  name: '@deepseek-ai/dsh-llm-pi-ai'",
     '',
@@ -94,26 +88,47 @@ async function loadComposition(
   ctx.loader.builtins.include = Include
   const modules = new Map<string, unknown>([
     ['test-llm-service', LlmRuntime],
-    ['@deepseek-ai/dsh-settings-file', FileSettingsProvider],
     ['@deepseek-ai/dsh-credentials-local', LocalCredentialProvider],
+    ['@deepseek-ai/dsh-authorization', AuthorizationService],
     ['@deepseek-ai/dsh-llm-pi-ai', LlmPiAi],
   ])
-  ctx.loader.internal = {
+  const internal: ModuleLoaderV2 = {
     version: 'v2',
-    async import(specifier: string) {
+    loadCache: new Map(),
+    import: (specifier: string) => {
       if (!modules.has(specifier)) throw new Error(`unexpected Loader import: ${specifier}`)
-      return modules.get(specifier)
+      return Promise.resolve(modules.get(specifier))
     },
-  } as unknown as NonNullable<typeof ctx.loader.internal>
-  await ctx.loader.create({
-    name: 'cordis:include',
-    config: { path: pathToFileURL(configPath).href },
-  })
-  await ctx.loader.await()
-  return { ctx, settingsPath, home: root }
+    register(): never { throw new Error('unexpected module hook registration') },
+    getOrCreateModuleJob(): never { throw new Error('unexpected module job creation') },
+    resolveSync(): never { throw new Error('unexpected synchronous module resolution') },
+    load(): never { throw new Error('unexpected module load') },
+  }
+  ctx.loader.internal = internal
+  const patchPath = await profileComposition(ctx, root, configPath)
+  return { ctx, settingsPath: patchPath, home: root }
 }
 
 describe('llm-pi-ai real dormant composition', () => {
+  it('dispatches header contributors through the Loader-mounted adapter', async () => {
+    const server = await mockServer([{ events: textEvents }])
+    const { ctx, settingsPath } = await loadComposition()
+    ctx.on('llm-pi-ai/request-headers', (request, headers, next) => {
+      headers.set('x-request-session', String(request.sessionId))
+      return next()
+    })
+    await writeFile(settingsPath, [
+      '- id: llm-pi-ai', '  config:', '    providers:', '      deepseek:',
+      '        apiKeyEnv: PI_COMPOSITION_KEY', `        baseURL: ${server.url}`, '',
+    ].join('\n'))
+    await vi.waitFor(() => {
+      expect(ctx.llm.listProviders().map(provider => provider.id)).toEqual(['deepseek'])
+    }, { timeout: 5000 })
+    const result = await assemble(ctx, { model: 'deepseek-flash', messages: [], sessionId: SessionId('loader-session') })
+    expect(result.finish).toEqual({ kind: 'stop' })
+    expect(server.headers[0]?.['x-request-session']).toBe('loader-session')
+  })
+
   it('boots with zero routes and registers one the moment settings supply a profile', async () => {
     vi.stubEnv('PI_COMPOSITION_KEY', '')
     const server = await mockServer([{ events: textEvents }])
@@ -121,23 +136,42 @@ describe('llm-pi-ai real dormant composition', () => {
 
     // The shipped posture: the adapter exists, no route does.
     expect(ctx.llm.listProviders()).toEqual([])
+    const directory = ctx.llm.listConfigurableProviders()
+    expect(directory.find(entry => entry.provider === 'azure')).toMatchObject({
+      nativeAuth: { env: ['AZURE_OPENAI_API_KEY'], oauth: false },
+      baseURLEnv: ['AZURE_OPENAI_BASE_URL', 'AZURE_OPENAI_RESOURCE_NAME'],
+    })
+    expect(directory.find(entry => entry.provider === 'radius')?.defaultBaseURL).toBe('https://radius.pi.dev/v1')
+    expect(directory.find(entry => entry.provider === 'opencode')?.defaultBaseURL).toBeUndefined()
 
     // Exactly what the web Models page leaves on disk.
     await writeFile(settingsPath, [
-      'llm-pi-ai:',
-      '  providers:',
-      '    deepseek:',
-      '      apiKeyEnv: PI_COMPOSITION_KEY',
-      `      baseURL: ${server.url}`,
+      '- id: llm-pi-ai',
+      '  config:',
+      '    providers:',
+      '      deepseek:',
+      '        apiKeyEnv: PI_COMPOSITION_KEY',
+      `        baseURL: ${server.url}`,
       '',
     ].join('\n'))
     await vi.waitFor(() => {
       expect(ctx.llm.listProviders().map(provider => provider.id)).toEqual(['deepseek'])
     }, { timeout: 5000 })
 
-    const result = await assemble(ctx, { provider: 'deepseek', model: 'deepseek-v4-flash', messages: [] })
+    const result = await assemble(ctx, { provider: 'deepseek', model: 'deepseek-flash', messages: [] })
     expect(result.message.content).toEqual([{ type: 'text', text: 'hello' }])
     expect(server.headers[0]?.authorization).toBe('Bearer key-from-store')
+  })
+
+  it('offers OpenAI sign-in by API key only, while other subscription logins stay', async () => {
+    const { ctx } = await loadComposition()
+    const methods = (provider: string): string[] | undefined => ctx.authorization.list()
+      .find(entry => entry.key === LlmPiAi.recordKeyFor(provider))?.methods.map(method => method.id)
+
+    // pi-ai's Sign in with ChatGPT needs an installation ID the harness does
+    // not supply, so the route offers only its key login.
+    expect(methods('openai')).toEqual(['api-key'])
+    expect(methods('anthropic')).toEqual(['oauth', 'api-key'])
   })
 
   it('uses settings-only route headers for model discovery', async () => {
@@ -146,18 +180,19 @@ describe('llm-pi-ai real dormant composition', () => {
     const { ctx, settingsPath } = await loadComposition()
 
     await writeFile(settingsPath, [
-      'llm-pi-ai:',
-      '  providers:',
-      '    acme-gateway:',
-      '      apiKeyEnv: PI_COMPOSITION_KEY',
-      '      api: openai-completions',
-      `      baseURL: ${server.url}`,
-      '      headers:',
-      '        X-Company-Code: private-tenant',
-      '        Accept: text/plain',
-      '        User-Agent: deployment-owned',
-      '      models:',
-      '        - id: acme-bootstrap',
+      '- id: llm-pi-ai',
+      '  config:',
+      '    providers:',
+      '      acme-gateway:',
+      '        apiKeyEnv: PI_COMPOSITION_KEY',
+      '        api: openai-completions',
+      `        baseURL: ${server.url}`,
+      '        headers:',
+      '          X-Company-Code: private-tenant',
+      '          Accept: text/plain',
+      '          User-Agent: deployment-owned',
+      '        models:',
+      '          - id: acme-bootstrap',
       '',
     ].join('\n'))
     await vi.waitFor(() => {
@@ -184,11 +219,12 @@ describe('llm-pi-ai real dormant composition', () => {
     ])
     const { ctx, settingsPath } = await loadComposition()
     await writeFile(settingsPath, [
-      'llm-pi-ai:',
-      '  providers:',
-      '    deepseek:',
-      '      apiKeyEnv: PI_COMPOSITION_KEY',
-      `      baseURL: ${server.url}`,
+      '- id: llm-pi-ai',
+      '  config:',
+      '    providers:',
+      '      deepseek:',
+      '        apiKeyEnv: PI_COMPOSITION_KEY',
+      `        baseURL: ${server.url}`,
       '',
     ].join('\n'))
     await vi.waitFor(() => {
@@ -197,7 +233,7 @@ describe('llm-pi-ai real dormant composition', () => {
 
     const truncated = await assemble(ctx, {
       provider: 'deepseek',
-      model: 'deepseek-v4-flash',
+      model: 'deepseek-flash',
       messages: [],
     })
     expect(truncated.finish).toEqual({ kind: 'max-tokens' })
@@ -205,14 +241,14 @@ describe('llm-pi-ai real dormant composition', () => {
     expect(truncated.message.source).toEqual({
       kind: 'model',
       provider: 'deepseek',
-      model: 'deepseek-v4-flash',
+      model: 'deepseek-flash',
       replayState: {
         response: {
           kind: 'pi-ai',
           version: 2,
           api: 'openai-completions',
           provider: 'deepseek',
-          model: 'deepseek-v4-flash',
+          model: 'deepseek-flash',
           stopReason: 'length',
         },
         blocks: [{ type: 'text' }],
@@ -221,7 +257,7 @@ describe('llm-pi-ai real dormant composition', () => {
 
     const continued = await assemble(ctx, {
       provider: 'deepseek',
-      model: 'deepseek-v4-flash',
+      model: 'deepseek-flash',
       messages: [
         truncated.message,
         createUserMessage({ content: [{ type: 'text', text: 'continue' }], source: { kind: 'user' } }),
@@ -244,11 +280,12 @@ describe('llm-pi-ai real dormant composition', () => {
     const server = await mockServer([{ events: textEvents }])
     const { ctx, settingsPath } = await loadComposition()
     await writeFile(settingsPath, [
-      'llm-pi-ai:',
-      '  providers:',
-      '    deepseek:',
-      '      apiKeyEnv: PI_COMPOSITION_KEY',
-      `      baseURL: ${server.url}`,
+      '- id: llm-pi-ai',
+      '  config:',
+      '    providers:',
+      '      deepseek:',
+      '        apiKeyEnv: PI_COMPOSITION_KEY',
+      `        baseURL: ${server.url}`,
       '',
     ].join('\n'))
     await vi.waitFor(() => {
@@ -264,13 +301,13 @@ describe('llm-pi-ai real dormant composition', () => {
         kind: 'model',
         ...{
           provider: 'deepseek',
-          model: 'deepseek-v4-flash',
+          model: 'deepseek-flash',
           replayState: {
             kind: 'pi-ai',
             version: 1,
             api: 'openai-completions',
             provider: 'deepseek',
-            model: 'deepseek-v4-flash',
+            model: 'deepseek-flash',
             stopReason: 'length',
             blocks: [{ type: 'text' }, { type: 'tool-call' }],
           },
@@ -279,7 +316,7 @@ describe('llm-pi-ai real dormant composition', () => {
     })
     const continued = await assemble(ctx, {
       provider: 'deepseek',
-      model: 'deepseek-v4-flash',
+      model: 'deepseek-flash',
       messages: [
         poisoned,
         createUserMessage({ content: [{ type: 'text', text: 'continue' }], source: { kind: 'user' } }),
@@ -301,8 +338,8 @@ describe('llm-pi-ai catalog overlay composition', () => {
   const directory = {
     'opencode-go': {
       models: {
-        'mimo-v2.6-flash': {
-          name: 'MiMo V2.6 Flash',
+        'mimo-v2.8-flash': {
+          name: 'MiMo V2.8 Flash',
           tool_call: true,
           reasoning: true,
           modalities: { input: ['text', 'image'] },
@@ -321,14 +358,15 @@ describe('llm-pi-ai catalog overlay composition', () => {
     ])
     const { ctx, home } = await loadComposition({
       settings: [
-        'llm-pi-ai:',
-        '  providers:',
-        '    opencode-go:',
-        '      apiKeyEnv: PI_COMPOSITION_KEY',
-        `      baseURL: ${server.url}`,
-        '  catalogOverlay:',
-        `    url: ${server.url}`,
-        '    refreshHours: 0',
+        '- id: llm-pi-ai',
+        '  config:',
+        '    providers:',
+        '      opencode-go:',
+        '        apiKeyEnv: PI_COMPOSITION_KEY',
+        `        baseURL: ${server.url}`,
+        '    catalogOverlay:',
+        `      url: ${server.url}`,
+        '      refreshHours: 0',
         '',
       ].join('\n'),
     })
@@ -337,26 +375,26 @@ describe('llm-pi-ai catalog overlay composition', () => {
     // registered before the overlay exists and has to pick it up live.
     await vi.waitFor(async () => {
       const models = await ctx.llm.listModels('opencode-go')
-      expect(models.map(model => model.id)).toContain('mimo-v2.6-flash')
+      expect(models.map(model => model.id)).toContain('mimo-v2.8-flash')
     }, { timeout: 5000 })
 
-    const resolved = await ctx.llm.resolveModelInfo('opencode-go', 'mimo-v2.6-flash')
+    const resolved = await ctx.llm.resolveModelInfo('opencode-go', 'mimo-v2.8-flash')
     expect(resolved).toMatchObject({
       provider: 'opencode-go',
-      id: 'mimo-v2.6-flash',
-      name: 'MiMo V2.6 Flash',
+      id: 'mimo-v2.8-flash',
+      name: 'MiMo V2.8 Flash',
       context: { contextWindow: 1048576 },
     })
 
-    const result = await assemble(ctx, { provider: 'opencode-go', model: 'mimo-v2.6-flash', messages: [] })
+    const result = await assemble(ctx, { provider: 'opencode-go', model: 'mimo-v2.8-flash', messages: [] })
     expect(result.message.content).toEqual([{ type: 'text', text: 'hello' }])
-    expect(server.requests[1]).toMatchObject({ model: 'mimo-v2.6-flash' })
+    expect(server.requests[1]).toMatchObject({ model: 'mimo-v2.8-flash' })
     expect(server.headers[1]?.authorization).toBe('Bearer key-from-store')
 
     // The snapshot is cached, which is what lets a start with no reachable
     // directory still serve the overlay.
     await expect(readFile(join(home, 'cache', 'llm-pi-ai', 'models-dev.json'), 'utf8'))
-      .resolves.toContain('mimo-v2.6-flash')
+      .resolves.toContain('mimo-v2.8-flash')
   })
 
   it('serves the cached snapshot when the directory is unreachable', async () => {
@@ -364,13 +402,14 @@ describe('llm-pi-ai catalog overlay composition', () => {
     // Port 9 is the discard service: nothing accepts a connection there.
     const { ctx } = await loadComposition({
       settings: [
-        'llm-pi-ai:',
-        '  providers:',
-        '    opencode-go:',
-        '      apiKeyEnv: PI_COMPOSITION_KEY',
-        '  catalogOverlay:',
-        '    url: http://127.0.0.1:9/catalog.json',
-        '    refreshHours: 12',
+        '- id: llm-pi-ai',
+        '  config:',
+        '    providers:',
+        '      opencode-go:',
+        '        apiKeyEnv: PI_COMPOSITION_KEY',
+        '    catalogOverlay:',
+        '      url: http://127.0.0.1:9/catalog.json',
+        '      refreshHours: 12',
         '',
       ].join('\n'),
       prepare: home => writeCatalogSnapshot(join(home, 'cache', 'llm-pi-ai', 'models-dev.json'), {
@@ -382,7 +421,7 @@ describe('llm-pi-ai catalog overlay composition', () => {
 
     await vi.waitFor(async () => {
       const models = await ctx.llm.listModels('opencode-go')
-      expect(models.map(model => model.id)).toContain('mimo-v2.6-flash')
+      expect(models.map(model => model.id)).toContain('mimo-v2.8-flash')
     }, { timeout: 5000 })
   })
 
@@ -404,19 +443,20 @@ describe('llm-pi-ai catalog overlay composition', () => {
     ])
     const { ctx } = await loadComposition({
       settings: [
-        'llm-pi-ai:',
-        '  providers:',
-        '    opencode-go:',
-        '      apiKeyEnv: PI_COMPOSITION_KEY',
-        '  catalogOverlay:',
-        `    url: ${server.url}`,
-        '    refreshHours: 12',
+        '- id: llm-pi-ai',
+        '  config:',
+        '    providers:',
+        '      opencode-go:',
+        '        apiKeyEnv: PI_COMPOSITION_KEY',
+        '    catalogOverlay:',
+        `      url: ${server.url}`,
+        '      refreshHours: 12',
         '',
       ].join('\n'),
     })
     await vi.waitFor(async () => {
       const models = await ctx.llm.listModels('opencode-go')
-      expect(models.map(model => model.id)).toContain('mimo-v2.6-flash')
+      expect(models.map(model => model.id)).toContain('mimo-v2.8-flash')
     }, { timeout: 5000 })
 
     // The second fetch returns the same document: it is adopted once, and the
@@ -424,18 +464,18 @@ describe('llm-pi-ai catalog overlay composition', () => {
     await ctx.llm.refreshModelCatalogs()
     expect(server.paths).toHaveLength(2)
     const models = await ctx.llm.listModels('opencode-go')
-    expect(models.map(model => model.id)).toContain('mimo-v2.6-flash')
+    expect(models.map(model => model.id)).toContain('mimo-v2.8-flash')
     expect(models.find(model => model.id === 'mimo-v2.5')?.name).not.toBe('MiMo V2.5 renamed by the directory')
   })
 
   it('publishes a model the directory starts serving later on the explicit refresh', async () => {
     vi.stubEnv('PI_COMPOSITION_KEY', '')
-    const first = { 'opencode-go': { models: { 'mimo-v2.6-flash': { name: 'MiMo V2.6 Flash', tool_call: true } } } }
+    const first = { 'opencode-go': { models: { 'mimo-v2.8-flash': { name: 'MiMo V2.8 Flash', tool_call: true } } } }
     const second = {
       'opencode-go': {
         models: {
-          'mimo-v2.6-flash': { name: 'MiMo V2.6 Flash', tool_call: true },
-          'mimo-v2.7-flash': { name: 'MiMo V2.7 Flash', tool_call: true },
+          'mimo-v2.8-flash': { name: 'MiMo V2.8 Flash', tool_call: true },
+          'mimo-v2.9-flash': { name: 'MiMo V2.9 Flash', tool_call: true },
         },
       },
     }
@@ -445,28 +485,29 @@ describe('llm-pi-ai catalog overlay composition', () => {
     ])
     const { ctx } = await loadComposition({
       settings: [
-        'llm-pi-ai:',
-        '  providers:',
-        '    opencode-go:',
-        '      apiKeyEnv: PI_COMPOSITION_KEY',
-        '  catalogOverlay:',
-        `    url: ${server.url}`,
-        '    refreshHours: 12',
+        '- id: llm-pi-ai',
+        '  config:',
+        '    providers:',
+        '      opencode-go:',
+        '        apiKeyEnv: PI_COMPOSITION_KEY',
+        '    catalogOverlay:',
+        `      url: ${server.url}`,
+        '      refreshHours: 12',
         '',
       ].join('\n'),
     })
     await vi.waitFor(async () => {
       const models = await ctx.llm.listModels('opencode-go')
-      expect(models.map(model => model.id)).toContain('mimo-v2.6-flash')
+      expect(models.map(model => model.id)).toContain('mimo-v2.8-flash')
     }, { timeout: 5000 })
-    expect((await ctx.llm.listModels('opencode-go')).map(model => model.id)).not.toContain('mimo-v2.7-flash')
+    expect((await ctx.llm.listModels('opencode-go')).map(model => model.id)).not.toContain('mimo-v2.9-flash')
 
     // What the selector's refresh button triggers on the Host.
     await ctx.llm.refreshModelCatalogs()
 
     await vi.waitFor(async () => {
       const models = await ctx.llm.listModels('opencode-go')
-      expect(models.map(model => model.id)).toContain('mimo-v2.7-flash')
+      expect(models.map(model => model.id)).toContain('mimo-v2.9-flash')
     }, { timeout: 5000 })
   })
 
@@ -475,32 +516,34 @@ describe('llm-pi-ai catalog overlay composition', () => {
     const server = await mockServer([{ body: JSON.stringify(directory) }])
     const { ctx, settingsPath } = await loadComposition({
       settings: [
-        'llm-pi-ai:',
-        '  providers:',
-        '    opencode-go:',
-        '      apiKeyEnv: PI_COMPOSITION_KEY',
-        '  catalogOverlay:',
-        `    url: ${server.url}`,
-        '    refreshHours: 0',
+        '- id: llm-pi-ai',
+        '  config:',
+        '    providers:',
+        '      opencode-go:',
+        '        apiKeyEnv: PI_COMPOSITION_KEY',
+        '    catalogOverlay:',
+        `      url: ${server.url}`,
+        '      refreshHours: 0',
         '',
       ].join('\n'),
     })
     await vi.waitFor(async () => {
       const models = await ctx.llm.listModels('opencode-go')
-      expect(models.map(model => model.id)).toContain('mimo-v2.6-flash')
+      expect(models.map(model => model.id)).toContain('mimo-v2.8-flash')
     }, { timeout: 5000 })
 
     await writeFile(settingsPath, [
-      'llm-pi-ai:',
-      '  providers:',
-      '    opencode-go:',
-      '      apiKeyEnv: PI_COMPOSITION_KEY',
+      '- id: llm-pi-ai',
+      '  config:',
+      '    providers:',
+      '      opencode-go:',
+      '        apiKeyEnv: PI_COMPOSITION_KEY',
       '',
     ].join('\n'))
 
     await vi.waitFor(async () => {
       const models = await ctx.llm.listModels('opencode-go')
-      expect(models.map(model => model.id)).not.toContain('mimo-v2.6-flash')
+      expect(models.map(model => model.id)).not.toContain('mimo-v2.8-flash')
     }, { timeout: 5000 })
   })
 
@@ -509,13 +552,14 @@ describe('llm-pi-ai catalog overlay composition', () => {
     const server = await mockServer([{ events: textEvents }])
     const { ctx } = await loadComposition({
       settings: [
-        'llm-pi-ai:',
-        '  providers:',
-        '    deepseek:',
-        '      apiKeyEnv: PI_COMPOSITION_KEY',
-        `      baseURL: ${server.url}`,
-        '  catalogOverlay:',
-        '    url: ""',
+        '- id: llm-pi-ai',
+        '  config:',
+        '    providers:',
+        '      deepseek:',
+        '        apiKeyEnv: PI_COMPOSITION_KEY',
+        `        baseURL: ${server.url}`,
+        '    catalogOverlay:',
+        '      url: ""',
         '',
       ].join('\n'),
     })
@@ -525,7 +569,7 @@ describe('llm-pi-ai catalog overlay composition', () => {
     await vi.waitFor(() => {
       expect(ctx.llm.listProviders().map(provider => provider.id)).toEqual(['deepseek'])
     }, { timeout: 5000 })
-    const result = await assemble(ctx, { provider: 'deepseek', model: 'deepseek-v4-flash', messages: [] })
+    const result = await assemble(ctx, { provider: 'deepseek', model: 'deepseek-flash', messages: [] })
     expect(result.message.content).toEqual([{ type: 'text', text: 'hello' }])
   })
 })

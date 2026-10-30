@@ -3,7 +3,7 @@
   min-width: 0;
 }
 
-/* Figma 313:14108 ToggleButton: 13/20 medium secondary label, 4px gap,
+/* Figma 313:14108 ToggleButton: 13/20 regular secondary label, 4px gap,
    12px caption chevron; 28px chip height matches the sibling Plan /
    Read-only selects in the same tool row. */
 .trigger {
@@ -11,30 +11,33 @@
   align-items: center;
   gap: 4px;
   min-width: 0;
-  /* Legacy fallback, then a row-relative cap that grants long names more
-     room without letting this trailing control consume the composer. */
-  max-width: 220px;
-  max-width: min(360px, 45cqw);
+  /* Preferred width: the composer measures this expanded seat against the
+     space the other controls leave, so the cap must not shrink with the row.
+     A row-relative cap would let the measured demand fall with the available
+     width, and the expanded text would then always fit. */
+  max-width: 360px;
   height: 28px;
   padding: 0 4px 0 8px;
   border: none;
   /* Rounded chip chrome, matching the sibling permission trigger. */
-  border-radius: 24px;
+  border-radius: var(--dsw-radius-sm);
   outline: none;
   background: transparent;
   color: var(--dsw-alias-label-secondary);
   font-size: 13px;
   line-height: 20px;
-  font-weight: 500;
+  font-weight: 400;
   cursor: pointer;
 }
 
-.trigger:hover:not(:disabled) {
-  background: var(--dsw-alias-interactive-bg-hover);
+@media (hover: hover) {
+  .trigger:hover:not(:disabled) {
+    background: var(--dsw-alias-interactive-bg-hover);
+  }
 }
 
-.trigger:focus-visible {
-  box-shadow: 0 0 0 2px var(--dsw-alias-border-l3);
+.trigger:focus-visible:not([data-selection-focus]) {
+  box-shadow: 0 0 0 2px var(--dsw-focus-ring-color, var(--dsw-alias-state-business-primary));
 }
 
 .trigger:disabled {
@@ -49,7 +52,7 @@
   white-space: nowrap;
 }
 
-/* Effort value beside the model name (mock's 'High': same 13/20/500, caption
+/* Effort value beside the model name (mock's 'High': same 13/20/400, caption
    tone). Adaptive priority: the huge shrink factor makes the effort absorb
    all deficit first — it ellipsizes away to nothing before the model name
    loses a single pixel, and the chevron stays snug throughout. */
@@ -62,27 +65,17 @@
   color: var(--dsw-alias-label-caption);
 }
 
-/* Stand-in for the whole text below the icon-only cut: the settings page's
-   Models glyph (IconDataOutline16), hidden while any text fits. */
+/* The Models glyph replaces the text when the composer row cannot fit it. */
 .triggerIcon {
-  display: none;
+  display: var(--dsh-composer-model-icon-display, none);
   flex: 0 0 auto;
 }
 
-/* Icon-only floor: past continuous shrink (effort ellipsizes away first, then
-   the name), a 360px composer row leaves the 45cqw cap too little for a
-   legible name, so the text yields to the Models glyph. Same anonymous
-   container as PermissionSelect's 460px cut (InputBar .row); the full name
-   stays reachable through the trigger's title and aria-label. */
-@container (max-width: 360px) {
-  .triggerIcon {
-    display: block;
-  }
-
-  .triggerLabel,
-  .triggerEffort {
-    display: none;
-  }
+/* The composer measures expanded row demand and owns these display variables.
+   Outside a composer, the trigger retains its text. */
+.triggerLabel,
+.triggerEffort {
+  display: var(--dsh-composer-model-text-display, block);
 }
 
 .chevron {
@@ -114,8 +107,6 @@
   /* Surface tokens match the Menu primitive card (ui-primitives
    * Menu.module.css) so every dropdown reads as the same material. */
   border: 0;
-  border-radius: 20px;
-  background: var(--dsw-specific-menu);
   --dsw-elevation-stroke-color: var(--dsw-alias-border-l1);
   box-shadow: var(--dsw-elevation-prominent);
   color: var(--dsw-alias-label-primary);
@@ -128,9 +119,9 @@
   --dsh-scrollbar-thumb-hover: var(--dsw-alias-scrollbar-hover-l2);
 }
 
-/* The model pane sizes to the card, not to the rows it happens to show: the
-   card hangs off the trigger, so a width or height that followed the filter
-   would move the rows out from under the pointer on every keystroke. */
+/* A searchable model pane keeps one size rather than following the rows a
+   query leaves: the card hangs off the trigger, so a size that followed the
+   query would move the rows out from under the pointer on every keystroke. */
 .menuModel {
   width: min(360px, calc(100vw - 32px));
   height: min(360px, calc(100vh - 96px));
@@ -138,13 +129,12 @@
 
 .status,
 .empty {
-  /* Only the row list absorbs the model card's fixed height; every other
-     child keeps its own size in the column flex layout. */
+  /* Only the row list absorbs the model card's fixed height. */
   flex: none;
-  padding: 10px;
+  padding: 8px;
   color: var(--dsw-alias-label-tertiary);
-  font-size: 13px;
-  line-height: 20px;
+  font-size: 12px;
+  line-height: 18px;
 }
 
 .error,
@@ -153,14 +143,14 @@
   flex: none;
   align-items: flex-start;
   justify-content: space-between;
-  gap: 8px;
-  margin-bottom: 4px;
-  padding: 7px 8px;
-  border-radius: 8px;
+  gap: 6px;
+  margin-bottom: 3px;
+  padding: 6px 7px;
+  border-radius: var(--dsw-radius-md);
   background: var(--dsw-alias-interactive-bg-hover-danger);
   color: var(--dsw-alias-state-error-primary);
-  font-size: 12px;
-  line-height: 18px;
+  font-size: 11px;
+  line-height: 16px;
 }
 
 .warning {
@@ -179,81 +169,47 @@
   cursor: pointer;
 }
 
-.groups {
-  min-height: 0;
-  overflow-y: auto;
-}
-
-/* Filter field above the scrolling rows. Metrics follow the client's other
-   catalog filters (ui-settings-plugin-inventory): 36px field, 10px radius
-   matching the rows, icon inset 10px and the text column 32px from the edge,
-   with the input's own right padding clearing the native clear button. */
-.search {
-  position: relative;
+/* The search field (when shown) and the refresh button share one row. */
+.searchRow {
   display: flex;
-  flex: none;
+  flex-shrink: 0;
   align-items: center;
-  box-sizing: border-box;
-  height: 36px;
-  margin: 0 0 4px;
-  border: 0.5px solid var(--dsw-alias-border-l4);
-  border-radius: 10px;
-  color: var(--dsw-alias-label-caption);
-  background: var(--dsw-alias-bg-layer-1);
+  justify-content: flex-end;
+  gap: 2px;
+  margin: 2px 0 3px;
 }
 
-.search:hover {
-  border-color: var(--dsw-alias-label-caption);
-}
-
-.search:focus-within {
-  border-color: var(--dsw-alias-state-business-primary);
-}
-
-.searchIcon {
-  position: absolute;
-  left: 10px;
-  pointer-events: none;
-}
-
-.searchInput {
-  width: 100%;
-  height: 100%;
+.searchField {
+  position: relative;
+  flex: 1 1 auto;
   min-width: 0;
-  padding: 0 30px;
-  border: 0;
-  outline: 0;
-  border-radius: inherit;
-  color: var(--dsw-alias-label-primary);
-  background: transparent;
-  font: inherit;
-  font-size: 13px;
-  line-height: 20px;
-}
-
-.searchInput::placeholder {
-  color: var(--dsw-alias-label-caption);
 }
 
 .searchRefresh {
-  position: absolute;
-  right: 6px;
   display: flex;
+  flex: none;
   align-items: center;
   justify-content: center;
   width: 24px;
   height: 24px;
   padding: 0;
   border: 0;
-  border-radius: 6px;
+  border-radius: var(--dsw-radius-xs);
   color: var(--dsw-alias-label-caption);
   background: transparent;
   cursor: pointer;
 }
 
-.searchRefresh:hover:not([aria-disabled='true']) {
-  color: var(--dsw-alias-label-primary);
-  background: var(--dsw-alias-bg-layer-2);
+.searchRefresh:focus-visible {
+  outline: none;
+  background: var(--dsw-alias-interactive-bg-hover);
+}
+
+@media (hover: hover) {
+  .searchRefresh:hover:not([aria-disabled='true']) {
+    color: var(--dsw-alias-label-primary);
+    background: var(--dsw-alias-interactive-bg-hover);
+  }
 }
 
 /* A refresh in flight: dimmed, but still focusable so the card keeps focus. */
@@ -262,42 +218,80 @@
   opacity: 0.5;
 }
 
-.group + .group {
-  margin-top: 4px;
-}
-
-.groupTitle {
-  position: sticky;
-  top: 0;
-  z-index: 1;
-  padding: 5px 8px 3px;
-  background: var(--dsw-specific-menu);
-  color: var(--dsw-alias-label-tertiary);
-  font-size: 12px;
-  line-height: 18px;
-  font-weight: 500;
-}
-
-/* One model row and its favourite toggle: the option keeps the row's full
-   hit area while the toggle sits outside it (a button cannot nest in the
-   option button), so a pin click never selects the model. */
-.optionRow {
+.searchRow .search {
   display: flex;
+  height: auto;
+  padding: 5px 7px;
+  border: 0 solid transparent;
+  border-radius: var(--dsw-radius-md);
+  background: transparent;
+}
+
+.searchRow .searchWithQuery {
+  padding-right: 34px;
+}
+
+.searchClear {
+  position: absolute;
+  top: 50%;
+  right: 4px;
+  transform: translateY(-50%);
+  display: inline-flex;
   align-items: center;
-  gap: 2px;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: none;
+  border-radius: 50%;
+  corner-shape: round;
+  background: transparent;
+  color: var(--dsw-alias-label-secondary);
+  cursor: pointer;
+}
+
+.searchClear:focus-visible {
+  outline: none;
+  background: var(--dsw-alias-interactive-bg-hover);
+}
+
+@media (hover: hover) {
+  .searchClear:hover {
+    outline: none;
+    background: var(--dsw-alias-interactive-bg-hover);
+  }
+}
+
+.searchRow .search:focus-within {
+  border-color: transparent;
+}
+
+.searchRow .search input {
+  padding: 0;
+  font-size: 12px;
+  line-height: normal;
+}
+
+.searchRow .search input::placeholder {
+  color: var(--dsw-alias-label-caption);
+}
+
+.groups {
+  min-height: 0;
+  overflow-y: auto;
 }
 
 .option {
   box-sizing: border-box;
   display: flex;
-  flex: 1 1 auto;
   align-items: center;
-  gap: 8px;
-  min-width: 0;
-  min-height: 38px;
-  padding: 6px 8px;
+  gap: 6px;
+  width: auto;
+  min-width: 100%;
+  min-height: 34px;
+  padding: 5px 7px;
   border: none;
-  border-radius: 10px;
+  border-radius: var(--dsw-radius-md);
   outline: none;
   background: transparent;
   color: inherit;
@@ -305,9 +299,73 @@
   cursor: pointer;
 }
 
-.option:hover:not(:disabled),
-.option:focus-visible {
+.option:focus-visible,
+.optionActive:not(:disabled) {
   background: var(--dsw-alias-interactive-bg-hover);
+}
+
+.modelOption {
+  max-width: 100%;
+}
+
+/* One model row and its favourite toggle: the option keeps the row's hit
+   area while the toggle sits outside it. */
+.optionRow {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.optionRow .option {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+/* Favourite toggle: quiet at rest so the rows stay scannable, accented once pinned. */
+.pin {
+  display: grid;
+  place-items: center;
+  flex: 0 0 24px;
+  height: 24px;
+  padding: 0;
+  border: none;
+  border-radius: var(--dsw-radius-xs);
+  outline: none;
+  background: transparent;
+  color: var(--dsw-alias-label-caption);
+  cursor: pointer;
+}
+
+.pin svg {
+  width: 14px;
+  height: 14px;
+}
+
+.pin:focus-visible {
+  box-shadow: 0 0 0 2px var(--dsw-focus-ring-color, var(--dsw-alias-state-business-primary));
+}
+
+@media (hover: hover) {
+  .pin:hover {
+    background: var(--dsw-alias-interactive-bg-hover);
+    color: var(--dsw-alias-label-secondary);
+  }
+}
+
+.pinSet {
+  color: var(--dsw-alias-state-business-primary);
+}
+
+@media (hover: hover) {
+  .pinSet:hover {
+    color: var(--dsw-alias-state-business-primary);
+  }
+}
+
+@media (hover: hover) {
+  .option:not(.modelOption):hover:not(:disabled) {
+    background: var(--dsw-alias-interactive-bg-hover);
+  }
 }
 
 /* Selection marker is the trailing check, not a fill — matches the Menu
@@ -331,9 +389,9 @@
 .modelName {
   overflow: hidden;
   color: inherit;
-  font-size: 14px;
-  line-height: 20px;
-  font-weight: 500;
+  font-size: 13px;
+  line-height: 18px;
+  font-weight: 400;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -348,70 +406,66 @@
   white-space: nowrap;
 }
 
-/* Favourite toggle: quiet at rest so the rows stay scannable, filled and
-   accented once pinned. */
-.pin {
-  display: grid;
-  place-items: center;
-  flex: 0 0 24px;
-  height: 24px;
-  padding: 0;
-  border: none;
-  border-radius: 6px;
-  outline: none;
-  background: transparent;
-  color: var(--dsw-alias-label-caption);
-  cursor: pointer;
+.badgedName {
+  display: inline-flex;
+  align-items: center;
+  max-width: 100%;
+  gap: 4px;
+  vertical-align: baseline;
+  white-space: nowrap;
 }
 
-.pin:hover {
-  background: var(--dsw-alias-interactive-bg-hover);
-  color: var(--dsw-alias-label-secondary);
+.badgedNameText {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
-.pin:focus-visible {
-  box-shadow: 0 0 0 2px var(--dsw-alias-border-l3);
-}
-
-.pinSet {
-  color: var(--dsw-alias-state-business-primary);
-}
-
-.pinSet:hover {
-  color: var(--dsw-alias-state-business-primary);
+.badge {
+  flex: none;
 }
 
 .check {
   display: grid;
   place-items: center;
-  flex: 0 0 18px;
+  flex: 0 0 14px;
   color: var(--dsw-alias-label-primary);
 }
 
-/* Two-level root cells (figma 496:26454 .Menu_cell): 40px row, 10px side
-   padding, 8px gap, 10px radius; 14/22 label in primary, value in the
-   #81858C tertiary tone, right chevron drilling into the sub-list. */
+.check svg {
+  width: 14px;
+  height: 14px;
+}
+
+/* Two-level root cells use the same compact rhythm as the model rows. */
 .cell {
   box-sizing: border-box;
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
   width: auto;
   min-width: 100%;
-  height: 40px;
-  padding: 0 10px;
+  height: 34px;
+  padding: 0 8px;
   border: none;
-  border-radius: 10px;
+  border-radius: var(--dsw-radius-md);
   background: transparent;
   color: var(--dsw-alias-label-primary);
-  font-size: 14px;
-  line-height: 22px;
+  font-size: 13px;
+  line-height: 20px;
   cursor: pointer;
   text-align: left;
+  outline: none;
 }
 
-.cell:hover {
+.cell:focus-visible {
   background: var(--dsw-alias-interactive-bg-hover);
+}
+
+@media (hover: hover) {
+  .cell:hover {
+    background: var(--dsw-alias-interactive-bg-hover);
+  }
 }
 
 .cellLabel {
@@ -431,5 +485,7 @@
 
 .cellChevron {
   flex: 0 0 auto;
-  color: var(--dsw-alias-label-tertiary);
+  width: 12px;
+  height: 12px;
+  color: var(--dsw-alias-menu-icon);
 }

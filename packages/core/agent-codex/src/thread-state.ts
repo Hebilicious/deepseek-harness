@@ -8,14 +8,13 @@
 
 import { z } from 'zod'
 import type { Session } from '@deepseek-ai/dsh-session'
-import type SessionProjectionRegistry from '@deepseek-ai/dsh-session-projection'
-import type { ProjectionDefinition } from '@deepseek-ai/dsh-session-projection'
+import type { ProjectionDefinition, ProjectionHandle } from '@deepseek-ai/dsh-session-projection'
 
 declare module '@deepseek-ai/dsh-session/types' {
   interface SessionEventMap {
     /**
      * The Codex thread this session is bound to. Appended by the driver at
-     * bind time after `thread/start`, inside the pre-publication suffix, and
+     * bind time after `thread/start`, before the agent is published, and
      * once more when a recorded thread has no rollout left to resume. Resume
      * reads the fold to call `thread/resume` on the newest identity.
      * Log-only: the foreign thread id is not model-visible content.
@@ -24,13 +23,6 @@ declare module '@deepseek-ai/dsh-session/types' {
       /** Opaque Codex thread id (UUIDv7) returned by `thread/start`. */
       threadId: string
     }
-  }
-}
-
-declare module '@deepseek-ai/dsh-session-projection/types' {
-  interface SessionProjectionStateMap {
-    /** The session's bound Codex thread id, or null before binding. */
-    codexThread: CodexThreadState | null
   }
 }
 
@@ -67,13 +59,13 @@ export const codexThreadProjection = {
 
 /**
  * Read the session's bound Codex thread id.
- * @param projections - registry that owns the projection.
+ * @param threads - registration handle of {@link codexThreadProjection}.
  * @param session - session whose log is folded.
  * @returns the bound thread id, or `undefined` before `thread/start` committed.
  */
 export function codexThreadOf(
-  projections: Pick<SessionProjectionRegistry, 'stateOf'>,
+  threads: Pick<ProjectionHandle<CodexThreadState | null>, 'stateOf'>,
   session: Session,
 ): string | undefined {
-  return projections.stateOf(session, 'codexThread')?.threadId
+  return threads.stateOf(session)?.threadId
 }

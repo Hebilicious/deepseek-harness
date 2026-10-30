@@ -1,6 +1,43 @@
-# Bilingual-pair consistency record (docs/i18n/README.md): the git blob hash of each
-# side as of the last confirmed-consistent state. Both languages carry equal authority;
-# after editing either side, bring the other along and re-record with:
+# Bilingual-pair consistency record for README.md (docs/i18n/README.md): per heading
+# section, a hash of its English and Chinese blocks outside code blocks and generated regions.
+# After editing either side, bring the other along and re-record with:
 #   pnpm run verify-translation-pairing --write packages/client/ui-agent-harness/README.md
-README.md: 816cd83d980158af6884620e971c0a66f1033f6e
-README.zh.md: 8c9688f47d1b0037a681c33758d9656334def344
+/:
+  en: 2ed501186817d232
+  zh: 772df5e6ba42b57a
+/deepseek-ai-dsh-client-ui-agent-harness:
+  en: 7e6e84d498250e0d
+  zh: 26cd7f4ae57bd8de
+/deepseek-ai-dsh-client-ui-agent-harness/summary:
+  en: e7238faee5a12c17
+  zh: 98d0ab2f899ee5fc
+/deepseek-ai-dsh-client-ui-agent-harness/table-of-contents:
+  en: d152484eb41ac6b4
+  zh: 09388d293f9be9cb
+/deepseek-ai-dsh-client-ui-agent-harness/use-this-package:
+  en: 6211d645c60646e2
+  zh: fc8217c45f4c0cc0
+/deepseek-ai-dsh-client-ui-agent-harness/use-this-package/choosing-a-harness:
+  en: 62eb0f16abdbe714
+  zh: 92787d3dc2d3ce8d
+/deepseek-ai-dsh-client-ui-agent-harness/use-this-package/after-the-session-exists:
+  en: 6e94c4b1495eeac2
+  zh: 61af66d7d2818523
+/deepseek-ai-dsh-client-ui-agent-harness/understand-the-implementation:
+  en: 9e6796432db53feb
+  zh: a44b588312d17323
+/deepseek-ai-dsh-client-ui-agent-harness/further-exploration:
+  en: 673de6b74b34f7a3
+  zh: 2c26037b4bcd6491
+/deepseek-ai-dsh-client-ui-agent-harness/model-experience:
+  en: 55df70ed576b046e
+  zh: 58752031443d57ad
+/deepseek-ai-dsh-client-ui-agent-harness/model-experience/kv-cache-effect:
+  en: 25817aa5f4d75612
+  zh: e71c749bb4fd5aeb
+/deepseek-ai-dsh-client-ui-agent-harness/known-limitations-and-deferred-work:
+  en: 71d238c7d9fe87d0
+  zh: e84a2526176d4a46
+/deepseek-ai-dsh-client-ui-agent-harness/known-limitations-and-deferred-work/dev-note:
+  en: 18638c5b258e00a5
+  zh: 84e70384d705af79

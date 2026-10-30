@@ -23,7 +23,6 @@ import { SessionSeq, withoutUnanswerableToolCalls, type Session, type SessionEve
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import { frameSummary } from './summarizer.ts'
 import type { CheckpointFraming, SummarizationInput, SummaryResult } from './summarizer.ts'
-
 interface RegionDependencies {
   readonly meter: TokenMeter
   /** Checkpoint framing policy applied to every replacement user message. */

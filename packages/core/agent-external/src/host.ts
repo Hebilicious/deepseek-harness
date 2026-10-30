@@ -28,12 +28,13 @@ import {
   type SessionId,
 } from '@deepseek-ai/dsh-session'
 import type { SessionHandle, SessionPersistence } from '@deepseek-ai/dsh-session-persistence'
-import type { ManagedAgent } from './base.ts'
-import { agentHarnessOf, recordedHarness } from '@deepseek-ai/dsh-agent'
+import type { ProjectionHandle } from '@deepseek-ai/dsh-session-projection'
+import type { InboxState } from '@deepseek-ai/dsh-agent'
+import type { ManagedAgent, ManagedAgentProjections } from './base.ts'
+import { recordedHarness } from '@deepseek-ai/dsh-agent'
 import { assertAgentOptions, FactoryOwnership, raceAbort, raceAbortCall } from './lifecycle.ts'
 import { inboxProjectionDefinition } from './inbox.ts'
-import { externalModelSelectionProjection } from './model-selection.ts'
-import { turnBoundaryProjectionDefinition } from './turn-boundary.ts'
+import { externalModelSelectionProjection, type ExternalModelSelectionState } from './model-selection.ts'
 
 /** One session's owned write handle plus the count of events already stored through it. */
 interface StoredSession {
@@ -46,8 +47,11 @@ interface PreparedAgent<TAgent extends ManagedAgent> {
   agent: TAgent
   /** Aborts when the factory unloads, the caller cancels, or teardown begins — ends any setup await. */
   signal: AbortSignal
-  /** Enter registries and await the registry's creation edge before returning. */
-  publish(source: SessionStartSource): Promise<AgentHandle>
+  /**
+   * Enter and announce the session, run `initialize` against the now-writable
+   * session, then enter the agent registry and await its creation edge.
+   */
+  publish(source: SessionStartSource, initialize: () => Promise<void>): Promise<AgentHandle>
   /** Reverse teardown: stop the driver, unbind, unregister, unwind the scope. Memoized. */
   dispose(): Promise<void>
 }
@@ -59,8 +63,8 @@ interface PreparedAgent<TAgent extends ManagedAgent> {
  * binding (`bindSession`), turn driving, steering, injection, and interrupt.
  *
  * Construct one inside the driver Service's constructor: the host registers
- * the shared `turnBoundary` projection, registers the factory-owned ownership
- * teardown, and registers this host as the `ctx.agents` factory — all
+ * the `inbox` and `externalModelSelection` projections, the factory-owned
+ * ownership teardown, and this host as a `ctx.agents` harness — all
  * effect-scoped to the service's fiber.
  */
 /** Host-wide choices a driver makes when it mounts the shared transaction. */
@@ -71,12 +75,6 @@ export interface ExternalAgentHostOptions {
    * through the same id, so two drivers can never claim one session.
    */
   readonly harness: AgentHarness
-  /**
-   * Register the durable `model/selection` fold this host's drivers read
-   * through `ExternalAgent.currentSelection`. The in-process loop reads
-   * selection through the session controller's own fold and opts out.
-   */
-  readonly modelSelection?: boolean
   /**
    * Effect-label prefix for the units this host registers. Owners and
    * diagnostic tooling match on it, so a driver that already publishes a
@@ -102,11 +100,14 @@ export abstract class ExternalAgentHost<TAgent extends ManagedAgent> implements 
   private readonly label: string
   /** Harness identity this host registers under and stamps on its sessions. */
   private readonly harness: AgentHarness
+  /** Registrations every agent reads; awaited before the first agent is constructed. */
+  private readonly inboxProjection: Promise<ProjectionHandle<InboxState>>
+  private readonly selectionProjection: Promise<ProjectionHandle<ExternalModelSelectionState>>
 
   /**
    * @param ctx - the driver service's registration context (dependency origin for everything the host owns).
    * @param label - driver name used in lifecycle abort reasons (`"<label> is not active"`).
-   * @param options - host-wide choices: this driver's harness identity and, optionally, the model-selection fold.
+   * @param options - host-wide choices: this driver's harness identity and effect-label prefix.
    */
   constructor(ctx: Context, label: string, options: ExternalAgentHostOptions) {
     this.ownership = new FactoryOwnership(ctx.fiber, label)
@@ -114,11 +115,10 @@ export abstract class ExternalAgentHost<TAgent extends ManagedAgent> implements 
     this.effectPrefix = options.effectPrefix ?? 'externalAgentHost'
     this.label = label
     this.harness = options.harness
-    // One registration per profile, never per agent: the inbox and turn-boundary
+    // One registration per profile, never per agent: the inbox and selection
     // folds are read by every session this factory owns.
-    ctx.sessionProjections.register(inboxProjectionDefinition)
-    ctx.sessionProjections.register(turnBoundaryProjectionDefinition)
-    if (options.modelSelection !== false) ctx.sessionProjections.register(externalModelSelectionProjection)
+    this.inboxProjection = ctx.sessionProjections.register(inboxProjectionDefinition)
+    this.selectionProjection = ctx.sessionProjections.register(externalModelSelectionProjection)
     ctx.effect(() => () => this.ownership.dispose(), `${this.effectPrefix}.transactions()`)
     ctx.effect(
       () => ctx.agents.registerHarness({ ...this.harness, factory: this }),
@@ -134,6 +134,7 @@ export abstract class ExternalAgentHost<TAgent extends ManagedAgent> implements 
    * @param id - the shared agent/session identity.
    * @param options - per-agent model and request options.
    * @param session - the prepared, unpublished session.
+   * @param projections - this session's inbox and model-selection readers.
    * @returns the constructed driver agent.
    */
   protected abstract constructAgent(
@@ -141,6 +142,7 @@ export abstract class ExternalAgentHost<TAgent extends ManagedAgent> implements 
     id: SessionId,
     options: AgentOptions,
     session: Session,
+    projections: ManagedAgentProjections,
   ): TAgent
 
   /**
@@ -306,6 +308,7 @@ export abstract class ExternalAgentHost<TAgent extends ManagedAgent> implements 
     id: SessionId,
     options: AgentOptions,
     session: Session,
+    projections: ManagedAgentProjections,
     callerSignal?: AbortSignal,
     handle?: SessionHandle,
     parentAgent?: Agent,
@@ -397,7 +400,7 @@ export abstract class ExternalAgentHost<TAgent extends ManagedAgent> implements 
     let unfollowOwner: () => Promise<void> | void
     try {
       unfollowOwner = ownerCtx.effect(function* () {
-        machine = construct(hostCtx, id, options, session)
+        machine = construct(hostCtx, id, options, session, projections)
         machineReady.resolve()
         yield machine.scope.rawDispose
         yield () => {
@@ -435,16 +438,19 @@ export abstract class ExternalAgentHost<TAgent extends ManagedAgent> implements 
       return {
         agent,
         signal: abort.signal,
-        publish: async (source) => {
+        publish: async (source, initialize) => {
           publication = Promise.withResolvers<void>()
           try {
             assertLive()
-            detachSession = agent.ctx.sessions.enter(session)
-            // The mounted backend routes announced live events into the active
+            // A store-owned session accepts appends only once announced. The
+            // mounted backend routes announced live events into the active
             // write handle by session id; the driver only owns the handle itself.
-            detachAgent = hostCtx.agents.enter(agent, parentAgent)
+            detachSession = agent.ctx.sessions.enter(session)
             agent.ctx.sessions.announce(session)
             assertLive()
+            await initialize()
+            assertLive()
+            detachAgent = hostCtx.agents.enter(agent, parentAgent)
             // The registry's creation edge owns `agent/created` and awaits its
             // listeners; teardown above waits for this publication to settle.
             await hostCtx.agents.announce(agent, source, abort.signal)
@@ -484,7 +490,13 @@ export abstract class ExternalAgentHost<TAgent extends ManagedAgent> implements 
     const session = ownedPreparation.session
     let prepared: PreparedAgent<TAgent>
     try {
-      prepared = this.prepare(ownerCtx, id, agentOptions, session, signal, stored?.handle, parentAgent)
+      const inbox = await this.inboxProjection
+      const selection = await this.selectionProjection
+      const projections: ManagedAgentProjections = {
+        inbox: inbox.readerFor(session),
+        modelSelection: () => selection.stateOf(session).selection,
+      }
+      prepared = this.prepare(ownerCtx, id, agentOptions, session, projections, signal, stored?.handle, parentAgent)
     } catch (error: unknown) {
       await stored?.handle.close().catch(() => {})
       throw error
@@ -496,15 +508,18 @@ export abstract class ExternalAgentHost<TAgent extends ManagedAgent> implements 
       // the inbox kept for teardown) runs in a defined phase.
       return await prepared.agent.runMaintenance(async () => {
         try {
-          const setupCommit = await raceAbort(setup?.(prepared.agent.ctx, prepared.agent), prepared.signal, id)
-          setupCommit?.commit()
-          // Binding runs unpublished: a rejected harness handshake (unresumable
-          // thread, refused session) rolls the transaction back without ever
-          // publishing either identity.
-          await raceAbort(prepared.agent.bind(prepared.signal), prepared.signal, id)
-          this.recordHarness(session)
+          // The seed is stored before the session is entered; later appends
+          // reach the handle through the live event feed.
           await this.appendUnstoredSuffix(stored, session)
-          return await prepared.publish(source)
+          return await prepared.publish(source, async () => {
+            const setupCommit = await raceAbort(setup?.(prepared.agent.ctx, prepared.agent), prepared.signal, id)
+            setupCommit?.commit()
+            // Binding runs before the agent is published: a rejected harness
+            // handshake (unresumable thread, refused session) rolls the
+            // transaction back before the agent identity is registered.
+            await raceAbort(prepared.agent.bind(prepared.signal), prepared.signal, id)
+            this.recordHarness(session)
+          })
         } catch (error: unknown) {
           // Teardown owns inbox cleanup and may already have removed its projection.
           prepared.agent.cancel({ kind: 'disposed' }, { keepInbox: true })
@@ -521,10 +536,10 @@ export abstract class ExternalAgentHost<TAgent extends ManagedAgent> implements 
 
   /**
    * Take a fresh session's write ownership when persistence is mounted.
-   * Nothing is appended here: the constructor seed and the unpublished setup
-   * suffix are stored by {@link appendUnstoredSuffix} at the publication commit
-   * point, so a failed or cancelled setup closes an unmaterialized handle and
-   * leaves no stored residue — the same id can be created again.
+   * Nothing is appended here: the constructor seed is stored by
+   * {@link appendUnstoredSuffix} before the session is entered, and setup,
+   * binding, and the harness record reach the handle through the live event
+   * feed; creation failure retains any events already written to the handle.
    * @param session - the unpublished session to store.
    * @param signal - optional cancellation forwarded to the backend create.
    * @returns the owned handle and stored cursor, or `undefined` without a backend.
@@ -540,23 +555,22 @@ export abstract class ExternalAgentHost<TAgent extends ManagedAgent> implements 
   }
 
   /**
-   * Record which harness owns this session, once, inside the pre-publication
-   * suffix. A resumed session that already names its harness keeps the record
-   * it has: one session is never handed from one harness to another, and the
-   * resume check refused that case before publication.
-   * @param session - the unpublished session about to be published.
+   * Record which harness owns this session, once, before the agent is
+   * published. A resumed session that already names its harness keeps the
+   * record it has: one session is never handed from one harness to another,
+   * and the resume check refused that case before publication.
+   * @param session - the announced session whose agent is about to be published.
    */
   private recordHarness(session: Session): void {
-    if (agentHarnessOf(this.runtime.ctx.sessionProjections, session) !== undefined) return
+    if (this.runtime.ctx.agents.harnessOf(session) !== undefined) return
     session.append('agent/harness', { harness: this.harness.id })
   }
 
   /**
    * Durably store the session events appended since the last stored cursor.
-   * Pre-publication appends (constructor seed markers, setup-window events,
-   * driver binding records) never re-emit through `session/event`, so
-   * publication must flush them through the handle before live events start
-   * routing into it.
+   * Seed events (a resumed log's crash closers, a fork's inherited prefix)
+   * never re-emit through `session/event`, so they are flushed through the
+   * handle before the session is entered and live events start routing into it.
    * @param stored - the session's owned handle and stored cursor, if any.
    * @param session - the unpublished session whose suffix is stored.
    */

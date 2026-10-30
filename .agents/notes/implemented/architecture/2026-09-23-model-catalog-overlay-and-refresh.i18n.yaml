@@ -1,6 +1,22 @@
-# Bilingual-pair consistency record (docs/i18n/README.md): the git blob hash of each
-# side as of the last confirmed-consistent state. Both languages carry equal authority;
-# after editing either side, bring the other along and re-record with:
+# Bilingual-pair consistency record for 2026-09-23-model-catalog-overlay-and-refresh.md (docs/i18n/README.md): per heading
+# section, a hash of its English and Chinese blocks outside code blocks and generated regions.
+# After editing either side, bring the other along and re-record with:
 #   pnpm run verify-translation-pairing --write .agents/notes/implemented/architecture/2026-09-23-model-catalog-overlay-and-refresh.md
-2026-09-23-model-catalog-overlay-and-refresh.md: 0929f569220f0f5fd811bdeab7f293804d536894
-2026-09-23-model-catalog-overlay-and-refresh.zh.md: b086d5651d874b57dbfdac22f83ace52fa20ce32
+/agent-note-model-catalog-overlay-and-explicit-refresh:
+  en: 1598ddccbe67ccde
+  zh: fe1a128b8f41b466
+/agent-note-model-catalog-overlay-and-explicit-refresh/problem:
+  en: aa4e028e041aeb98
+  zh: 35a5250b8613f3fa
+/agent-note-model-catalog-overlay-and-explicit-refresh/decision:
+  en: 80f481a45564996b
+  zh: ae0f0c94a9b5b249
+/agent-note-model-catalog-overlay-and-explicit-refresh/alternatives-considered:
+  en: 11c3457c1ab7f209
+  zh: 973612484d33919b
+/agent-note-model-catalog-overlay-and-explicit-refresh/consequences:
+  en: b3481ff9000ea6b4
+  zh: 22503012e584b39f
+/agent-note-model-catalog-overlay-and-explicit-refresh/testing:
+  en: 3210be68ee553bf3
+  zh: 9333ccf1d2910b6f

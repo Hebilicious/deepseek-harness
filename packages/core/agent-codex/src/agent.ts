@@ -13,7 +13,7 @@ import type {
   AgentHarness,
   AgentOptions,
 } from '@deepseek-ai/dsh-agent'
-import type { AssistantStreamAttempt } from '@deepseek-ai/dsh-agent-external'
+import type { AssistantStreamAttempt, ManagedAgentProjections } from '@deepseek-ai/dsh-agent-external'
 import {
   ExternalAgent,
   type ExternalTurnDrive,
@@ -33,6 +33,7 @@ import {
 import type { SandboxMode } from '@deepseek-ai/dsh-sandbox'
 import { JsonRpcResponseError } from '@deepseek-ai/dsh-sdk-protocol'
 import type { Session, SessionId, TurnEndReason } from '@deepseek-ai/dsh-session'
+import type { ProjectionHandle } from '@deepseek-ai/dsh-session-projection'
 import type { JsonValue } from '@deepseek-ai/dsh-util-values'
 import type { CodexAppServerConnection } from './connection.ts'
 import {
@@ -44,7 +45,7 @@ import {
   type JsonObject,
 } from './protocol.ts'
 import { CODEX_PREFIX, type CodexAppServerRuntime, type CodexThreadPeer } from './runtime.ts'
-import { codexThreadOf } from './thread-state.ts'
+import { codexThreadOf, type CodexThreadState } from './thread-state.ts'
 
 /** Per-driver deployment defaults the session's durable knobs override. */
 export interface CodexAgentConfig {
@@ -153,10 +154,13 @@ export class CodexAgent extends ExternalAgent implements CodexThreadPeer {
     id: SessionId,
     options: AgentOptions,
     session: Session,
+    projections: ManagedAgentProjections,
     private readonly runtime: CodexAppServerRuntime,
     private readonly driverConfig: CodexAgentConfig,
+    /** The host's `codexThread` registration, ready before the first bind reads it. */
+    private readonly threads: Promise<ProjectionHandle<CodexThreadState | null>>,
   ) {
-    super(hostCtx, id, options, session)
+    super(hostCtx, id, options, session, projections)
   }
 
   // ---- ExternalAgent harness surface ----
@@ -185,7 +189,7 @@ export class CodexAgent extends ExternalAgent implements CodexThreadPeer {
       permission: this.effectivePermissions(),
       selection: this.effectiveSelection(),
     }
-    const recorded = codexThreadOf(this.ctx.sessionProjections, this.session)
+    const recorded = codexThreadOf(await this.threads, this.session)
     // The durable binding is appended at bind time, so a session that was
     // created and never prompted owns a thread with no rollout on disk; that
     // thread cannot be resumed and is replaced by a fresh one.
@@ -569,9 +573,7 @@ export class CodexAgent extends ExternalAgent implements CodexThreadPeer {
       active.completion.reject(error)
       return
     }
-    /* v8 ignore next -- the host registers the turnBoundary unit for every
-       agent session this runtime serves, so the optional read always resolves */
-    const turn = this.hostCtx.sessionProjections.stateOf(this.session, 'turnBoundary')?.lastTurn ?? 0
+    const turn = this.hostCtx.agents.turnBoundaryOf(this.session).lastTurn
     this.dispatch.emit('agent/error', { turn, step: 0, error })
   }
 

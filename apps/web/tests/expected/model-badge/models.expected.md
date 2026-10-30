@@ -1,0 +1,19 @@
+- menu "模型":
+  - group "DeepSeek 账号":
+    - text: DeepSeek 账号
+    - menuitemradio "DeepSeek-V4.1-Flash 1017"
+    - button "固定 DeepSeek-V4.1-Flash"
+  - group "DeepSeek":
+    - text: DeepSeek
+    - menuitemradio "DeepSeek-V4.1-Flash 新" [checked]
+    - button "固定 DeepSeek-V4.1-Flash"
+    - menuitemradio "DeepSeek-V4-Pro"
+    - button "固定 DeepSeek-V4-Pro"
+    - menuitemradio "DeepSeek model with a very long release and capability description that exceeds the selector width Preview"
+    - button "固定 DeepSeek model with a very long release and capability description that exceeds the selector width"
+    - menuitemradio "Invalid badge model"
+    - button "固定 Invalid badge model"
+  - group "External":
+    - text: External
+    - menuitemradio "DeepSeek-V4.1-Flash"
+    - button "固定 DeepSeek-V4.1-Flash"

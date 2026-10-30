@@ -9,12 +9,13 @@
 
 import type { Context } from '@deepseek-ai/cordis'
 import type { AgentOptions } from '@deepseek-ai/dsh-agent'
-import { ExternalAgentHost } from '@deepseek-ai/dsh-agent-external'
+import { ExternalAgentHost, type ManagedAgentProjections } from '@deepseek-ai/dsh-agent-external'
 import type { Session, SessionId } from '@deepseek-ai/dsh-session'
+import type { ProjectionHandle } from '@deepseek-ai/dsh-session-projection'
 import { AcpAgent, type AcpAgentConfig } from './agent.ts'
 import { acpPrefix } from './protocol.ts'
 import type { AcpRuntime } from './runtime.ts'
-import { acpSessionProjection } from './session-state.ts'
+import { acpSessionProjection, type AcpSessionState } from './session-state.ts'
 
 /**
  * One harness's ACP factory host. Construction registers the `acpSession`
@@ -24,6 +25,9 @@ import { acpSessionProjection } from './session-state.ts'
  * transaction.
  */
 export class AcpAgentHost extends ExternalAgentHost<AcpAgent> {
+  /** The `acpSession` registration; agents await it when they attach. */
+  private readonly bindings: Promise<ProjectionHandle<AcpSessionState | null>>
+
   /**
    * @param ctx - the plugin service's registration context.
    * @param runtime - this harness's shared ACP runtime.
@@ -38,7 +42,7 @@ export class AcpAgentHost extends ExternalAgentHost<AcpAgent> {
       harness: agentConfig.harness,
       effectPrefix: `acpHarness.${agentConfig.harness.id}`,
     })
-    ctx.sessionProjections.register(acpSessionProjection)
+    this.bindings = ctx.sessionProjections.register(acpSessionProjection)
   }
 
   /** Construct the driver around this harness's shared runtime and resolved config. */
@@ -47,7 +51,8 @@ export class AcpAgentHost extends ExternalAgentHost<AcpAgent> {
     id: SessionId,
     options: AgentOptions,
     session: Session,
+    projections: ManagedAgentProjections,
   ): AcpAgent {
-    return new AcpAgent(hostCtx, id, options, session, this.acpRuntime, this.agentConfig)
+    return new AcpAgent(hostCtx, id, options, session, projections, this.acpRuntime, this.agentConfig, this.bindings)
   }
 }

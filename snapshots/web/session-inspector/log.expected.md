@@ -1,0 +1,53 @@
+- table "Raw log":
+  - rowgroup:
+    - row "Index Type Filter types T/S Time (UTC) Data":
+      - columnheader "Index"
+      - columnheader "Type Filter types":
+        - text: Type
+        - button "Filter types" [pressed]
+      - columnheader "T/S"
+      - columnheader "Time (UTC)"
+      - columnheader "Data"
+  - rowgroup:
+    - row "5 Collapse children turn/start 1 {{time}} 1":
+      - cell "5"
+      - cell "Collapse children turn/start":
+        - button "Collapse children" [expanded]: ▾
+        - button "turn/start"
+      - cell "1"
+      - cell "{{time}}"
+      - cell "1":
+        - button "1"
+    - 'row "7 Collapse children step/start 1/1 {{time}} turn: 1 · step: 1"':
+      - cell "7"
+      - cell "Collapse children step/start":
+        - button "Collapse children" [expanded]: ▾
+        - button "step/start"
+      - cell "1/1"
+      - cell "{{time}}"
+      - 'cell "turn: 1 · step: 1"':
+        - 'button "turn: 1 · step: 1"'
+    - 'row "9 user/message {{time}} data: content: [1] · source: {…} · role: user · id: {{uuid}} · surfaceOp: append"':
+      - cell "9"
+      - cell "user/message":
+        - button "user/message"
+      - cell
+      - cell "{{time}}"
+      - 'cell "data: content: [1] · source: {…} · role: user · id: {{uuid}} · surfaceOp: append"':
+        - 'button "data: content: [1] · source: {…} · role: user · id: {{uuid}} · surfaceOp: append"'
+    - 'row "10 user/message {{time}} data: content: [1] · source: {…} · role: user · id: {{uuid}} · surfaceOp: append"':
+      - cell "10"
+      - cell "user/message":
+        - button "user/message"
+      - cell
+      - cell "{{time}}"
+      - 'cell "data: content: [1] · source: {…} · role: user · id: {{uuid}} · surfaceOp: append"':
+        - 'button "data: content: [1] · source: {…} · role: user · id: {{uuid}} · surfaceOp: append"'
+    - 'row "11 user/message {{time}} data: content: [1] · source: {…} · role: user · id: {{uuid}} · surfaceOp: append"':
+      - cell "11"
+      - cell "user/message":
+        - button "user/message"
+      - cell
+      - cell "{{time}}"
+      - 'cell "data: content: [1] · source: {…} · role: user · id: {{uuid}} · surfaceOp: append"':
+        - 'button "data: content: [1] · source: {…} · role: user · id: {{uuid}} · surfaceOp: append"'

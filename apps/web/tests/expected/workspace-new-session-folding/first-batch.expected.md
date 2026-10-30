@@ -1,0 +1,20 @@
+- tree "Sessions":
+  - treeitem "{{workspace}}" [expanded]
+  - treeitem "DSH Loop New Session" [selected]:
+    - img "DSH Loop"
+    - text: New Session
+  - treeitem "Untitled 1min"
+  - treeitem "Untitled 1min"
+  - treeitem "Untitled 1min"
+  - treeitem "Untitled 1min"
+  - treeitem "Untitled 1min"
+  - treeitem "Untitled Session actions for Untitled Archive session Pin session":
+    - text: Untitled
+    - button "Session actions for Untitled"
+    - button "Archive session"
+    - button "Pin session"
+  - treeitem "Untitled 1min"
+  - treeitem "Untitled 1min"
+  - treeitem "Untitled 1min"
+  - treeitem "Untitled 1min"
+  - button "Show 6 more sessions"

@@ -1,6 +1,22 @@
-# Bilingual-pair consistency record (docs/i18n/README.md): the git blob hash of each
-# side as of the last confirmed-consistent state. Both languages carry equal authority;
-# after editing either side, bring the other along and re-record with:
+# Bilingual-pair consistency record for 2026-09-21-unanswered-tool-call-recovery.md (docs/i18n/README.md): per heading
+# section, a hash of its English and Chinese blocks outside code blocks and generated regions.
+# After editing either side, bring the other along and re-record with:
 #   pnpm run verify-translation-pairing --write .agents/notes/implemented/architecture/2026-09-21-unanswered-tool-call-recovery.md
-2026-09-21-unanswered-tool-call-recovery.md: c3a641e482ff8012266238e4866b597c22ecf4c9
-2026-09-21-unanswered-tool-call-recovery.zh.md: 8ee92967ea8c72c6b29014e74624188de0d083fd
+/agent-note-recover-unanswered-assistant-tool-calls:
+  en: dd537b416463c6f7
+  zh: e9d10611032ba052
+/agent-note-recover-unanswered-assistant-tool-calls/problem:
+  en: c0b364b039f2bf99
+  zh: fcd3399797ad6d9a
+/agent-note-recover-unanswered-assistant-tool-calls/decision:
+  en: 1e1b906339e5cd87
+  zh: b03789452f9de050
+/agent-note-recover-unanswered-assistant-tool-calls/alternatives-considered:
+  en: f6a24a7c49e1f19a
+  zh: 588d13199ae4c2d1
+/agent-note-recover-unanswered-assistant-tool-calls/consequences:
+  en: 411d5fb3928768d8
+  zh: 94ab327cceb0f841
+/agent-note-recover-unanswered-assistant-tool-calls/verification:
+  en: 82bb010d071ab827
+  zh: 803bbc998dbdf705

@@ -10,7 +10,7 @@ Status: implemented
 
 于是一次希望与交互式 Codex 会话使用不同强度的委派只剩坏选项。把提供方配置项指向第二个 `CODEX_HOME` 确实能让子级读取另一份配置，但那个 home 需要自己的身份验证，而且它的 `auth-locks` 目录与另一份账号 token 放在一起。改共享的 `~/.codex/config.toml` 又会改变每一个交互式 Codex 会话。
 
-[产品 subagent 后端](2026-08-04-claude-code-and-codex-subagent-backends.zh.md)这篇笔记拥有该提供方既有形态：每次运行一个新进程、新线程、新轮次，Codex 原生配置是权威。[凭证记录与授权流程](../architecture/2026-08-13-credential-records-and-authorization-flows.zh.md)这篇笔记拥有"harness 为何不读取其他工具的凭据文件"这一决定。
+[产品 subagent 后端](../../archived/feature/2026-08-04-claude-code-and-codex-subagent-backends.md)这篇笔记拥有该提供方既有形态：每次运行一个新进程、新线程、新轮次，Codex 原生配置是权威。[凭证记录与授权流程](../architecture/2026-08-13-credential-records-and-authorization-flows.zh.md)这篇笔记拥有"harness 为何不读取其他工具的凭据文件"这一决定。
 
 ## Decision
 

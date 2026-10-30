@@ -6,11 +6,12 @@ import {
   DEFAULT_CATALOG_REFRESH_HOURS,
   DEFAULT_CATALOG_URL,
   resolveProfiles,
+  type Options,
 } from '../src/config.ts'
 
 /** Validate one hand-declared route, with the caller's fields layered onto it. */
 const routeWith = (profile: Record<string, unknown>): (() => unknown) =>
-  () => Config({
+  () => ({ providers: Config({
     providers: {
       'acme-gateway': {
         api: 'openai-completions',
@@ -19,7 +20,7 @@ const routeWith = (profile: Record<string, unknown>): (() => unknown) =>
         ...profile,
       },
     },
-  })
+  }).providers.get() })
 
 /** Validate that route with the caller's fields on its single model entry. */
 const configWith = (model: Record<string, unknown>): (() => unknown) =>
@@ -75,7 +76,7 @@ describe('modality schema boundary', () => {
     // well-typed, and the namespace validator is what refuses it. Asserting
     // only the schema would report this route as writable.
     expect(routeWith({ defaultInput: [] })).not.toThrow()
-    expect(() => { assertServiceable(routeWith({ defaultInput: [] })() as Config) })
+    expect(() => { assertServiceable(routeWith({ defaultInput: [] })() as Options) })
       .toThrow(/defaultInput must name at least one modality/)
   })
 
@@ -108,7 +109,7 @@ describe('request image policy bounds', () => {
           [field]: value,
         },
       },
-    } as unknown as Config
+    } as Options
     expect(() => {
       assertServiceable(programmatic)
     }).toThrow(message)
@@ -119,9 +120,9 @@ describe('catalog overlay configuration', () => {
   it('leaves an absent section off instead of defaulting it on', () => {
     // schemastery materializes an absent object as `{}`, which is why the
     // switch is a union: an unconfigured deployment must not fetch a directory.
-    expect(Config({})).not.toHaveProperty('catalogOverlay')
-    expect(Config({ catalogOverlay: false }).catalogOverlay).toBe(false)
-    expect(Config({ catalogOverlay: true }).catalogOverlay).toBe(true)
+    expect(Config({}).catalogOverlay.get()).toBeUndefined()
+    expect(Config({ catalogOverlay: false }).catalogOverlay.get()).toBe(false)
+    expect(Config({ catalogOverlay: true }).catalogOverlay.get()).toBe(true)
   })
 
   it('materializes the published directory and the refresh interval', () => {

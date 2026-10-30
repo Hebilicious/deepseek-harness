@@ -66,7 +66,7 @@ export function agentHarnessOf(
   projections: Pick<SessionProjectionRegistry, 'stateOf'>,
   session: Session,
 ): string | undefined {
-  return projections.stateOf(session, 'agentHarness') ?? undefined
+  return (projections.stateOf(session, 'agentHarness') as string | null | undefined) ?? undefined
 }
 
 /**

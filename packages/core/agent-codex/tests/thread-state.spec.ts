@@ -7,7 +7,6 @@
 
 import { describe, expect, it } from 'vitest'
 import { SessionSeq, type SessionEvent } from '@deepseek-ai/dsh-session'
-import type SessionProjectionRegistry from '@deepseek-ai/dsh-session-projection'
 import { codexThreadOf, codexThreadProjection } from '../src/thread-state.ts'
 
 /** The projection's fold, destructured so the call is not read as `Function.apply`. */
@@ -52,14 +51,10 @@ describe('codexThreadProjection', () => {
 
 describe('codexThreadOf', () => {
   it('reads the folded thread id', () => {
-    const projections = {
-      stateOf: () => ({ threadId: 'thread-1' }),
-    } as unknown as Pick<SessionProjectionRegistry, 'stateOf'>
-    expect(codexThreadOf(projections, {} as never)).toBe('thread-1')
+    expect(codexThreadOf({ stateOf: () => ({ threadId: 'thread-1' }) }, {} as never)).toBe('thread-1')
   })
 
   it('answers undefined before any binding', () => {
-    const projections = { stateOf: () => null } as unknown as Pick<SessionProjectionRegistry, 'stateOf'>
-    expect(codexThreadOf(projections, {} as never)).toBeUndefined()
+    expect(codexThreadOf({ stateOf: () => null }, {} as never)).toBeUndefined()
   })
 })

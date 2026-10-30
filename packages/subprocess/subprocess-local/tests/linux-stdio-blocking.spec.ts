@@ -74,14 +74,14 @@ function expectCompleteBlockingWrite(report: TargetReport): void {
 }
 
 const linux = process.platform === 'linux'
-const scopeAvailable = linux && probeLinuxNative()
+const literalArgv = linux ? probeLinuxNative() : undefined
 
 describe.skipIf(!linux)('Linux target standard descriptors', () => {
-  it.skipIf(!scopeAvailable)('keeps a scope-launched target writing on blocking descriptors', async () => {
+  it.skipIf(literalArgv === undefined)('keeps a scope-launched target writing on blocking descriptors', async () => {
     const request = spec()
     const report = await runTarget(bindManagedProcess(
       request,
-      launchLinuxScope(request, targetEnvironment(request)),
+      launchLinuxScope(request, targetEnvironment(request), literalArgv ?? []),
     ))
     expectCompleteBlockingWrite(report)
   }, 30_000)

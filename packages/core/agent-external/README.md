@@ -51,13 +51,13 @@ class MyAgent extends ExternalAgent {
 }
 
 class MyHost extends ExternalAgentHost<MyAgent> {
-  protected constructAgent(hostCtx, id, options, session): MyAgent {
-    return new MyAgent(hostCtx, id, options, session)
+  protected constructAgent(hostCtx, id, options, session, projections): MyAgent {
+    return new MyAgent(hostCtx, id, options, session, projections)
   }
 }
 ```
 
-Constructing `MyHost` inside a service constructor registers the `turnBoundary` projection, the factory-owned lifecycle teardown, and the factory slot itself, all effect-scoped to that service's fiber. `bind()` runs before publication, so a rejected handshake rolls the whole creation back and the session id stays reusable.
+Constructing `MyHost` inside a service constructor registers the `inbox` and `externalModelSelection` projections, the factory-owned lifecycle teardown, and the factory slot itself, all effect-scoped to that service's fiber. `bind()` runs before publication, so a rejected handshake rolls the whole creation back and the session id stays reusable.
 
 -----
 
@@ -73,11 +73,11 @@ The package splits one agent into a session-facing half and a harness-facing hal
 
 ### Lifecycle transaction
 
-`createAgent()` prepares a private session, takes durable write ownership through `persistence.create()` when a backend is mounted, constructs the driver on the owner's fiber, runs caller setup, awaits `bind()` unpublished, flushes the pre-publication suffix, and only then enters both registries, announces the session and agent, emits `agent/session-start`, and returns the published handle. `resume()` opens the write handle first — which excludes a concurrent resume of the same id — reads the physically valid log, appends `interruptedTurnClosers`, and runs the same publish path with source `resume`. Any failure, cancellation, or owner disposal rolls the transaction back without publishing either identity, and the shared teardown is memoized: stop the driver, `unbind()`, unwind the agent scope, drain and close the write handle, then detach both registries.
+`createAgent()` prepares a private session, takes durable write ownership through `persistence.create()` when a backend is mounted, constructs the driver on the owner's fiber, stores the seed, enters and announces the session, runs caller setup, awaits `bind()`, records the harness, and only then enters the agent registry, announces the agent, emits `agent/session-start`, and returns the published handle. `resume()` opens the write handle first — which excludes a concurrent resume of the same id — reads the physically valid log, appends `interruptedTurnClosers`, and runs the same publish path with source `resume`. Any failure, cancellation, or owner disposal rolls the transaction back without publishing either identity, and the shared teardown is memoized: stop the driver, `unbind()`, unwind the agent scope, drain and close the write handle, then detach both registries.
 
 ### Durable inbox and projections
 
-`DurableAgentInbox` stores pending input in the session log: every mutation commits one `agent/inbox/spliced` event and publishes `agent/inbox/inserted`, `agent/inbox/claimed`, or `agent/inbox/discarded`, so a claim survives restart and replay. The host registers `turnBoundary` (open turn, last step boundary, last turn) and, unless the driver opts out, `externalModelSelection`, the fold of the durable `model/selection` records the picker writes. `dsh-agent-loop` opts out because it reads selection through the session controller's own fold.
+`DurableAgentInbox` stores pending input in the session log: every mutation commits one `agent/inbox/spliced` event and publishes `agent/inbox/inserted`, `agent/inbox/claimed`, or `agent/inbox/discarded`, so a claim survives restart and replay. The host registers `externalModelSelection`, the fold of the durable `model/selection` records that `agent.model.select()` writes; unlike the in-process loop's `modelSelection` fold, a request header never retires the choice, because a harness may report another model than it was sent. Turn positions come from `ctx.agents.turnBoundaryOf()`.
 
 ### Turn projection
 
@@ -96,7 +96,6 @@ The package splits one agent into a session-facing half and a harness-facing hal
 | [`src/host.ts`](src/host.ts) | `ExternalAgentHost`: create/resume/publish transaction, registrations, reverse teardown |
 | [`src/lifecycle.ts`](src/lifecycle.ts) | `FactoryOwnership`, abort races, agent-option validation |
 | [`src/inbox.ts`](src/inbox.ts) | `DurableAgentInbox` and the `inbox` projection |
-| [`src/turn-boundary.ts`](src/turn-boundary.ts) | The shared `turnBoundary` projection |
 | [`src/model-selection.ts`](src/model-selection.ts) | The `externalModelSelection` fold |
 | [`src/projector.ts`](src/projector.ts) | `ExternalTurnProjector`: assistant streams, tool pairs, route logging |
 | [`src/assistant-stream.ts`](src/assistant-stream.ts) | `AssistantStreamAttempt`: live frames plus the durable compact stream |

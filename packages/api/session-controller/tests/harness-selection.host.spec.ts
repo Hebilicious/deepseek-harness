@@ -77,7 +77,7 @@ async function world(): Promise<HarnessWorld> {
   await ctx.plugin(SessionStore)
   installSessionReadTestServices(ctx)
   await ctx.plugin(AgentRegistry)
-  ctx.provide('workspaceRegistry', { get: () => undefined, list: () => [] } as never)
+  ctx.provide('workspaceRegistry', { get: () => undefined, list: () => [], archivedSessionIds: [] } as never)
   const stored = new Map<SessionId, { meta: SessionHeader; events: readonly SessionEvent[] }>()
   ctx.provide('sessionPersistence', testSessionPersistence(ctx, {
     list: () => Promise.resolve([...stored.values()].map(entry => entry.meta)),
@@ -87,7 +87,7 @@ async function world(): Promise<HarnessWorld> {
     defaultModelSelection: () => ({ provider: 'fixture', model: 'fixture-model' }),
     cwd: CWD,
   }
-  const controller = createSessionTestController(ctx, defaults)
+  const controller = await createSessionTestController(ctx, defaults)
 
   const publish = async (
     ownerCtx: Context,
@@ -152,7 +152,7 @@ async function world(): Promise<HarnessWorld> {
   return {
     ctx,
     controller,
-    remote: createSessionTestRemote(ctx, defaults),
+    remote: await createSessionTestRemote(ctx, defaults),
     mount,
     mountFailingResume,
     persist: (header, events = []) => { stored.set(header.id, { meta: header, events }) },

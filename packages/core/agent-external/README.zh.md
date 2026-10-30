@@ -51,13 +51,13 @@ class MyAgent extends ExternalAgent {
 }
 
 class MyHost extends ExternalAgentHost<MyAgent> {
-  protected constructAgent(hostCtx, id, options, session): MyAgent {
-    return new MyAgent(hostCtx, id, options, session)
+  protected constructAgent(hostCtx, id, options, session, projections): MyAgent {
+    return new MyAgent(hostCtx, id, options, session, projections)
   }
 }
 ```
 
-在服务构造函数中构造 `MyHost` 会注册 `turnBoundary` 投影、工厂持有的生命周期 teardown，以及工厂槽位本身，全部以该服务的 fiber 为作用域。`bind()` 在发布之前运行，因此被拒绝的握手会回滚整个创建过程，该会话 id 仍可再次使用。
+在服务构造函数中构造 `MyHost` 会注册 `inbox` 与 `externalModelSelection` 投影、工厂持有的生命周期 teardown，以及工厂槽位本身，全部以该服务的 fiber 为作用域。`bind()` 在发布之前运行，因此被拒绝的握手会回滚整个创建过程，该会话 id 仍可再次使用。
 
 -----
 
@@ -73,11 +73,11 @@ class MyHost extends ExternalAgentHost<MyAgent> {
 
 ### 生命周期事务
 
-挂载后端时，`createAgent()` 准备私有会话、通过 `persistence.create()` 取得持久写所有权、在所有者 fiber 上构造驱动器、运行调用方 setup、在未发布状态下等待 `bind()`、冲刷发布前的后缀，此后才进入两个注册表、宣告会话与 agent、发出 `agent/session-start`，并返回已发布的句柄。`resume()` 先打开写句柄（从而排除同 id 的并发恢复）、读取物理上有效的日志、追加 `interruptedTurnClosers`，并以 `resume` 来源走同一条发布路径。任何失败、取消或所有者 dispose 都会回滚事务而不发布任一身份；共享 teardown 是记忆化的：停止驱动器、`unbind()`、撤销 agent 作用域、排空并关闭写句柄，最后 detach 两个注册表。
+挂载后端时，`createAgent()` 准备私有会话、通过 `persistence.create()` 取得持久写所有权、在所有者 fiber 上构造驱动器、存储种子事件、进入并宣告会话、运行调用方 setup、等待 `bind()`、记录 harness，此后才进入 agent 注册表、宣告 agent、发出 `agent/session-start`，并返回已发布的句柄。`resume()` 先打开写句柄（从而排除同 id 的并发恢复）、读取物理上有效的日志、追加 `interruptedTurnClosers`，并以 `resume` 来源走同一条发布路径。任何失败、取消或所有者 dispose 都会回滚事务而不发布任一身份；共享 teardown 是记忆化的：停止驱动器、`unbind()`、撤销 agent 作用域、排空并关闭写句柄，最后 detach 两个注册表。
 
 ### 持久收件箱与投影
 
-`DurableAgentInbox` 把待处理输入存进会话日志：每次变更提交一条 `agent/inbox/spliced` 事件，并发出 `agent/inbox/inserted`、`agent/inbox/claimed` 或 `agent/inbox/discarded`，因此领取结果在重启与回放后依然存在。host 注册 `turnBoundary`（打开的轮次、最后的步骤边界、最后的轮次），并在驱动器未选择退出时注册 `externalModelSelection`，即选择器写入的持久 `model/selection` 记录的折叠区。`dsh-agent-loop` 选择退出，因为它通过会话控制器自带的折叠区读取模型选择。
+`DurableAgentInbox` 把待处理输入存进会话日志：每次变更提交一条 `agent/inbox/spliced` 事件，并发出 `agent/inbox/inserted`、`agent/inbox/claimed` 或 `agent/inbox/discarded`，因此领取结果在重启与回放后依然存在。host 注册 `externalModelSelection`，即 `agent.model.select()` 写入的持久 `model/selection` 记录的折叠区；与进程内循环的 `modelSelection` 折叠区不同，请求头从不撤销该选择，因为外部 harness 报告的模型可能与发送给它的不同。轮次位置来自 `ctx.agents.turnBoundaryOf()`。
 
 ### 轮次投影
 
@@ -96,7 +96,6 @@ class MyHost extends ExternalAgentHost<MyAgent> {
 | [`src/host.ts`](src/host.ts) | `ExternalAgentHost`：create/resume/publish 事务、注册、反向 teardown |
 | [`src/lifecycle.ts`](src/lifecycle.ts) | `FactoryOwnership`、中止竞态、agent 选项校验 |
 | [`src/inbox.ts`](src/inbox.ts) | `DurableAgentInbox` 与 `inbox` 投影 |
-| [`src/turn-boundary.ts`](src/turn-boundary.ts) | 共享的 `turnBoundary` 投影 |
 | [`src/model-selection.ts`](src/model-selection.ts) | `externalModelSelection` 折叠区 |
 | [`src/projector.ts`](src/projector.ts) | `ExternalTurnProjector`：assistant 流、工具事件对、路由日志 |
 | [`src/assistant-stream.ts`](src/assistant-stream.ts) | `AssistantStreamAttempt`：实时帧加持久紧凑流 |

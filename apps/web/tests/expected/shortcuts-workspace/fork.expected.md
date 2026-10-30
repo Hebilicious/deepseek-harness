@@ -1,0 +1,13 @@
+- text: Workspaces
+- button "Search sessions"
+- textbox "Search session names"
+- button "View options"
+- button "Add workspace"
+- tree "Sessions":
+  - treeitem "Ungrouped" [expanded]
+  - treeitem "DSH Loop T4 source (1) now":
+    - img "DSH Loop"
+    - text: T4 source (1) now
+  - treeitem "DSH Loop T4 source 1min" [selected]:
+    - img "DSH Loop"
+    - text: T4 source 1min

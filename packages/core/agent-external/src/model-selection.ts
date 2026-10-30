@@ -1,42 +1,33 @@
 /**
  * Internal projection folding the durable `model/selection` records the
- * session picker writes. The `SessionEventMap` member merges in only where
- * `dsh-api-session-controller` compiles, so the fold validates the payload
- * structurally at the log boundary instead of narrowing a union member.
+ * session picker writes through `Agent.model.select()`. Unlike the in-process
+ * loop's `modelSelection` fold, a request header never retires the choice: a
+ * foreign harness may report another model than it was sent.
  *
  * @module @deepseek-ai/dsh-agent-external/model-selection
  */
 
+import type { ModelSelection } from '@deepseek-ai/dsh-agent'
+import { ReasoningEffortId } from '@deepseek-ai/dsh-llm/brand'
 import type { ProjectionDefinition } from '@deepseek-ai/dsh-session-projection'
 import { z } from 'zod'
-import type { ExternalModelSelection } from './agent.ts'
-
-declare module '@deepseek-ai/dsh-session-projection/types' {
-  interface SessionProjectionStateMap {
-    /** Latest validated model selection the session recorded, or null. */
-    externalModelSelection: ExternalModelSelectionState
-  }
-}
 
 /** Host fold state: the newest durable selection the agent should drive with. */
 export interface ExternalModelSelectionState {
   /** Latest `model/selection` payload, or null when the log holds none. */
-  readonly selection: ExternalModelSelection | null
+  readonly selection: ModelSelection | null
 }
 
-// zod's optional field emits `| undefined`, which exactOptionalPropertyTypes
-// keeps from satisfying `reasoningEffort?: string`; the erased schema keeps
-// the runtime check while the state type keeps the stricter read side.
-const externalModelSelectionStateSchema = z.object({
+const externalModelSelectionStateSchema: z.ZodType<ExternalModelSelectionState> = z.object({
   selection: z.object({
     provider: z.string().min(1),
     model: z.string().min(1),
-    reasoningEffort: z.string().min(1).optional(),
+    reasoningEffort: z.string().min(1).transform(ReasoningEffortId).exactOptional(),
   }).nullable(),
-}) as unknown as z.ZodType<ExternalModelSelectionState>
+})
 
-/** Structurally narrow one committed `model/selection` payload. */
-function readSelection(data: unknown): ExternalModelSelection | null {
+/** Structurally narrow one committed `model/selection` payload; the log is not trusted to match its type. */
+function readSelection(data: unknown): ModelSelection | null {
   if (typeof data !== 'object' || data === null) return null
   const record = data as { provider?: unknown; model?: unknown; reasoningEffort?: unknown }
   if (typeof record.provider !== 'string' || record.provider === ''
@@ -45,7 +36,7 @@ function readSelection(data: unknown): ExternalModelSelection | null {
     provider: record.provider,
     model: record.model,
     ...typeof record.reasoningEffort === 'string' && record.reasoningEffort !== ''
-      ? { reasoningEffort: record.reasoningEffort }
+      ? { reasoningEffort: ReasoningEffortId(record.reasoningEffort) }
       : {},
   }
 }
@@ -57,10 +48,7 @@ export const externalModelSelectionProjection = {
   stateSchema: externalModelSelectionStateSchema,
   init: (): ExternalModelSelectionState => ({ selection: null }),
   apply(state, event) {
-    // The member is merged by dsh-api-session-controller where it compiles;
-    // the widened comparison keeps this fold honest in profiles without it.
-    const type: string = event.type
-    if (type !== 'model/selection') return state
+    if (event.type !== 'model/selection') return state
     const selection = readSelection(event.data)
     if (selection === null) {
       throw new Error(`invalid persisted model/selection at session seq ${event.seq}`)

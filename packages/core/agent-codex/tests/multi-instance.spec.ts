@@ -15,11 +15,11 @@ import { Context } from '@deepseek-ai/cordis'
 import AgentRegistry, { HarnessId, type Agent } from '@deepseek-ai/dsh-agent'
 import LlmRuntime, { createUserMessage } from '@deepseek-ai/dsh-llm'
 import SessionProjectionRegistry from '@deepseek-ai/dsh-session-projection'
-import JsonlSessionPersistence from '@deepseek-ai/dsh-session-persistence-jsonl'
+import * as JsonlSessionPersistence from '@deepseek-ai/dsh-session-persistence-jsonl'
 import SessionStore, { SessionId, type SessionEvent } from '@deepseek-ai/dsh-session'
 import LocalSubprocessRuntime from '@deepseek-ai/dsh-subprocess-local'
 import TypertRegistry from '@deepseek-ai/dsh-typert-registry'
-import { CodexAppServer, codexThreadOf } from '../src/index.ts'
+import { CodexAppServer, codexThreadOf, codexThreadProjection } from '../src/index.ts'
 
 const mockServer = fileURLToPath(new URL('./mock-codex-app-server.ts', import.meta.url))
 
@@ -197,7 +197,7 @@ describe('one plugin instance, several Codex instances', () => {
     })
     send(first.agent, 'first turn')
     await first.agent.whenIdle()
-    const thread = codexThreadOf(bench.ctx.sessionProjections, first.agent.session)
+    const thread = codexThreadOf(await bench.ctx.sessionProjections.register(codexThreadProjection), first.agent.session)
     expect(thread).toBeDefined()
     await first.dispose()
 
@@ -211,7 +211,7 @@ describe('one plugin instance, several Codex instances', () => {
       resumeSessionId: SessionId('m4'),
       harness: HarnessId('codex'),
     })
-    expect(codexThreadOf(bench.ctx.sessionProjections, resumed.agent.session)).toBe(thread)
+    expect(codexThreadOf(await bench.ctx.sessionProjections.register(codexThreadProjection), resumed.agent.session)).toBe(thread)
     await resumed.dispose()
   }, TEST_TIMEOUT)
 

@@ -21,7 +21,7 @@
   min-height: 28px;
   padding: 0 8px;
   border: none;
-  border-radius: 16px;
+  border-radius: var(--dsw-radius-sm);
   background: transparent;
   color: var(--dsw-alias-label-primary);
   font-size: 13px;
@@ -31,9 +31,14 @@
   cursor: pointer;
 }
 
-.seat:not(:disabled):hover,
 .seat[aria-expanded='true'] {
   background: var(--dsw-alias-interactive-bg-hover);
+}
+
+@media (hover: hover) {
+  .seat:not(:disabled):hover {
+    background: var(--dsw-alias-interactive-bg-hover);
+  }
 }
 
 /* The label a started session shows: the choice is closed, not merely

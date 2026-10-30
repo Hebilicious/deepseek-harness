@@ -47,7 +47,6 @@ import {
   type SessionNotification,
   type Stream,
 } from '@agentclientprotocol/sdk'
-import type { ModelSelection } from '@deepseek-ai/dsh-agent'
 import type { SessionEvent, SessionId } from '@deepseek-ai/dsh-session'
 import type {} from '@deepseek-ai/dsh-session-persistence'
 // Side-effect type import: declaration-merges the approval waterfall answered below.
@@ -143,8 +142,12 @@ export function apply(ctx: Context, config: AcpConfig): void {
     ownedRecord(agent)?.onInboxClaimed(message, turn)
   })
 
-  ctx.on('agent/error', ({ agent, turn, error }) => {
-    ownedRecord(agent)?.onAgentError(turn, error)
+  ctx.on('agent/error', ({ agent, error }) => {
+    ownedRecord(agent)?.onAgentError(error)
+  })
+
+  ctx.on('agent/status', ({ agent, status }) => {
+    ownedRecord(agent)?.onAgentStatus(status)
   })
 
   ctx.on('llm/adapters-updated', () => {
@@ -216,7 +219,7 @@ export function apply(ctx: Context, config: AcpConfig): void {
       // No preset composition: the ACP bundle keeps the model-facing rows in
       // the host plane, so this agent reads them from the global layer. A
       // deployment that configures a roster has to join one here first
-      // (@deepseek-ai/dsh-agent-presets README, "Composing a child agent").
+      // (@deepseek-ai/dsh-agent-preset-registry README, "Composing a child agent").
       let record: AcpSession
       try {
         record = await AcpSession.create(ctx, {
@@ -224,7 +227,6 @@ export function apply(ctx: Context, config: AcpConfig): void {
           cwd: params.cwd,
           mcpServers: params.mcpServers,
           agentOptions: agentOptions(config),
-          fallbackSelection: initialSelection(config),
           signal,
           notify,
         })
@@ -262,7 +264,7 @@ export function apply(ctx: Context, config: AcpConfig): void {
       validateWorkspaceParams(params)
       const sessionId = brandString<SessionId>(params.sessionId)
       const persisted = (await persistence.stat(sessionId, { signal }))?.header
-      if (persisted === undefined || persisted.origin === 'subagent' || persisted.parentSession !== undefined) {
+      if (persisted === undefined || persisted.origin === 'subagent') {
         throw invalidParams(`session is not loadable: ${sessionId}`)
       }
       if (!await sameDirectory(persisted.cwd, params.cwd)) {
@@ -314,7 +316,7 @@ export function apply(ctx: Context, config: AcpConfig): void {
       activating.add(sessionId)
       return (async (): Promise<ResumeSessionResponse> => {
         const persisted = (await persistence.stat(sessionId, { signal }))?.header
-        if (persisted === undefined || persisted.origin === 'subagent' || persisted.parentSession !== undefined) {
+        if (persisted === undefined || persisted.origin === 'subagent') {
           throw invalidParams(`session is not resumable: ${sessionId}`)
         }
         if (!await sameDirectory(persisted.cwd, params.cwd)) {
@@ -327,7 +329,6 @@ export function apply(ctx: Context, config: AcpConfig): void {
             cwd: params.cwd,
             mcpServers: params.mcpServers ?? [],
             agentOptions: agentOptions(config),
-            fallbackSelection: initialSelection(config),
             signal,
             notify,
           })
@@ -375,7 +376,6 @@ export function apply(ctx: Context, config: AcpConfig): void {
             || activating.has(header.id)
             || ctx.sessions.get(header.id) !== undefined
             || header.origin === 'subagent'
-            || header.parentSession !== undefined
             || header.cwd === undefined
             || !isAbsolute(header.cwd)
             // Interactive surfaces (dsh web, the TUI) start sessions with an
@@ -525,13 +525,6 @@ function agentOptions(config: AcpConfig): { provider?: string; model?: string } 
   }
 }
 
-/** Initial session selection when both deployment fields are present. */
-function initialSelection(config: AcpConfig): ModelSelection | undefined {
-  return config.provider === undefined || config.model === undefined
-    ? undefined
-    : { provider: config.provider, model: config.model }
-}
-
 interface SessionListCursor {
   createdAt: number
   sessionId: string
@@ -553,7 +546,7 @@ function decodeSessionListCursor(value: string | null | undefined): SessionListC
   if (value === undefined || value === null) return undefined
   if (!/^[A-Za-z0-9_-]+$/.test(value)) throw new Error('session/list cursor is invalid')
   try {
-    const decoded = JSON.parse(Buffer.from(value, 'base64url').toString('utf8')) as unknown
+    const decoded: unknown = JSON.parse(Buffer.from(value, 'base64url').toString('utf8'))
     const createdAt: unknown = Array.isArray(decoded) ? decoded[0] : undefined
     const sessionId: unknown = Array.isArray(decoded) ? decoded[1] : undefined
     if (

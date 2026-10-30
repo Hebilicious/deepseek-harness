@@ -1,7 +1,5 @@
 - tree "Sessions":
-  - treeitem "{{workspace}}" [expanded]:
-    - img
-    - text: {{workspace}}
+  - treeitem "{{workspace}}" [expanded]
   - treeitem "DSH Loop New Session" [selected]:
     - img "DSH Loop"
     - text: New Session

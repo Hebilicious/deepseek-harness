@@ -49,6 +49,7 @@ function unrelatedEvent(seq: number): SessionEvent {
 describe('AgentRegistry harnesses', () => {
   it('keeps registration order, exposes each identity, and removes one on dispose', async () => {
     const ctx = new Context()
+    await ctx.plugin(SessionProjectionRegistry)
     await ctx.plugin(AgentRegistry)
     const dsh = recordingFactory()
     const codex = recordingFactory()
@@ -79,6 +80,7 @@ describe('AgentRegistry harnesses', () => {
 
   it('rejects a duplicate or empty harness id without disturbing mounted harnesses', async () => {
     const ctx = new Context()
+    await ctx.plugin(SessionProjectionRegistry)
     await ctx.plugin(AgentRegistry)
     const { factory } = recordingFactory()
     ctx.agents.registerHarness({ id: HarnessId('dsh'), name: 'DeepSeek Harness', factory })
@@ -93,6 +95,7 @@ describe('AgentRegistry harnesses', () => {
 
   it('removes a harness with the fiber that registered it (HMR)', async () => {
     const ctx = new Context()
+    await ctx.plugin(SessionProjectionRegistry)
     await ctx.plugin(AgentRegistry)
     const { factory } = recordingFactory()
     const owner = await ctx.plugin(Object.assign((inner: Context) => {
@@ -107,6 +110,7 @@ describe('AgentRegistry harnesses', () => {
 
   it('resolves each call by explicit id, the loop for an unrecorded log, a sole harness, or a loud failure', async () => {
     const ctx = new Context()
+    await ctx.plugin(SessionProjectionRegistry)
     await ctx.plugin(AgentRegistry)
 
     await expect(ctx.agents.create({ sessionId: SessionId('none') }))
@@ -153,6 +157,7 @@ describe('AgentRegistry harnesses', () => {
 
   it('registers the built-in dsh harness through setFactory', async () => {
     const ctx = new Context()
+    await ctx.plugin(SessionProjectionRegistry)
     await ctx.plugin(AgentRegistry)
     const { factory, calls } = recordingFactory()
     const dispose = ctx.agents.setFactory(factory)

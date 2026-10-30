@@ -27,7 +27,7 @@ import { HarnessBadgeSeat } from './HarnessBadgeSeat.tsx'
 import type { HarnessBadgeSeatInjected } from './HarnessBadgeSeat.tsx'
 import type { AgentHarnessSeatInjected } from './AgentHarnessSeat.tsx'
 import { AgentHarnessSeatController } from './seat-store.ts'
-import { en, type AgentHarnessKey, zh } from './locales.ts'
+import { de, en, es, fr, ja, pt, ru, type AgentHarnessKey, zh } from './locales.ts'
 
 /** Locale namespace owning the agent-harness seat copy. */
 export const AGENT_HARNESS_NS = 'agentHarness'
@@ -71,7 +71,7 @@ export function apply(ctx: ClientContext): void {
   }
 
   ctx.effect(
-    () => ctx.locale.register(AGENT_HARNESS_NS, { zh, en }),
+    () => ctx.locale.register(AGENT_HARNESS_NS, { zh, en, ja, es, fr, de, ru, pt }),
     'ui-agent-harness: seat dictionaries',
   )
   ctx.effect(

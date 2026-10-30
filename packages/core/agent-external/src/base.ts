@@ -14,9 +14,11 @@ import type {
   AgentOptions,
   AgentStatus,
   CancelOptions,
+  InboxState,
   InboxTarget,
+  ModelSelection,
 } from '@deepseek-ai/dsh-agent'
-import { agentEvents } from '@deepseek-ai/dsh-agent'
+import { AgentModel, agentEvents } from '@deepseek-ai/dsh-agent'
 import { errorChain } from '@deepseek-ai/dsh-llm'
 import type { UserMessage } from '@deepseek-ai/dsh-llm'
 import type { Scope } from '@deepseek-ai/dsh-scope'
@@ -35,6 +37,14 @@ export type AgentPhase =
     wakeRequested: boolean
   }
   | { kind: 'running'; abort: AbortController; turn: number; step: number; wakeRequested: boolean }
+
+/** Session reads a driver consumes; the factory host registers the projections behind them. */
+export interface ManagedAgentProjections {
+  /** Current queued and claimed input. */
+  readonly inbox: () => InboxState
+  /** Newest durable `model/selection` the session recorded, or null before one. */
+  readonly modelSelection: () => ModelSelection | null
+}
 
 /** The phase a turn body runs inside; the shared skeleton reserves it. */
 export type RunningAgentPhase = Extract<AgentPhase, { kind: 'running' }>
@@ -60,7 +70,15 @@ export interface TurnBodyOutcome {
  * owns what happens inside a turn.
  */
 export abstract class ManagedAgent implements Agent {
+  /**
+   * Durable model choice for future turns. Request headers never retire a
+   * recorded choice: a harness may report a different model than it was sent,
+   * and the next turn must still send the choice the user made.
+   */
+  readonly model: AgentModel
   readonly inbox: DurableAgentInbox
+  /** Newest durable `model/selection`, or null; drivers resolve their route from it. */
+  protected readonly recordedSelection: () => ModelSelection | null
   /** Live activity state; a driver's turn body reads and advances `step`. */
   protected phase: AgentPhase
   private activityDone: Promise<void> = Promise.resolve()
@@ -83,14 +101,15 @@ export abstract class ManagedAgent implements Agent {
     public readonly id: SessionId,
     public readonly options: AgentOptions,
     public readonly session: Session,
+    projections: ManagedAgentProjections,
   ) {
     this.dispatch = agentEvents(hostCtx, this)
     this.scope = createScope(hostCtx, this)
     this.ctx = this.scope.ctx
-    this.inbox = new DurableAgentInbox(this.ctx.sessionProjections, session, this.dispatch)
-    /* v8 ignore next -- the host registers its own turnBoundary unit, so the key is always present */
-    const lastTurn = this.hostCtx.sessionProjections.stateOf(session, 'turnBoundary')?.lastTurn ?? 0
-    this.phase = { kind: 'idle', lastTurn }
+    this.recordedSelection = projections.modelSelection
+    this.model = new AgentModel(() => ({ lastUsed: null, pending: projections.modelSelection() }), session, options)
+    this.inbox = new DurableAgentInbox(projections.inbox, session, this.dispatch)
+    this.phase = { kind: 'idle', lastTurn: hostCtx.agents.turnBoundaryOf(session).lastTurn }
   }
 
   get status(): AgentStatus {

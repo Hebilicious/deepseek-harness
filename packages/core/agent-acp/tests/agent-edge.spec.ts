@@ -55,7 +55,7 @@ describe('ACP update variants', () => {
     expect(JSON.stringify(call.data)).toContain('"tool"')
     expect(JSON.stringify(call.data)).toContain('{}')
     const result = eventsOf(agent, 'tool/result')[0]!
-    expect((result.data as { message: { content: { isError?: boolean }[] } }).message.content[0]!.isError).toBe(true)
+    expect((result.data as { message: { isError?: boolean } }).message.isError).toBe(true)
     expect(JSON.stringify(result.data)).toContain('boom')
     expect(turnEndKind(agent)).toBe('completed')
   }, TEST_TIMEOUT)
@@ -551,7 +551,7 @@ describe('session binding projection', () => {
     const { agent } = await bench.ctx.agents.create({ sessionId: SessionId('e19'), agentOptions: {} })
 
     agent.session.append('agent-acp/session', { sessionId: 'second' })
-    expect(acpSessionOf(bench.ctx.sessionProjections, agent.session)).toBe('second')
+    expect(acpSessionOf(await bench.ctx.sessionProjections.register(acpSessionProjection), agent.session)).toBe('second')
 
     // A log whose first binding carries no id is corrupt; the fold rejects it
     // rather than resuming an unaddressable ACP session.

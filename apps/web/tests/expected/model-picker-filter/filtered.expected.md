@@ -1,15 +1,7 @@
-- menu "模型与推理等级":
-  - img
-  - searchbox "搜索模型": think
-  - button "刷新模型列表":
-    - img
+- menu "模型":
   - group "Acme Gateway":
     - text: Acme Gateway
-    - menuitemradio "Acme Think" [checked]:
-      - text: Acme Think
-      - img
-    - button "固定 Acme Think":
-      - img
+    - menuitemradio "Acme Think" [checked]
+    - button "固定 Acme Think"
     - menuitemradio "Acme Think Pro"
-    - button "固定 Acme Think Pro":
-      - img
+    - button "固定 Acme Think Pro"

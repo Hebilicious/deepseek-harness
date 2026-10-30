@@ -42,11 +42,7 @@ export interface ExternalTurnDrive {
  */
 export const HARNESS_DEFAULT_MODEL = 'agent-default'
 
-/**
- * Model route folded from durable `model/selection` events; the payload
- * member merges in only where the picker package compiles, so the fold
- * validates the record structurally at the log boundary.
- */
+/** Model route a driver sends to its foreign harness and logs on `request/header`. */
 export interface ExternalModelSelection {
   /** Provider route label the foreign harness understands. */
   readonly provider: string
@@ -214,8 +210,7 @@ export abstract class ExternalAgent extends ManagedAgent {
    * @returns the resolved provider/model/effort, with empty strings for unset fields.
    */
   protected currentSelection(): ExternalModelSelection {
-    const folded = this.ctx.sessionProjections.stateOf(this.session, 'externalModelSelection')
-    const selected = folded?.selection
+    const selected = this.recordedSelection()
     return {
       provider: selected?.provider ?? this.options.provider ?? '',
       model: selected?.model ?? this.options.model ?? '',
@@ -229,10 +224,10 @@ export abstract class ExternalAgent extends ManagedAgent {
 
   /**
    * Bind the harness-side conversation to this session — Codex `thread/start`
-   * or `thread/resume`, ACP `session/new` or `session/load`. Runs unpublished:
-   * a rejected handshake rolls the whole creation transaction back. Plugin-owned
-   * durable records (the foreign thread/session id) append to `this.session`
-   * here and flush with the pre-publication suffix.
+   * or `thread/resume`, ACP `session/new` or `session/load`. Runs after the
+   * session is announced and before the agent is published: a rejected
+   * handshake rolls the whole creation transaction back. Plugin-owned durable
+   * records (the foreign thread/session id) append to `this.session` here.
    * @param signal - fused caller/lifecycle cancellation.
    */
   abstract override bind(signal: AbortSignal): Promise<void>

@@ -1,6 +1,28 @@
-# Bilingual-pair consistency record (docs/i18n/README.md): the git blob hash of each
-# side as of the last confirmed-consistent state. Both languages carry equal authority;
-# after editing either side, bring the other along and re-record with:
+# Bilingual-pair consistency record for 2026-09-20-external-harness-bindings.md (docs/i18n/README.md): per heading
+# section, a hash of its English and Chinese blocks outside code blocks and generated regions.
+# After editing either side, bring the other along and re-record with:
 #   pnpm run verify-translation-pairing --write docs/persistence-changes/2026-09-20-external-harness-bindings.md
-2026-09-20-external-harness-bindings.md: 17859876ae849e988b92b6845ef0fb3b6ff4a05f
-2026-09-20-external-harness-bindings.zh.md: 81f5ce04505d8b9c9f5edb08f352cba2782b5a25
+/:
+  en: 3d5a424ae7d7e46b
+  zh: c22a8e4a62d8cc1a
+/2026-09-20-external-harness-bindings:
+  en: 77fdcc465c2e5c48
+  zh: 4032c3bdd49cb7e1
+/2026-09-20-external-harness-bindings/summary:
+  en: 5760da6b39a28d38
+  zh: 8c944534a60ca6b7
+/2026-09-20-external-harness-bindings/table-of-contents:
+  en: 6cf314a069ceb451
+  zh: 9adff678e9ecab3b
+/2026-09-20-external-harness-bindings/declaration:
+  en: 6907136f28e48c90
+  zh: 02f8298485f3d8e7
+/2026-09-20-external-harness-bindings/compatibility:
+  en: 8517edb07d6706df
+  zh: f6131730f2deeeb1
+/2026-09-20-external-harness-bindings/verification:
+  en: 087a8ab11ce4f7e4
+  zh: 248b1fa822cc1ca4
+/2026-09-20-external-harness-bindings/dev-note:
+  en: b75c8458928b72b9
+  zh: 003ba4e17b4b5269

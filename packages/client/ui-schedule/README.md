@@ -1,5 +1,5 @@
 ---
-description: "The read-only Web catalog for active Schedule reminders, for users choosing the surface and maintainers of its projection, timing, and accessibility behavior."
+description: "Automation task management and Session reminder entries in the existing Web UI."
 kind: "package-reference"
 ---
 
@@ -9,7 +9,7 @@ English | [中文](README.zh.md)
 
 ## Summary
 
-This package renders a read-only catalog of the current Session's active Schedule reminders in the Web header. It reads the complete `schedule` projection and issues no RPC or mutation. The browser derives status, local time, relative time, and ordering without adding those presentation values to durable state. The shipped Web bundle keeps the plugin disabled until the explicit Schedule overlay enables both the Host Schedule services and this client row.
+The Automation tasks page and right Sidebar task tab share task rules, local edits, saved delivery records, deletion, and conversation navigation. Manual creation and target selection use the Host Schedule service; conversation cards, header clocks, and Session row marks retain their existing locations.
 
 ## Table of Contents
 
@@ -25,84 +25,71 @@ This package renders a read-only catalog of the current Session's active Schedul
 <a id="use-this-package"></a>
 ## Use this package
 
-Enable the Schedule overlay before starting the Web Session that should expose reminders:
+Below 768px, the task list uses 20px horizontal insets, matching the Plugins page.
 
-```sh
-dsh web --patch apps/cli/config/examples/schedule/cordis.yml
-```
+The shipped Web composition mounts `ui-schedule` with Host Schedule. The Automation tasks sidebar entry opens the task list without selecting or activating a Session. New retains its existing behavior: open a new conversation and let the user enter an instruction. Its adjacent menu offers Create in conversation and Create manually. Manual creation opens the shared Modal, validates required fields, and saves a task without starting an Agent or sending the instruction. A failed request leaves the form and its values visible. The empty state shows a decorative document-and-clock illustration whose colors follow the theme.
 
-The shipped Web graph already resolves `@deepseek-ai/dsh-client-ui-schedule` through a disabled `ui-schedule` row; the overlay enables that row together with `@deepseek-ai/dsh-schedule`. The trigger appears only while the Session is successfully open and the projection contains at least one active record. Opening it shows overdue rows first, then future rows by target time, with exact ties preserving the projection's creation order.
+Enabled, Paused, Ended, and All filters combine with text search over the title, prompt, and linked Session id; the page starts on Enabled. The search-row menu clears all ended tasks after confirmation, preserving active and paused tasks. Selecting a task opens Rules / Records. Edit stages a draft; Save sends changed fields with `expectedUpdatedAt`, or `null` when no stored revision exists. An unchanged Save still asks the Host to store the current row shape. A successful save returns to the read-only view and focuses Edit. Conflict retains the draft and offers Reload; Cancel discards it. Late responses cannot change another task's detail. Coarse-pointer search, instruction, and timing fields use 16px text to prevent focus zoom on iOS Safari.
 
-### Read and dismiss the catalog
+The destination menu offers a new conversation that the first delivery creates and later deliveries reuse, or a new conversation at every delivery. Manual creation defaults to reuse. A task already bound to a Session shows Current linked conversation as its destination, and editing it preserves that destination unless the user explicitly chooses a new one. The Linked workspace selector lists the framework Workspace catalog, shows each Workspace's directory under its name, and labels the first-use Workspace with its localized default name. A new destination starts in that Workspace, else in the first listed one. A stored task without a directory shows Ungrouped, because the Sessions it creates join no Workspace. For a reusable destination, the bottom conversation entry shows Pending creation until the first Session exists. A per-run destination instead shows Latest run conversation after its first delivery and hides the entry before that delivery; earlier conversations remain accessible from delivery records. Available links recheck membership and archive state before opening; missing or archived Sessions remain disabled.
 
-Each row shows the complete wrapping prompt, a separate Scheduled or Overdue status, localized Once or the largest exact whole unit for a repeating interval, browser-local target time, and browser-clock-relative time. Intervals are never rounded, and the three metadata fields wrap across lines instead of clipping valid large values. The body-portaled popover targets 336px, shares the trigger's left edge when space permits, and shifts left to retain a 16px viewport margin when the trigger is near the right edge; its maximum width is the viewport width minus 32px. It scrolls vertically when needed and exposes no Schedule id, raw UTC value, details, or action controls.
+The repeat editor offers once, minute, hour, day, week, month, and custom rules. Date and clock controls reuse existing pickers. Guided presets produce RRULE; minute and hour intervals start from the current minute in the selected zone. The Custom choice and Customize input do not name either syntax; the input accepts a two-line RRULE or a five-field Cron expression with an explicit zone. RRULE retains the zone in `DTSTART`; Cron retains its expression and selected zone as Cron timing. Complex RRULE values remain verbatim. Save validates Custom text through the Host; invalid or empty input keeps the draft open and shows the existing correction message. Existing After, At, Every, Daily, and Weekly records show their description in Custom and keep their typed timing until a replacement is entered. Editing other fields preserves the committed occurrence.
 
-Only the native trigger button enters the tab order. Enter and Space use normal button activation; while focus remains on the trigger or catalog, Escape closes the popover and restores trigger focus; an outside pointer press dismisses it. If a live update removes the final record, the component closes and unmounts without moving focus to another header action. A failed Session open hides the trigger even when a tentative cached projection exists.
+Pause and resume update lifecycle state. The detail menu offers Run now and Delete. It offers no queued-message cancellation: one inbox message may contain deliveries from several tasks. While a delivery to a reused conversation is queued or running, the detail disables Edit, pause and resume, Run now, and Delete, and states that the task is queued or running and is managed in its conversation, which the bottom conversation entry opens. The minimum delivery interval disables another immediate run until the interval ends, while pause and deletion remain available once execution is idle. When the interval is the only cause, the Run now row stays focusable, and its tooltip states that the minimum run interval has not passed and when Run now becomes available. An archived linked conversation of a task already bound to a Session also disables Run now, because the Host refuses that delivery. A run that the Host refuses with `schedule_execution_pending` shows a status notice instead of an error. Deletion requires confirmation, removes the task and its saved records, retains Sessions and already-delivered messages, and reports the result through the existing app-wide toast. The confirmation focuses Cancel first; when it closes, focus returns to the detail menu button. The detail keeps the task until the Host answers. An applied deletion closes the detail or its task tab; a failed deletion keeps the task open for another attempt.
 
------
+The list, detail, header, and Session hover show the later of the scheduled occurrence and the Host delivery floor as the next run. Creation and editing show one short minimum-interval hint for per-run conversation targets, read from `schedule.deliveryLimits`; a failed read offers Retry. The read-only detail keeps the next-run time without repeating that hint. Scheduled and immediate runs share this limit.
+
+Records lazily requests 20 saved deliveries, supports newest-first pagination, retains loaded records after failure, and ignores superseded or unmounted requests. Each record shows its occurrence and saved prompt, with Expand / Collapse for long prompts; legacy records without prompt text never substitute the current instruction. A receipt's actual destination has a conversation link when the Session is available. Confirmed pruning is stated only after the final saved page and offers the current retention explanation. These records acknowledge inbox delivery, not model execution success.
+
+An open conversation's header clock remains hidden before the first successful read or while no active related tasks exist. One task opens its right Sidebar tab; several open the existing popover. Idle, unarchived Session rows with active related tasks retain their clock mark and hover list. `schedule_create` continues to render a Turn-level card with a task title, repeat description, and Open action. Persisted legacy and current tool results both render; an authoritative read newer than the card resolves later edits or deletion.
+
+### Time-zone data source
+
+Time-zone enumeration and localized names use the browser's embedded ICU/CLDR data through `Intl`. There is no runtime download. The editor retains a stored alias even when enumeration omits it, and uses the system zone plus UTC when enumeration is unavailable.
 
 <a id="understand-the-implementation"></a>
 ## Understand the implementation
 
 <details>
-<summary>Implementation internals — click to expand</summary>
+<summary>Implementation details — click to expand</summary>
 
-The browser plugin contributes `schedule-catalog` to `conversation.session.header.actions` at order 10, after static Agent and Subagent context and before background Jobs. It reads `openState` through the standard Session hook and the complete value through `useProjection('schedule')`; popover visibility is its only local interaction state. The component portals the catalog to `document.body` and gives its trigger and panel refs to `useAnchoredPosition`, which publishes fixed coordinates after measuring the rendered panel, keeps a 5px gap below the trigger, clamps to a 16px viewport margin, and remeasures on resize, captured scroll, and panel resize. The catalog ref also makes pointer presses inside the portal part of the existing dismissal boundary. Browser formatting uses the viewing locale, time zone, and clock, while durable Schedule records remain unchanged.
+While the Peer may read `schedule/catalog`, the plugin registers the existing `schedules` main panel, Session header utility, Turn tail card, Session row mark and hover entries, and `scheduleTask` right Sidebar tab. Slot injection supplies framework readers and action callbacks; components own disposable selection, search, form, and paging state. The Host owns task storage and execution. Browsing catalogs does not activate a Session.
 
-### Source map
+The manager, task tabs, row marks, and conversation-header projections share one observable `schedule.catalog` source. Header and row views filter active records by involvement and delivery target. Mutations use task-id-based `schedule.create`, `schedule.edit`, and `schedule.run`; history uses task identity and cursor without a Session ownership parameter. A mutation acknowledgment triggers a fresh authoritative read; a failed read remains a catalog error rather than changing the acknowledged write into a failure.
 
-| File | Role |
-|---|---|
-| [`src/client/index.ts`](src/client/index.ts) | Browser entry: locale registration and Session-header slot contribution |
-| [`src/client/ScheduleCatalogAction.tsx`](src/client/ScheduleCatalogAction.tsx) | Visibility, ordering, formatting, popover, and keyboard behavior |
-| [`src/client/locales.ts`](src/client/locales.ts) | English and Chinese catalog copy |
-| [`src/index.ts`](src/index.ts) | Empty Host apply that keeps the optional browser feature addressable by Loader |
-| — | No runtime invariant companion is published because this read-only client catalog owns no mutable cross-plugin state. |
-
-The [durable Web Schedule Agent Note](../../../.agents/notes/implemented/feature/2026-08-05-durable-web-schedule.md) owns the active projection and opt-in presentation boundary; this package owns the catalog's timing and accessibility behavior.
+Sidebar layout records omit opener parameters. `TaskTabBindings` therefore persists task identity by Session and tab id in localStorage, without storing task content. Closed tab bindings are pruned. Observable catalog requests subscribe only while read, invalidate on Schedule changes and connection reset, and retire outstanding reads after the final subscriber leaves.
 
 </details>
-
------
 
 <a id="further-exploration"></a>
 ## Further Exploration
 
-Read these pages when the catalog itself is not enough. They move from the browser presentation to the durable Schedule state and shared projection transport.
-
-- [Schedule package](../../schedule/schedule/README.md) — creates, lists, cancels, and delivers the reminders shown here.
-- [Schedule subsystem](../../../docs/subsystems/schedule.md) — durable record, transition, and delivery semantics.
-- [Session projections subsystem](../../../docs/subsystems/session-projection.md) — the complete-value transport this package reads.
-- [Client package map](../README.md) — adjacent browser UI packages.
-
------
+- [Schedule](../../schedule/schedule/README.md) owns persistence, destinations, lifecycle, and delivery semantics.
+- [Slots](../../../docs/subsystems/slots.md) defines framework readers and panel contributions.
 
 <a id="model-experience"></a>
 ## Model Experience
 
-None, as this package renders a completed client projection for a human and never changes prompts, messages, schemas, streams, or tool results.
+None, as this browser package registers no model tools or messages.
 
 #### KV Cache effect
 
-None; the package never assembles or sends provider requests.
+None. Task-list content does not enter model requests.
 
 ## Known Limitations and Deferred Work
 
 <a id="known-limitations-and-deferred-work"></a>
 
-
-These limits define the current Schedule catalog. They are current package constraints, not a reminder-service comparison or a task backlog.
-
-- **Active records only** — terminal delete and dispatch transitions remove rows; the ordinary transcript remains the only reminder-delivery history.
-- **Browser-derived time** — local and relative labels use the viewing browser's current locale, time zone, and clock. They are presentation values, not durable Schedule facts.
-- **Read-only surface** — creating and deleting reminders remain with the Schedule tools; the catalog has no mutation, retry, acknowledgement, toast, or delivery-receipt semantics.
-- **Open Session required** — a failed open hides even a tentative cached value because strict Session replay remains authoritative.
+- Saved records describe inbox delivery, not execution results; absent historical prompts or physically deleted tasks cannot be reconstructed.
+- The Host limits saved history by `deliveryHistoryDays` and `deliveryHistoryRecords`; page size limits record count, not prompt bytes.
+- Conversation links open the Session through normal navigation, not a specific message. Deleting a task does not cancel messages already delivered.
+- This UI provides no task-level authorization for model tools. Host Schedule owns access control and must enforce any per-Session restrictions.
 
 <a id="dev-note"></a>
 ### Dev Note
 
 <details>
-<summary>Working context for maintainers — click to expand</summary>
+<summary>Maintenance context — click to expand</summary>
 
 None.
 

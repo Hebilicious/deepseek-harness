@@ -21,11 +21,11 @@ import { createUserMessage, type ReasoningEffortId } from '@deepseek-ai/dsh-llm'
 import { brandString } from '@deepseek-ai/dsh-brand'
 import LlmRuntime from '@deepseek-ai/dsh-llm'
 import SessionProjectionRegistry from '@deepseek-ai/dsh-session-projection'
-import JsonlSessionPersistence from '@deepseek-ai/dsh-session-persistence-jsonl'
+import * as JsonlSessionPersistence from '@deepseek-ai/dsh-session-persistence-jsonl'
 import SessionStore, { SessionId, type SessionEvent } from '@deepseek-ai/dsh-session'
 import LocalSubprocessRuntime from '@deepseek-ai/dsh-subprocess-local'
 import TypertRegistry from '@deepseek-ai/dsh-typert-registry'
-import { CodexAppServer, CodexCatalogAdapter, codexThreadOf } from '../src/index.ts'
+import { CodexAppServer, CodexCatalogAdapter, codexThreadOf, codexThreadProjection } from '../src/index.ts'
 import type { CodexAppServerRuntime } from '../src/index.ts'
 
 const mockServer = fileURLToPath(new URL('./mock-codex-app-server.ts', import.meta.url))
@@ -182,7 +182,7 @@ describe('agent-codex driver', () => {
     bench = await setup({ MOCK_CODEX_TEXT: 'hello from codex' })
     const { agent } = await bench.ctx.agents.create({ sessionId: SessionId('s2'), agentOptions: {} })
 
-    const binding = codexThreadOf(bench.ctx.sessionProjections, agent.session)
+    const binding = codexThreadOf(await bench.ctx.sessionProjections.register(codexThreadProjection), agent.session)
     expect(binding).toBeDefined()
 
     send(agent, 'hi')
@@ -194,7 +194,7 @@ describe('agent-codex driver', () => {
     const assistant = log.find(event => event.type === 'assistant/message')
     expect(assistant).toBeDefined()
     const content = (assistant!.data['message'] as {
-      content: { type: string; text?: string }[]
+      content: readonly { type: string; text?: string }[]
     }).content
     expect(content.some(block => block.type === 'text' && block.text === 'hello from codex'))
       .toBe(true)
@@ -241,11 +241,11 @@ describe('agent-codex driver', () => {
     expect(calls).toHaveLength(1)
     const results = eventsOf(agent, 'tool/result')
     expect(results).toHaveLength(1)
-    const block = (results[0]!.data as {
-      message: { content: { type: string; isError?: boolean; content?: { text?: string }[] }[] }
-    }).message.content[0]!
-    expect(block.isError).toBe(false)
-    expect(JSON.stringify(block.content)).toContain('tool output')
+    const result = (results[0]!.data as {
+      message: { isError?: boolean; content: readonly { text?: string }[] }
+    }).message
+    expect(result.isError).toBe(false)
+    expect(JSON.stringify(result.content)).toContain('tool output')
   }, TEST_TIMEOUT)
 
   it('closes an open tool item as an error result at turn settlement', async () => {
@@ -256,8 +256,8 @@ describe('agent-codex driver', () => {
 
     const results = eventsOf(agent, 'tool/result')
     expect(results).toHaveLength(1)
-    const block = (results[0]!.data as { message: { content: { isError?: boolean }[] } }).message.content[0]!
-    expect(block.isError).toBe(true)
+    const result = (results[0]!.data as { message: { isError?: boolean } }).message
+    expect(result.isError).toBe(true)
   }, TEST_TIMEOUT)
 
   it('routes command approvals through the approval seam', async () => {
@@ -401,7 +401,7 @@ describe('agent-codex driver', () => {
     // A session created and never prompted owns a thread with no rollout on
     // disk, so the mock refuses thread/resume exactly as 0.153.4 does.
     const first = await bench.ctx.agents.create({ sessionId: SessionId('s15'), agentOptions: {} })
-    const original = codexThreadOf(bench.ctx.sessionProjections, first.agent.session)
+    const original = codexThreadOf(await bench.ctx.sessionProjections.register(codexThreadProjection), first.agent.session)
     expect(original).toBeDefined()
     await first.dispose()
 
@@ -409,7 +409,7 @@ describe('agent-codex driver', () => {
     send(recovered.agent, 'recovered turn')
     await recovered.agent.whenIdle()
 
-    const rebound = codexThreadOf(bench.ctx.sessionProjections, recovered.agent.session)
+    const rebound = codexThreadOf(await bench.ctx.sessionProjections.register(codexThreadProjection), recovered.agent.session)
     expect(rebound).toBeDefined()
     expect(rebound).not.toBe(original)
     expect(eventsOf(recovered.agent, 'agent-codex/thread')).toHaveLength(2)
@@ -419,7 +419,7 @@ describe('agent-codex driver', () => {
     // The rebound identity is the durable one: the next resume targets it and
     // succeeds without another thread/start.
     const again = await bench.ctx.agents.resume({ resumeSessionId: SessionId('s15') })
-    expect(codexThreadOf(bench.ctx.sessionProjections, again.agent.session)).toBe(rebound)
+    expect(codexThreadOf(await bench.ctx.sessionProjections.register(codexThreadProjection), again.agent.session)).toBe(rebound)
     await again.dispose()
 
     const calls = await recordedCalls(bench.recordFile)
@@ -573,7 +573,7 @@ describe('agent-codex driver', () => {
     // The dead connection must not stay memoized: a later session binds on a
     // freshly spawned child.
     const second = await bench.ctx.agents.create({ sessionId: SessionId('s27'), agentOptions: {} })
-    expect(codexThreadOf(bench.ctx.sessionProjections, second.agent.session)).toBeDefined()
+    expect(codexThreadOf(await bench.ctx.sessionProjections.register(codexThreadProjection), second.agent.session)).toBeDefined()
 
     const calls = await recordedCalls(bench.recordFile)
     expect(calls.filter(call => call.method === 'initialize')).toHaveLength(2)

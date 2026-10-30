@@ -1,7 +1,5 @@
 - tree "Sessions":
-  - treeitem "workspace" [expanded]:
-    - img
-    - text: workspace
+  - treeitem "workspace" [expanded]
   - treeitem "DSH Loop Explain event sourcing in one (1) now" [selected]:
     - img "DSH Loop"
     - text: Explain event sourcing in one (1) now

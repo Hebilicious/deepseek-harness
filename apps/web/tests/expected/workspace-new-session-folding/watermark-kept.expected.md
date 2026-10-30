@@ -1,0 +1,20 @@
+- tree "Sessions":
+  - treeitem "{{workspace}} Workspace actions for {{workspace}} New session in {{workspace}}" [expanded]:
+    - text: {{workspace}}
+    - button "Workspace actions for {{workspace}}"
+    - button "New session in {{workspace}}"
+  - treeitem "DSH Loop New Session" [selected]:
+    - img "DSH Loop"
+    - text: New Session
+  - treeitem "Untitled 1min"
+  - treeitem "Untitled 1min"
+  - treeitem "Untitled 1min"
+  - treeitem "Untitled 1min"
+  - treeitem "Untitled 1min"
+  - treeitem "Untitled 1min"
+  - treeitem "Untitled 1min"
+  - treeitem "Untitled 1min"
+  - treeitem "DSH Loop Untitled 1min":
+    - img "DSH Loop"
+    - text: Untitled 1min
+  - button "Show 7 more sessions"

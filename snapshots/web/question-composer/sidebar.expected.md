@@ -1,4 +1,4 @@
-- treeitem "Waiting for answer DSH Loop Use the ask_user_question tool to now" [selected]:
+- treeitem "Waiting for answer DSH Loop Use the ask_user_question tool to" [selected]:
   - text: Waiting for answer
   - img "DSH Loop"
-  - text: Use the ask_user_question tool to now
+  - text: Use the ask_user_question tool to

@@ -10,11 +10,12 @@
 
 import type { Context } from '@deepseek-ai/cordis'
 import type { AgentOptions } from '@deepseek-ai/dsh-agent'
-import { ExternalAgentHost } from '@deepseek-ai/dsh-agent-external'
+import { ExternalAgentHost, type ManagedAgentProjections } from '@deepseek-ai/dsh-agent-external'
 import type { Session, SessionId } from '@deepseek-ai/dsh-session'
+import type { ProjectionHandle } from '@deepseek-ai/dsh-session-projection'
 import { CodexAgent, type CodexAgentConfig } from './agent.ts'
 import { CODEX_PREFIX, type CodexAppServerRuntime } from './runtime.ts'
-import { codexThreadProjection } from './thread-state.ts'
+import { codexThreadProjection, type CodexThreadState } from './thread-state.ts'
 
 /**
  * One instance's Codex factory host. Construction registers the
@@ -24,6 +25,9 @@ import { codexThreadProjection } from './thread-state.ts'
  * publish transaction.
  */
 export class CodexAgentHost extends ExternalAgentHost<CodexAgent> {
+  /** The `codexThread` registration; agents await it when they bind. */
+  private readonly threads: Promise<ProjectionHandle<CodexThreadState | null>>
+
   /**
    * @param ctx - the plugin service's registration context.
    * @param runtime - this instance's app-server runtime.
@@ -38,7 +42,7 @@ export class CodexAgentHost extends ExternalAgentHost<CodexAgent> {
       harness: agentConfig.harness,
       effectPrefix: `codexAppServer.${agentConfig.harness.id}`,
     })
-    ctx.sessionProjections.register(codexThreadProjection)
+    this.threads = ctx.sessionProjections.register(codexThreadProjection)
   }
 
   /** Construct the driver around this instance's runtime and resolved config. */
@@ -47,7 +51,8 @@ export class CodexAgentHost extends ExternalAgentHost<CodexAgent> {
     id: SessionId,
     options: AgentOptions,
     session: Session,
+    projections: ManagedAgentProjections,
   ): CodexAgent {
-    return new CodexAgent(hostCtx, id, options, session, this.codexRuntime, this.agentConfig)
+    return new CodexAgent(hostCtx, id, options, session, projections, this.codexRuntime, this.agentConfig, this.threads)
   }
 }

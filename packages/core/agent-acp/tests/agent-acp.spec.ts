@@ -16,7 +16,7 @@ import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import { SessionId } from '@deepseek-ai/dsh-session'
 import { setSandboxMode } from '@deepseek-ai/dsh-sandbox-policy'
 import { setApprovalPolicy } from '@deepseek-ai/dsh-user-approval'
-import { AcpCatalogAdapter, AcpHarness, acpSessionOf } from '../src/index.ts'
+import { AcpCatalogAdapter, AcpHarness, acpSessionOf, acpSessionProjection } from '../src/index.ts'
 import type { AcpRuntime } from '../src/runtime.ts'
 import {
   type Bench,
@@ -64,7 +64,7 @@ describe('agent-acp driver', () => {
     bench = await setup({ MOCK_TEXT: 'hello from acp' })
     const { agent } = await bench.ctx.agents.create({ sessionId: SessionId('s2'), agentOptions: {} })
 
-    const binding = acpSessionOf(bench.ctx.sessionProjections, agent.session)
+    const binding = acpSessionOf(await bench.ctx.sessionProjections.register(acpSessionProjection), agent.session)
     expect(binding).toBeDefined()
 
     send(agent, 'hi')
@@ -76,7 +76,7 @@ describe('agent-acp driver', () => {
     const assistant = log.find(event => event.type === 'assistant/message')
     expect(assistant).toBeDefined()
     const content = (assistant!.data['message'] as {
-      content: { type: string; text?: string }[]
+      content: readonly { type: string; text?: string }[]
     }).content
     expect(content.some(block => block.type === 'text' && block.text === 'hello from acp'))
       .toBe(true)
@@ -120,11 +120,11 @@ describe('agent-acp driver', () => {
     expect(eventsOf(agent, 'tool/call')).toHaveLength(1)
     const results = eventsOf(agent, 'tool/result')
     expect(results).toHaveLength(1)
-    const block = (results[0]!.data as {
-      message: { content: { type: string; isError?: boolean; content?: { text?: string }[] }[] }
-    }).message.content[0]!
-    expect(block.isError).toBe(false)
-    expect(JSON.stringify(block.content)).toContain('tool output')
+    const result = (results[0]!.data as {
+      message: { isError?: boolean; content: readonly { text?: string }[] }
+    }).message
+    expect(result.isError).toBe(false)
+    expect(JSON.stringify(result.content)).toContain('tool output')
   }, TEST_TIMEOUT)
 
   it('commits streamed tool input and keeps text and tool calls in the order the agent sent them', async () => {
@@ -167,7 +167,7 @@ describe('agent-acp driver', () => {
         const data = event.data as { callId: string; arguments: string }
         return [`call ${data.callId} ${data.arguments}`]
       }
-      if (event.type === 'tool/result') return [`result ${(event.data as { message: { content: { toolCallId: string }[] } }).message.content[0]!.toolCallId}`]
+      if (event.type === 'tool/result') return [`result ${event.data.message.toolCallId}`]
       if (event.type === 'assistant/message') return ['text']
       return []
     })
@@ -242,10 +242,8 @@ describe('agent-acp driver', () => {
 
     const results = eventsOf(agent, 'tool/result')
     expect(results).toHaveLength(1)
-    const block = (results[0]!.data as {
-      message: { content: { isError?: boolean }[] }
-    }).message.content[0]!
-    expect(block.isError).toBe(true)
+    const result = (results[0]!.data as { message: { isError?: boolean } }).message
+    expect(result.isError).toBe(true)
   }, TEST_TIMEOUT)
 
   it('routes permission requests through the approval seam', async () => {
@@ -360,11 +358,11 @@ describe('agent-acp driver', () => {
   it('replaces an ACP session the agent no longer knows when no turn reached it', async () => {
     bench = await setup({ MOCK_LOAD_SESSION: '1', MOCK_LOAD_UNKNOWN: '1', MOCK_TEXT: 'fresh' })
     const first = await bench.ctx.agents.create({ sessionId: SessionId('s11b'), agentOptions: {} })
-    const recorded = acpSessionOf(bench.ctx.sessionProjections, first.agent.session)
+    const recorded = acpSessionOf(await bench.ctx.sessionProjections.register(acpSessionProjection), first.agent.session)
     await first.dispose()
 
     const resumed = await bench.ctx.agents.resume({ resumeSessionId: SessionId('s11b') })
-    const rebound = acpSessionOf(bench.ctx.sessionProjections, resumed.agent.session)
+    const rebound = acpSessionOf(await bench.ctx.sessionProjections.register(acpSessionProjection), resumed.agent.session)
     expect(rebound).toBeDefined()
     expect(rebound).not.toBe(recorded)
     send(resumed.agent, 'first turn')
@@ -469,7 +467,7 @@ describe('agent-acp driver', () => {
     await agent.whenIdle()
 
     expect(turnEndKind(agent)).toBe('completed')
-    const bound = acpSessionOf(bench.ctx.sessionProjections, agent.session)
+    const bound = acpSessionOf(await bench.ctx.sessionProjections.register(acpSessionProjection), agent.session)
     const calls = await recordedCalls(bench.recordFile)
     expect(calls.filter(call => call.method === 'initialize')).toHaveLength(2)
     const loads = calls.filter(call => call.method === 'session/load')
@@ -707,7 +705,7 @@ describe('agent-acp driver', () => {
     const other = await bench.ctx.agents.create({ sessionId: SessionId('s23f'), agentOptions: {} })
     send(agent, 'first')
     await agent.whenIdle()
-    const acpSession = acpSessionOf(bench.ctx.sessionProjections, agent.session)
+    const acpSession = acpSessionOf(await bench.ctx.sessionProjections.register(acpSessionProjection), agent.session)
     const modes = async () => (await recordedCalls(bench!.recordFile))
       .filter(call => call.method === 'session/set_config_option'
         && (call.params as { sessionId: string }).sessionId === acpSession)

@@ -14,7 +14,7 @@ import type { AcpHarnessEntry } from '@deepseek-ai/dsh-agent-acp'
 import { brandString } from '@deepseek-ai/dsh-brand'
 import type { ReasoningEffortId } from '@deepseek-ai/dsh-llm'
 import { SessionId } from '@deepseek-ai/dsh-session'
-import { AcpHarness, acpSessionOf } from '../src/index.ts'
+import { AcpHarness, acpSessionOf, acpSessionProjection } from '../src/index.ts'
 import {
   type Bench,
   events,
@@ -191,8 +191,8 @@ describe('one plugin instance, several harnesses', () => {
     expect(headerProvider(other.agent)).toBe('grok')
     expect(JSON.stringify(events(devin.agent))).toContain('devin answer')
     expect(JSON.stringify(events(other.agent))).toContain('grok answer')
-    expect(acpSessionOf(bench.ctx.sessionProjections, devin.agent.session)).toBe('devin-fixed')
-    expect(acpSessionOf(bench.ctx.sessionProjections, other.agent.session)).toBe('grok-fixed')
+    expect(acpSessionOf(await bench.ctx.sessionProjections.register(acpSessionProjection), devin.agent.session)).toBe('devin-fixed')
+    expect(acpSessionOf(await bench.ctx.sessionProjections.register(acpSessionProjection), other.agent.session)).toBe('grok-fixed')
     await devin.dispose()
     await other.dispose()
 

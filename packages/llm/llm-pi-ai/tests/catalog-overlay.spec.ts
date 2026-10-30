@@ -218,14 +218,14 @@ describe('catalog overlay mapping', () => {
     })
   })
 
-  it('maps MiMo V2.6 onto the installed OpenCode Go gateway', () => {
+  it('maps MiMo V2.8 onto the installed OpenCode Go gateway', () => {
     const overlay = mapCatalogOverlay({
       'opencode-go': {
         models: {
           // The published entries name no npm package, so the gateway's stated
           // convention is what places them on Chat Completions.
-          'mimo-v2.6-flash': {
-            name: 'MiMo V2.6 Flash',
+          'mimo-v2.8-flash': {
+            name: 'MiMo V2.8 Flash',
             tool_call: true,
             reasoning: true,
             modalities: { input: ['text', 'image'] },
@@ -240,19 +240,19 @@ describe('catalog overlay mapping', () => {
     expect(overlay.skipped.installed).toBe(1)
     const [mapped] = overlay.models.get('opencode-go') ?? []
     expect(mapped).toMatchObject({
-      id: 'mimo-v2.6-flash',
-      name: 'MiMo V2.6 Flash',
+      id: 'mimo-v2.8-flash',
+      name: 'MiMo V2.8 Flash',
       api: 'openai-completions',
       provider: 'opencode-go',
-      baseUrl: 'https://opencode.ai/zen/go/v1',
+      baseUrl: 'https://opencode.ai/inference/go/v1',
       reasoning: true,
       input: ['text', 'image'],
       contextWindow: 1048576,
       maxTokens: 131072,
-      // The V2.5 siblings' gateway switches, which the V2.6 entries state no facts about.
+      // The V2.5 siblings' gateway switches, which the V2.8 entries state no facts about.
       compat: { supportsStore: false, supportsDeveloperRole: false, maxTokensField: 'max_tokens' },
     })
-    expect(catalogModels('opencode-go').has('mimo-v2.6-flash')).toBe(false)
+    expect(catalogModels('opencode-go').has('mimo-v2.8-flash')).toBe(false)
   })
 
   it('leaves a package-less entry unplaced on a gateway that publishes no convention', () => {

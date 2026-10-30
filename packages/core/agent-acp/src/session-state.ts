@@ -8,14 +8,13 @@
 
 import { z } from 'zod'
 import type { Session } from '@deepseek-ai/dsh-session'
-import type SessionProjectionRegistry from '@deepseek-ai/dsh-session-projection'
-import type { ProjectionDefinition } from '@deepseek-ai/dsh-session-projection'
+import type { ProjectionDefinition, ProjectionHandle } from '@deepseek-ai/dsh-session-projection'
 
 declare module '@deepseek-ai/dsh-session/types' {
   interface SessionEventMap {
     /**
      * The ACP session this session is bound to. Appended by the driver after
-     * `session/new`, inside the pre-publication suffix; resume reads the fold
+     * `session/new`, before the agent is published; resume reads the fold
      * to call `session/load` on the same identity. A later record replaces
      * the binding: resume appends one when the agent no longer knows a
      * session that no turn reached. Log-only: the foreign session id is not
@@ -25,13 +24,6 @@ declare module '@deepseek-ai/dsh-session/types' {
       /** Opaque agent-issued ACP session id returned by `session/new`. */
       sessionId: string
     }
-  }
-}
-
-declare module '@deepseek-ai/dsh-session-projection/types' {
-  interface SessionProjectionStateMap {
-    /** The session's bound ACP session id, or null before binding. */
-    acpSession: AcpSessionState | null
   }
 }
 
@@ -63,13 +55,13 @@ export const acpSessionProjection = {
 
 /**
  * Read the session's bound ACP session id.
- * @param projections - registry that owns the projection.
+ * @param sessions - registration handle of {@link acpSessionProjection}.
  * @param session - session whose log is folded.
  * @returns the bound session id, or `undefined` before `session/new` committed.
  */
 export function acpSessionOf(
-  projections: Pick<SessionProjectionRegistry, 'stateOf'>,
+  sessions: Pick<ProjectionHandle<AcpSessionState | null>, 'stateOf'>,
   session: Session,
 ): string | undefined {
-  return projections.stateOf(session, 'acpSession')?.sessionId
+  return sessions.stateOf(session)?.sessionId
 }

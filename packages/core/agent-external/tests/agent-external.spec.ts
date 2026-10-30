@@ -48,19 +48,9 @@ import {
   ExternalHarnessProcess,
   type ExternalModelSelection,
   type ExternalTurnDrive,
+  type ManagedAgentProjections,
 } from '../src/index.ts'
 import { externalModelSelectionProjection } from '../src/model-selection.ts'
-
-declare module '@deepseek-ai/dsh-session/types' {
-  interface SessionEventMap {
-    /** The picker's durable model selection; merged here so tests can append it directly. */
-    'model/selection': {
-      readonly provider: string
-      readonly model: string
-      readonly reasoningEffort?: string
-    }
-  }
-}
 
 /** Scripted ExternalAgent: every harness verb is a recorded stub. */
 class FakeAgent extends ExternalAgent {
@@ -141,8 +131,14 @@ class FakeHost extends ExternalAgentHost<FakeAgent> {
   readonly agents: FakeAgent[] = []
   onConstruct: ((agent: FakeAgent) => void) | undefined
 
-  protected constructAgent(hostCtx: Context, id: SessionId, options: AgentOptions, session: Session): FakeAgent {
-    const agent = new FakeAgent(hostCtx, id, options, session)
+  protected constructAgent(
+    hostCtx: Context,
+    id: SessionId,
+    options: AgentOptions,
+    session: Session,
+    projections: ManagedAgentProjections,
+  ): FakeAgent {
+    const agent = new FakeAgent(hostCtx, id, options, session, projections)
     this.agents.push(agent)
     this.onConstruct?.(agent)
     return agent
@@ -855,10 +851,11 @@ describe('ExternalAgent turn drive', () => {
     })
 
     expect(agent.effectiveSelection()).toEqual({ provider: 'base', model: 'm0', reasoningEffort: 'low' })
-    agent.session.append('model/selection', { provider: 'picked', model: 'm1' })
+    agent.model.select({ provider: 'picked', model: 'm1' })
     expect(agent.effectiveSelection()).toEqual({ provider: 'picked', model: 'm1', reasoningEffort: 'low' })
-    agent.session.append('model/selection', { provider: 'picked', model: 'm2', reasoningEffort: 'high' })
+    agent.model.select({ provider: 'picked', model: 'm2', reasoningEffort: brandString<ReasoningEffortId>('high') })
     expect(agent.effectiveSelection()).toEqual({ provider: 'picked', model: 'm2', reasoningEffort: 'high' })
+    expect(agent.model.current()).toEqual({ provider: 'picked', model: 'm2', reasoningEffort: 'high' })
   })
 })
 
@@ -1145,8 +1142,9 @@ describe('ExternalAgentHost transaction', () => {
 
     expect(agent.bound).toBe(true)
     const stored = persistence.stores.get(SessionId('old'))!
-    // The crash tail receives step/turn closers; the restore marker and the
-    // harness record the resume wrote follow.
+    // The crash tail receives step/turn closers and the restore marker follows;
+    // the harness record is appended after the session is announced, so it
+    // reaches a backend through the live event feed this fake does not route.
     expect(stored.map(event => event.type)).toEqual([
       'turn/start',
       'step/start',
@@ -1154,9 +1152,9 @@ describe('ExternalAgentHost transaction', () => {
       'step/end',
       'turn/end',
       'session/end-seed',
-      'agent/harness',
     ])
-    const closer = stored.at(-3)
+    expect(bench.ctx.agents.harnessOf(agent.session)).toBe('fake')
+    const closer = stored.at(-2)
     expect(closer?.type === 'turn/end' && closer.data.reason).toEqual({ kind: 'interrupted' })
 
     send(agent, 'again')

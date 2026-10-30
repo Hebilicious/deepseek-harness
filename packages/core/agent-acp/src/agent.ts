@@ -13,7 +13,7 @@ import type {
   AgentOptions,
   InboxTarget,
 } from '@deepseek-ai/dsh-agent'
-import type { AssistantStreamAttempt } from '@deepseek-ai/dsh-agent-external'
+import type { AssistantStreamAttempt, ManagedAgentProjections } from '@deepseek-ai/dsh-agent-external'
 import {
   ExternalAgent,
   HARNESS_DEFAULT_MODEL,
@@ -26,6 +26,7 @@ import { errorChain } from '@deepseek-ai/dsh-llm'
 import { brandString } from '@deepseek-ai/dsh-brand'
 import type { AgentCancelCause, Session, SessionId, TurnEndReason } from '@deepseek-ai/dsh-session'
 import type { SandboxMode } from '@deepseek-ai/dsh-sandbox'
+import type { ProjectionHandle } from '@deepseek-ai/dsh-session-projection'
 import type { ToolCallId } from '@deepseek-ai/dsh-llm'
 import type {
   ContentBlock as AcpContentBlock,
@@ -57,7 +58,7 @@ import {
   type AcpSelectOption,
   type AcpSessionAdvert,
 } from './protocol.ts'
-import { acpSessionOf } from './session-state.ts'
+import { acpSessionOf, type AcpSessionState } from './session-state.ts'
 import type { AcpRuntime } from './runtime.ts'
 
 /** Deployment-level defaults the plugin resolves once per agent. */
@@ -156,10 +157,13 @@ export class AcpAgent extends ExternalAgent implements AcpSessionPeer {
     id: SessionId,
     options: AgentOptions,
     session: Session,
+    projections: ManagedAgentProjections,
     private readonly runtime: AcpRuntime,
     private readonly driverConfig: AcpAgentConfig,
+    /** The host's `acpSession` registration, ready before the first attach reads it. */
+    private readonly bindings: Promise<ProjectionHandle<AcpSessionState | null>>,
   ) {
-    super(hostCtx, id, options, session)
+    super(hostCtx, id, options, session, projections)
   }
 
   /** Diagnostic tag naming this agent's harness in every message it raises. */
@@ -199,7 +203,7 @@ export class AcpAgent extends ExternalAgent implements AcpSessionPeer {
     const capabilities = this.runtime.initializeInfo?.agentCapabilities
     this.closeSupported = capabilities?.sessionCapabilities?.close !== undefined
     const cwd = this.session.header.cwd ?? this.driverConfig.cwd ?? process.cwd()
-    const existing = acpSessionOf(this.ctx.sessionProjections, this.session)
+    const existing = acpSessionOf(await this.bindings, this.session)
     const sessionId = existing === undefined
       ? await this.startSession(connection, cwd, signal)
       : await this.loadSession(connection, existing, cwd, signal, capabilities?.loadSession === true)
@@ -320,11 +324,10 @@ export class AcpAgent extends ExternalAgent implements AcpSessionPeer {
 
   /**
    * Whether a turn may have reached the harness, so it holds history a fresh
-   * session would lose. The host registers the turn-boundary fold; without it
-   * the answer is yes.
+   * session would lose.
    */
   private ranTurn(): boolean {
-    return this.ctx.sessionProjections.stateOf(this.session, 'turnBoundary')?.lastTurn !== 0
+    return this.hostCtx.agents.turnBoundaryOf(this.session).lastTurn !== 0
   }
 
   /**

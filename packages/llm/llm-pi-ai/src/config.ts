@@ -12,6 +12,7 @@
  *
  * @module dsh-llm-pi-ai/config
  */
+import type { Volatile } from '@deepseek-ai/cordis'
 
 import type { CacheRetention, ChatTemplateKwargValue, ModelThinkingLevel, Provider, ThinkingBudgets, Transport } from '@earendil-works/pi-ai'
 import z from '@deepseek-ai/schemastery'
@@ -63,10 +64,10 @@ export const DEFAULT_REQUEST_IMAGE_PIXEL_BUDGET = 2048 * 2048
 export const DEFAULT_REQUEST_IMAGE_MAX_BYTES = 1024 * 1024
 
 /** Context capacity assumed for a model neither configuration nor the catalog sizes. */
-export const DEFAULT_CONTEXT_WINDOW = 262_144
+export const DEFAULT_CONTEXT_WINDOW = 1_000_000
 
 /** Output capability assumed for a model neither configuration nor the catalog sizes. */
-export const DEFAULT_MAX_TOKENS = 32_768
+export const DEFAULT_MAX_TOKENS = 128_000
 
 /** The published model directory a catalog overlay reads unless a deployment names another. */
 export const DEFAULT_CATALOG_URL = 'https://models.dev/api.json'
@@ -134,13 +135,13 @@ export interface PiAiProviderProfile {
   compat?: PiAiCompatProfile
   /**
    * Context capacity for a model this route lists that neither the entry nor
-   * the installed catalog sizes (default 262,144). A guess by construction, so
+   * the installed catalog sizes (default 1,000,000). A guess by construction, so
    * a deployment whose gateway serves smaller models corrects it here.
    */
   defaultContextWindow?: number
   /**
    * Output capability for a model this route lists that neither the entry nor
-   * the installed catalog sizes (default 32,768). This sizes the model; it
+   * the installed catalog sizes (default 128,000). This sizes the model; it
    * never becomes a per-request cap on its own.
    */
   defaultMaxTokens?: number
@@ -254,14 +255,17 @@ export interface Config {
    * the dormant settings-driven posture: the adapter mounts with no routes
    * and registers them the moment a settings section supplies profiles.
    */
-  providers?: Record<string, PiAiProviderProfile>
+  providers: Volatile<Record<string, PiAiProviderProfile>>
   /**
    * Opt-in overlay of models the installed pi-ai catalog does not describe,
    * read from a published model directory. Its entries extend a route the
    * installed catalog ships and never declare an endpoint of their own.
    */
-  catalogOverlay?: PiAiCatalogOverlayConfig
+  catalogOverlay: Volatile<PiAiCatalogOverlayConfig | undefined>
 }
+
+/** Plain options accepted by the provider resolver; an unset section is an absent key, never `undefined`. */
+export type Options = { [K in keyof Config]?: Config[K] extends Volatile<infer T> ? Exclude<T, undefined> : never }
 
 const thinkingBudgets = z.object({
   minimal: z.number(),
@@ -381,8 +385,8 @@ const profile = z.object({
 })
 
 /** Runtime schema for {@link Config}. */
-export const Config: z<Config> = z.object({
-  providers: z.dict(profile).default({}),
+export const Config = z.object({
+  providers: z.dict(profile).default({}).volatile(),
   catalogOverlay: z.union([
     z.const(false),
     z.const(true),
@@ -390,7 +394,7 @@ export const Config: z<Config> = z.object({
       url: z.string(),
       refreshHours: z.number(),
     }),
-  ]),
+  ]).volatile(),
 })
 
 /**
@@ -400,7 +404,7 @@ export const Config: z<Config> = z.object({
  * @returns the source to fetch from, or `undefined` when the overlay is off.
  * @throws Error naming the field when the section states an unusable source.
  */
-export function catalogOverlaySource(config: Config): CatalogOverlaySource | undefined {
+export function catalogOverlaySource(config: Options): CatalogOverlaySource | undefined {
   const overlay = config.catalogOverlay
   if (overlay === undefined || overlay === false) return undefined
   const stated = overlay === true ? {} : overlay
@@ -426,7 +430,7 @@ export function catalogOverlaySource(config: Config): CatalogOverlaySource | und
  * @param previous - current resolved section; omission checks every provider.
  * @throws Error naming the route and configuration entry that cannot be served.
  */
-export function assertServiceable(config: Config, previous?: Config): void {
+export function assertServiceable(config: Options, previous?: Options): void {
   const changed = Object.fromEntries(Object.entries(config.providers ?? {}).filter(([provider, profile]) =>
     !deepEqualJson(profile, previous?.providers?.[provider])))
   resolveProfiles(changed)
