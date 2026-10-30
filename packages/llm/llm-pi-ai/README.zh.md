@@ -9,7 +9,7 @@ kind: "package-reference"
 
 ## 概述
 
-`@deepseek-ai/dsh-llm-pi-ai` 通过一份配置把模型请求路由到多个 pi-ai 提供方、OpenAI 兼容网关或自托管服务器。已安装的 pi-ai 提供方会提供端点、协议和模型目录默认值；自定义路由可以直接声明这些值，无需修改代码，可选叠加层还能从公开目录补齐已安装目录尚未收录的模型。profile 与凭据按请求解析，因此设置变更会在下一个请求生效，无需重启。受支持的提供方可以使用已存储的 OAuth 或交互式密钥登录，并通过跨进程锁刷新凭据。本包可以在没有路由时启动，并在用户设置添加路由后将其激活。
+`@deepseek-ai/dsh-llm-pi-ai` 通过一份配置把模型请求路由到多个 pi-ai 提供方、OpenAI 兼容网关或自托管服务器。已安装的 pi-ai 提供方会提供端点、协议和模型目录默认值；自定义路由可以直接声明这些值、继承某个已安装提供方的默认值，或跟随其端点的列表；可选叠加层还能从公开目录补齐已安装目录尚未收录的模型。profile 与凭据按请求解析，因此设置变更作用于下一个请求。受支持的提供方可以使用已存储的 OAuth 或交互式密钥登录，并通过跨进程锁刷新凭据。本包可以在没有路由时启动，并在用户设置添加路由后将其激活。
 
 ## 目录
 
@@ -76,10 +76,14 @@ kind: "package-reference"
 |---|---|---|
 | `apiKeyEnv` | 无 | 按请求解析的凭据引用；省略时交由 pi-ai 环境发现 |
 | `displayName` | 提供方名 | 选择器界面显示的标签 |
+| `catalog` | 不设置 | 本路由以自己的键继承其端点、协议与目录的已安装提供方 |
 | `api` | 目录协议 | 协议格式；仅目录不提供的路由需要 |
 | `baseURL` | 目录端点 | 路由上所有模型的端点 |
 | `models` | 已安装目录 | 整体替换路由目录；每个条目从已安装模型取默认值 |
 | `modelOverrides` | 无 | 重塑个别已安装目录模型，而不替换其余模型 |
+| `followModelListing` | `false` | 提供路由端点列出的模型 |
+| `modelsTimeoutMs` | `5,000` | 单次列表请求以及首次访问等待的期限 |
+| `modelsMaxAgeMs` | `600,000` | 列表超过此时长后，下一次访问会在后台刷新它；`0` 表示每次访问都刷新 |
 | `compat` | 目录检测 | 无法识别端点的协议兼容开关 |
 | `defaultContextWindow` | `1,000,000` | 未描述模型的容量回退 |
 | `defaultMaxTokens` | `128,000` | 未描述模型的输出上限回退 |
@@ -116,6 +120,38 @@ profile 的 `models` 列表会替换而非扩展路由的已安装目录；每�
 
 快照缓存在 `$DSH_HOME/cache/llm-pi-ai/models-dev.json`，并在下次启动时先于任何抓取重新发布，因此目录不可达时启动仍会提供上次抓取的快照；刷新失败只报告一次并继续使用该快照。不按任何计划抓取：启动时仅在快照缺失或早于 `refreshHours` 时读取目录；模型选择器搜索框旁的刷新按钮会按需让 Host 再次抓取，因此本进程启动后发布的模型无需重启即可选择。分节本身发生变化时会重新开始同一个读取流程。缓存记录其来源目录，因此把 `url` 指向别处会抓取新目录，而不是继续提供上一个目录的模型。关闭或移除该分节会停止刷新并丢弃叠加层，让每条路由回到已安装目录。
 
+### 继承另一提供方的目录
+
+pi-ai 已内置服务的第二个账户——例如另一份 OpenCode Go 订阅——是一个使用自己键的路由，并在 `catalog` 中点名该已安装提供方：
+
+```yaml
+providers:
+  opencode-go-2:
+    catalog: opencode-go
+    displayName: OpenCode Go (second)
+    apiKeyEnv: OPENCODE_GO_2_API_KEY
+```
+
+此后该路由按 `opencode-go` 的方式解析端点、协议与模型，包括 `catalogOverlay` 为 `opencode-go` 添加的模型，并随该目录的变化而变化。`displayName`、`apiKeyEnv`、`headers`、`baseURL`、`models`、`modelOverrides` 及其他所有字段保持原有含义，只是改为相对继承来的目录。该路由只通过自己的 `apiKeyEnv` 或 `headers` 认证，从不使用被继承提供方的环境变量或登录，因此不会向另一个账户计费。`catalog` 设在已安装目录已内置的路由键上、点名路由自身或点名已安装目录未内置的提供方时都会被拒绝。
+
+### 跟随端点的模型列表
+
+`followModelListing: true` 让路由提供其端点在协议列表路径上列出的模型——OpenAI 协议为 `GET {baseURL}/models`，Anthropic Messages 为 `GET /v1/models`——读取时使用与其请求相同的认证和 `headers`：
+
+```yaml
+providers:
+  commandcode-goat:
+    apiKeyEnv: COMMANDCODE_API_KEY
+    api: openai-completions
+    baseURL: https://api.commandcode.ai/provider/v1
+    followModelListing: true
+    modelsMaxAgeMs: 600000       # optional; default ten minutes
+```
+
+启动后的首次访问，或端点、凭据变化后的首次访问，最多等待列表 `modelsTimeoutMs`。之后的访问立即返回；列表超过 `modelsMaxAgeMs` 后，访问会在后台刷新它；模型选择器的刷新按钮会按需重新加载所有被跟随的列表。列表变化无需重启即可到达每个界面。加载失败时保留上一次成功的列表；在任何加载成功之前，路由提供未开启该开关时会提供的模型：它的 `models`，否则是它的目录。列表按端点与凭据保存在内存中，因此轮换后的密钥永远不会提供另一个账户的模型。
+
+列表决定路由提供哪些模型：按列表顺序的每个列出 id，再加上列表遗漏的每个 `models` 条目，因为它是部署写下的；列表遗漏的目录模型不再提供。每个模型的字段依次来自它的 `models` 条目、路由的目录条目（自身的或继承的）、列表报告的上下文窗口、输出上限与名称，最后是 `defaultContextWindow`、`defaultMaxTokens` 与 `defaultInput`。目录未描述的模型通过列表的协议、在列表的端点上提供。列表协议是路由的 `api`，否则是其目录模型共用的协议，否则在有目录模型使用 Chat Completions 时取 Chat Completions；列表端点是路由的 `baseURL`，否则是目录中该协议模型共用的端点。既无法解析出可列出的协议、也没有端点的路由会被拒绝；未开启该开关时设置 `modelsTimeoutMs` 与 `modelsMaxAgeMs` 同样会被拒绝。手工声明的跟随路由可以省略 `models`，在其列表点名某个模型之前不提供任何模型。
+
 ### 带推理（reasoning）与协议兼容运行
 
 `reasoningEfforts` 声明模型可选择的 thinking 等级：每个键都是选择器提供的等级，其值是分派时在协议中发送的拼写，因此 `max: ultra` 可以为拥有自有词汇的网关重命名等级。省略该字段时保留已安装目录条目的能力；`false` 声明非推理模型。对于 pi-ai 无法识别的端点，`compat` 开关重塑请求——哪个角色携带系统提示词、哪个字段限制输出、thinking 等级如何传递——可逐路由、逐模型配置。条目与已安装目录都没有尺寸的模型，会采用路由的 `defaultContextWindow` 与 `defaultMaxTokens` 回退值。
@@ -134,7 +170,7 @@ profile 的 `models` 列表会替换而非扩展路由的已安装目录；每�
 
 ### 失败与恢复
 
-pi-ai 不提供的路由需要 `api`、`baseURL` 与非空 `models` 列表；无法服务的 profile 会在写入处被拒绝，并点名路由与模型。失败携带稳定 code：无法使用的凭据以 `INVALID_CREDENTIAL` 失败并点名路由与引用，`apiKeyEnv` 引用解析为空的路由以 `MISSING_CREDENTIAL` 失败，未配置模型以 `UNKNOWN_MODEL` 失败，终止性提供方失败则区分 `QUOTA` 与暂时性 `RATE_LIMIT`。`GenerateOptions.stop` 以 `UNSUPPORTED_OPTION` 被拒绝，因为 pi-ai 的通用流式 UI 无法跨提供方保证它。
+pi-ai 不提供的路由需要 `api`、`baseURL` 与非空 `models` 列表，除非它继承某个 `catalog` 或跟随其模型列表；无法服务的 profile 会在写入处被拒绝，并点名路由与模型。失败携带稳定 code：无法使用的凭据以 `INVALID_CREDENTIAL` 失败并点名路由与引用，`apiKeyEnv` 引用解析为空的路由以 `MISSING_CREDENTIAL` 失败，未配置模型以 `UNKNOWN_MODEL` 失败，终止性提供方失败则区分 `QUOTA` 与暂时性 `RATE_LIMIT`。`GenerateOptions.stop` 以 `UNSUPPORTED_OPTION` 被拒绝，因为 pi-ai 的通用流式 UI 无法跨提供方保证它。
 
 Config 更新严格验证发生变化的 provider。初始加载将已存储的目录故障保留为可编辑的 provider 诊断；未更改的故障 provider 不阻止其他编辑。可用模型仍可选择，无法解析的模型在网络 I/O 前失败。修复或删除问题配置会清除其诊断。
 
@@ -187,7 +223,8 @@ Config 更新严格验证发生变化的 provider。初始加载将已存储的�
 | [`src/context.ts`](src/context.ts) | Harness 到 pi-ai 的上下文转换、图片处理、回放恢复 |
 | [`src/stream.ts`](src/stream.ts) | 把 pi-ai 事件转换为 harness `StreamChunk` 值 |
 | [`src/replay.ts`](src/replay.ts) | 带版本的 `ReplayEnvelope` 存储与校验 |
-| [`src/discovery.ts`](src/discovery.ts) | 面向配置界面的端点询问 |
+| [`src/discovery.ts`](src/discovery.ts) | 面向配置界面与被跟随列表的端点询问 |
+| [`src/model-listing.ts`](src/model-listing.ts) | 跟随端点模型列表的路由所用、按凭据划分的列表缓存 |
 
 ### 注册与目录
 
@@ -279,7 +316,8 @@ pi-ai 事件变成 harness 的推理、文本、工具调用、用量与 finish 
 - **重置恢复继承配置**——重置下层 profile 提供的路由会恢复该路由。
 - **完整替换 Config 可以移除继承的字典条目**——字段重置则恢复其继承值。
 - **`headers` 可以携带 redactor 永远看不到的凭据**——profile 解析会拒绝 Fetch 无法表示的名称与值，但该字典仍是纯字符串；以 `apiKeyEnv` 引用存储凭据。
-- **已安装目录不会自行刷新**——路由提供已安装 pi-ai 构建为它记录的模型，再加上 `catalogOverlay` 添加的内容；这里没有任何机制在请求时向提供方询问它提供的模型。
+- **已安装目录不会自行刷新**——路由提供已安装 pi-ai 构建为它记录的模型，再加上 `catalogOverlay` 添加的内容，除非它设置了 `followModelListing`。
+- **列表不报告模态与推理能力**——目录未描述的列出模型采用 `defaultInput` 且不推理；需要时在 `models` 条目中声明。被跟随的列表只保存在内存中，因此每次启动都会重新加载。
 - **叠加层条目需要同提供方、同协议的已安装模型**——没有对应已安装模型的提供方与协议不会产生端点事实，因此该条目会被跳过而不是猜测；已安装目录未记录的网关怪癖则用 `modelOverrides` 修正。
 - **叠加层快照经 harness home 共享**——`$DSH_HOME/cache` 下的缓存对使用同一 home 的每个部署都是同一个文件；既无缓存又无法访问目录时启动，不提供任何叠加层。
 - **发现操作不更改已配置模型**——需显式将发现结果采纳到路由配置中。

@@ -6,7 +6,9 @@
  * A route key is not required to name an installed pi-ai provider. When it does,
  * that provider's endpoint, protocol, display name, and model catalog are the
  * profile's defaults and the profile overrides them field by field; when it does
- * not, the profile is the whole provider declaration. Stored reads retain
+ * not, the profile is the whole provider declaration, or inherits another
+ * installed provider's defaults through `catalog`. A route may also follow its
+ * endpoint's model listing, whose last good result resolution reads. Stored reads retain
  * catalog diagnostics beside serviceable models; writes validate every changed
  * provider before persistence. Self-contained profile constraints apply to both.
  *
@@ -43,6 +45,8 @@ import type {
   PiAiReasoningEfforts,
   RouteCatalog,
 } from './catalog.ts'
+import { DEFAULT_MODELS_MAX_AGE_MS, DEFAULT_MODELS_TIMEOUT_MS } from './model-listing.ts'
+import type { ListedModel, ModelListingSettings } from './model-listing.ts'
 import { buildProvider, supportedProtocols } from './provider.ts'
 
 /** Default maximum idle interval while an adapter stream read is outstanding. */
@@ -103,6 +107,17 @@ export interface PiAiProviderProfile {
   /** Name shown by configuration surfaces; defaults to the route key. */
   displayName?: string
   /**
+   * Installed pi-ai provider whose endpoint, protocols, and model catalog —
+   * with its catalog overlay — this route inherits under its own key, which is
+   * how a second account on a catalog provider's service is declared. Every
+   * other field keeps its meaning, now relative to the inherited catalog. The
+   * route authenticates through `apiKeyEnv` or `headers` only, never through
+   * the inherited provider's own environment. Only a route the installed
+   * catalog does not ship may set it, and it must name a provider the
+   * installed catalog ships.
+   */
+  catalog?: string
+  /**
    * Wire protocol every model on this route speaks. Omission keeps each
    * installed catalog model's own protocol, which is why a catalog route needs
    * no protocol at all; a route the catalog does not ship must name one.
@@ -125,6 +140,24 @@ export interface PiAiProviderProfile {
    * model the catalog does not describe is refused rather than skipped.
    */
   modelOverrides?: Record<string, PiAiModelOverride>
+  /**
+   * Serve the models the route's endpoint lists at its protocol's listing path
+   * (`GET {baseURL}/models`; Anthropic Messages at `/v1/models`) instead of a
+   * fixed list. Each listed model is described by its `models` entry, then the
+   * route's catalog, then the listing's own fields, then the route defaults; a
+   * `models` entry the listing omits keeps serving, and a catalog model it
+   * omits does not. Until the first listing loads, and while a load fails
+   * without an earlier success, the route serves what it would without this
+   * switch.
+   */
+  followModelListing?: boolean
+  /** Deadline of one listing request, which also bounds the first access's wait (default 5,000); requires {@link followModelListing}. */
+  modelsTimeoutMs?: number
+  /**
+   * Listing age after which the next access refreshes it in the background
+   * (default 600,000); 0 refreshes on every access. Requires {@link followModelListing}.
+   */
+  modelsMaxAgeMs?: number
   /**
    * pi-ai wire-compatibility switches defaulting every model on this route
    * whose protocol declares them; each model's own `compat` overrides per
@@ -218,6 +251,8 @@ export interface ResolvedPiAiProviderProfile
   catalogError?: string
   /** Per-model failures reported before attempting a request. */
   modelErrors: ReadonlyMap<string, string>
+  /** Where and how often a following route reads its listing; absent when it does not follow one or its catalog failed. */
+  modelListing?: ModelListingSettings
   /**
    * Per-request output caps this profile explicitly configured, by model id.
    * The seam materializes one only into a request that names no cap of its
@@ -362,10 +397,16 @@ const modelOverride: z<PiAiModelOverride> = z.object(modelFields)
 const profile = z.object({
   apiKeyEnv: z.string().role('credential-ref'),
   displayName: z.string(),
+  catalog: z.string(),
   api: z.union(supportedProtocols()),
   baseURL: z.string(),
   models: z.array(modelProfile),
   modelOverrides: z.dict(modelOverride),
+  followModelListing: z.boolean(),
+  // No schema defaults: a timing field without the switch is refused, which
+  // a materialized default would make impossible to tell from one written.
+  modelsTimeoutMs: z.number().min(Number.MIN_VALUE).max(MAX_TIMER_DELAY_MS),
+  modelsMaxAgeMs: z.number().step(1).min(0).max(Number.MAX_SAFE_INTEGER),
   compat: compatProfile,
   defaultContextWindow: z.number().step(1).min(1).default(DEFAULT_CONTEXT_WINDOW),
   defaultMaxTokens: z.number().step(1).min(1).default(DEFAULT_MAX_TOKENS),
@@ -455,6 +496,34 @@ function rejectRemovedFields(provider: string, source: PiAiProviderProfile): voi
   }
 }
 
+/**
+ * Validate a route's listing switch and timing. Settings updates can reach it
+ * without schema validation, so every bound is judged here.
+ * @param provider - route key, for diagnostics.
+ * @param source - the route's profile.
+ * @returns the timing when the route follows its listing.
+ */
+function resolveListingTiming(provider: string, source: PiAiProviderProfile): Pick<ModelListingSettings, 'timeoutMs' | 'maxAgeMs'> | undefined {
+  if (source.followModelListing !== true) {
+    for (const field of ['modelsTimeoutMs', 'modelsMaxAgeMs'] as const) {
+      if (source[field] !== undefined) {
+        throw new Error(`llm-pi-ai: provider "${provider}" sets ${field}, which applies only with followModelListing: true`)
+      }
+    }
+    return undefined
+  }
+  const { modelsTimeoutMs = DEFAULT_MODELS_TIMEOUT_MS, modelsMaxAgeMs = DEFAULT_MODELS_MAX_AGE_MS } = source
+  if (!Number.isFinite(modelsTimeoutMs) || modelsTimeoutMs <= 0 || modelsTimeoutMs > MAX_TIMER_DELAY_MS) {
+    throw new Error(
+      `llm-pi-ai: provider "${provider}" modelsTimeoutMs must be a positive finite number no greater than ${MAX_TIMER_DELAY_MS}`,
+    )
+  }
+  if (!Number.isSafeInteger(modelsMaxAgeMs) || modelsMaxAgeMs < 0) {
+    throw new Error(`llm-pi-ai: provider "${provider}" modelsMaxAgeMs must be a non-negative safe integer`)
+  }
+  return { timeoutMs: modelsTimeoutMs, maxAgeMs: modelsMaxAgeMs }
+}
+
 /** Reject a profile header that Fetch cannot put on a provider request. */
 function assertValidHeaders(provider: string, headers: Readonly<Record<string, string>> | undefined): void {
   for (const [name, value] of Object.entries(headers ?? {})) {
@@ -475,13 +544,15 @@ function assertValidHeaders(provider: string, headers: Readonly<Record<string, s
  * routes. An omitted dict resolves to the empty, dormant route set.
  * @param providers - configured provider profiles keyed by route.
  * @param validation - writes require a complete catalog; stored reads retain catalog diagnostics.
- * @param overlayFor - the route's catalog overlay, when the directory supplied one.
+ * @param overlayFor - an installed provider's catalog overlay, when the directory supplied one.
+ * @param listingFor - a following route's last good listing, when one has loaded.
  * @returns validated profiles in configuration order.
  */
 export function resolveProfiles(
   providers: Readonly<Record<string, PiAiProviderProfile>> | undefined,
   validation: 'strict' | 'deferred' = 'strict',
   overlayFor?: (provider: string) => readonly CatalogModel[] | undefined,
+  listingFor?: (provider: string) => readonly ListedModel[] | undefined,
 ): Map<string, ResolvedPiAiProviderProfile> {
   if (Array.isArray(providers)) {
     throw new Error('llm-pi-ai: providers is now a dict keyed by provider route, not an array of profiles')
@@ -497,6 +568,10 @@ export function resolveProfiles(
     if (source.displayName !== undefined && source.displayName.length === 0) {
       throw new Error(`llm-pi-ai: provider "${provider}" has an empty displayName`)
     }
+    if (source.catalog !== undefined && (source.catalog.length === 0 || source.catalog === provider)) {
+      throw new Error(`llm-pi-ai: provider "${provider}" catalog must name another installed provider, not "${source.catalog}"`)
+    }
+    const listingTiming = resolveListingTiming(provider, source)
     assertValidHeaders(provider, source.headers)
     const streamIdleTimeoutMs = source.streamIdleTimeoutMs ?? DEFAULT_STREAM_IDLE_TIMEOUT_MS
     if (!Number.isFinite(streamIdleTimeoutMs)
@@ -534,16 +609,21 @@ export function resolveProfiles(
     let catalog: RouteCatalog | undefined
     let piProvider: Provider | undefined
     let catalogError: string | undefined
-    const overlay = overlayFor?.(provider)
+    // The overlay is keyed by installed provider, so an inheriting route reads the one it inherits.
+    const overlay = overlayFor?.(source.catalog ?? provider)
+    const listing = listingTiming === undefined ? undefined : listingFor?.(provider)
     try {
       catalog = resolveRouteModels({
         provider,
+        ...source.catalog === undefined ? {} : { catalog: source.catalog },
         ...source.api === undefined ? {} : { api: source.api },
         ...source.baseURL === undefined ? {} : { baseURL: source.baseURL },
         ...source.models === undefined ? {} : { models: source.models },
         ...source.modelOverrides === undefined ? {} : { modelOverrides: source.modelOverrides },
         ...source.compat === undefined ? {} : { compat: source.compat },
         ...overlay === undefined ? {} : { overlay },
+        ...listingTiming === undefined ? {} : { followListing: true },
+        ...listing === undefined ? {} : { listing },
         defaultInput,
         defaultContextWindow: source.defaultContextWindow ?? DEFAULT_CONTEXT_WINDOW,
         defaultMaxTokens: source.defaultMaxTokens ?? DEFAULT_MAX_TOKENS,
@@ -552,6 +632,7 @@ export function resolveProfiles(
       piProvider = buildProvider({
         provider,
         displayName,
+        ...source.catalog === undefined ? {} : { catalog: source.catalog },
         ...source.api === undefined ? {} : { api: source.api },
         ...source.baseURL === undefined ? {} : { baseURL: source.baseURL },
         models: catalog.models,
@@ -576,6 +657,9 @@ export function resolveProfiles(
       ...rest.thinkingBudgets === undefined ? {} : { thinkingBudgets: { ...rest.thinkingBudgets } },
       configuredMaxTokens: catalog?.configuredMaxTokens ?? new Map(),
       modelErrors: catalog?.modelErrors ?? new Map(),
+      ...catalog?.listingEndpoint === undefined || listingTiming === undefined
+        ? {}
+        : { modelListing: { ...catalog.listingEndpoint, ...listingTiming } },
       ...piProvider === undefined ? {} : { piProvider },
       ...catalogError === undefined ? {} : { catalogError },
     })

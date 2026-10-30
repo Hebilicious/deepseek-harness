@@ -2,8 +2,9 @@
  * Construction of the pi-ai `Provider` that one configured route registers into
  * the adapter's `Models` collection.
  *
- * Two constructions, one decision: a route the installed catalog ships, whose
- * profile does not override the wire protocol, **reuses that catalog provider**
+ * Two constructions, one decision: a route the installed catalog ships, or one
+ * inheriting an installed provider's catalog, whose profile does not override
+ * the wire protocol, **reuses that catalog provider**
  * with its models replaced — the catalog provider owns API implementations this
  * package cannot reconstruct (Bedrock loads its Smithy module through a
  * separate entry point), so rebuilding it from parts would silently narrow
@@ -90,6 +91,8 @@ export interface ProviderSpec {
   provider: string
   /** Display name for selectors and status labels. */
   displayName: string
+  /** Installed provider whose catalog the route inherits under its own key; absent means the route key's own. */
+  catalog?: string
   /** Wire protocol override; absent means each model keeps its catalog protocol. */
   api?: string
   /** Endpoint override already applied to {@link models}; kept for provider-level display. */
@@ -115,6 +118,10 @@ export interface ProviderSpec {
  * environment a provider reads is a property of the provider, not of the wire
  * format its models speak.
  *
+ * A route inheriting another provider's catalog is a separate account on the
+ * same service, so it authenticates through the harness alone: the inherited
+ * provider's ambient discovery would send that provider's own key.
+ *
  * The single addition covers a catalog provider that offers no api-key method
  * at all. pi-ai resolves a request's `apiKey` override only when the provider
  * declares one (`resolveProviderAuth` checks `provider.auth.apiKey` before
@@ -129,7 +136,7 @@ export interface ProviderSpec {
  * @returns the auth to construct this route's provider with.
  */
 function routeAuth(spec: ProviderSpec, catalog: Provider | undefined): Provider['auth'] {
-  if (catalog === undefined) return { apiKey: harnessApiKeyAuth(spec.displayName) }
+  if (catalog === undefined || spec.catalog !== undefined) return { apiKey: harnessApiKeyAuth(spec.displayName) }
   if (catalog.auth.apiKey !== undefined || !spec.namesCredential) return catalog.auth
   return { ...catalog.auth, apiKey: harnessApiKeyAuth(spec.displayName) }
 }
@@ -165,7 +172,7 @@ function reuseCatalogProvider(base: Provider, spec: ProviderSpec): Provider {
  * @throws Error when the route names a wire protocol this build cannot serve.
  */
 export function buildProvider(spec: ProviderSpec): Provider {
-  const catalog = catalogProvider(spec.provider)
+  const catalog = catalogProvider(spec.catalog ?? spec.provider)
   // A catalog route keeping its catalog protocol reuses the catalog provider;
   // an explicit protocol means the deployment is repointing the route at a
   // different wire format, which only the protocol table can serve.

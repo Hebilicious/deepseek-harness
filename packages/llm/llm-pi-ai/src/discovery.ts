@@ -29,21 +29,7 @@ import type { Api, Model } from '@earendil-works/pi-ai'
 import { OversizedBodyError, readBounded } from './bounded-body.ts'
 import { catalogModels } from './catalog.ts'
 import { overlayCatalog } from './catalog-overlay.ts'
-
-/**
- * Protocols whose model listing this module can read. OpenAI protocols use
- * bearer auth at `GET {baseURL}/models`; Anthropic Messages uses `x-api-key`
- * and `anthropic-version` at its native `GET /v1/models`. Azure is absent
- * despite its OpenAI lineage — it authenticates with an `api-key` header and
- * requires an `api-version` query — and Codex authenticates through OAuth;
- * guessing at either would report an authentication failure as a provider
- * with no models. pi-ai's remaining protocols are absent for the same reason.
- */
-const LISTABLE_PROTOCOLS: ReadonlySet<string> = new Set([
-  'anthropic-messages',
-  'openai-completions',
-  'openai-responses',
-])
+import { isListableProtocol } from './model-listing.ts'
 
 /** Stable API version required by Anthropic's model-listing endpoint. */
 const ANTHROPIC_VERSION = '2023-06-01'
@@ -133,7 +119,7 @@ function listingUrl(baseURL: string, api: string): string {
  * object-valued map entries are models; primitive properties are ignored
  * because they may be directory metadata rather than model records.
  *
- * Entries without a usable id are skipped rather than failing the whole
+ * Entries without a usable id, and later rows repeating an id, are skipped rather than failing the whole
  * interrogation: a single malformed row should not deny the user the rest of
  * a working endpoint's catalog. Missing names fall back to the adopted id so
  * the Web form receives a complete human-readable row.
@@ -159,10 +145,13 @@ function readListing(body: unknown): LlmDiscoveredModel[] {
       .map(([key, raw]) => ({ key, raw }))
   }
   const models: LlmDiscoveredModel[] = []
+  const seen = new Set<string>()
   for (const { key, raw } of listed) {
     const entry = raw as ListingEntry | null
     const id = label(key, entry?.id)
-    if (id === undefined) continue
+    // A repeated id keeps its first row: a route serves one model per id.
+    if (id === undefined || seen.has(id)) continue
+    seen.add(id)
     const name = label(entry?.name, entry?.display_name, entry?.displayName) ?? id
     const contextWindow = capacity(
       entry?.contextWindow,
@@ -261,13 +250,12 @@ export async function discoverModels(
   // when the endpoint speaks something else (an Anthropic gateway answers 401,
   // which reads as a credential problem), and hand-entry remains the way out.
   const api = request.api ?? 'openai-completions'
-  if (!LISTABLE_PROTOCOLS.has(api)) {
+  if (!isListableProtocol(api)) {
     throw new LlmError(
       `pi-ai protocol "${api}" has no model listing this build can read; enter this provider's models by hand`,
       'DISCOVERY_UNSUPPORTED',
     )
   }
-  const url = listingUrl(request.baseURL, api)
   // A key typed into the form wins: it may replace the stored key that is
   // failing. The stored profile is asked past the catalog and protocol checks,
   // and its credential resolver remains lazy so a typed key cannot fail over a
@@ -276,9 +264,43 @@ export async function discoverModels(
   const stored = storedProfile?.()
   const supplied = request.apiKey ?? await stored?.resolveApiKey()
   const apiKey = supplied === undefined ? undefined : usableProbeKey(supplied)
+  return requestEndpointListing({
+    baseURL: request.baseURL,
+    api,
+    ...apiKey === undefined ? {} : { apiKey },
+    headers: stored?.headers,
+    ...request.signal === undefined ? {} : { signal: request.signal },
+  })
+}
+
+/** One authenticated model-listing request. */
+export interface EndpointListingRequest {
+  /** Endpoint root the protocol's listing path is joined to. */
+  readonly baseURL: string
+  /** Wire protocol whose listing path and authentication apply; must satisfy {@link isListableProtocol}. */
+  readonly api: string
+  /** Usable credential; absence sends no credential header. */
+  readonly apiKey?: string
+  /** Deployment headers sent beneath the listing's own accept, version, credential, and attribution headers. */
+  readonly headers: Readonly<Record<string, string>> | undefined
+  /** Cancellation for the request and its body read. */
+  readonly signal?: AbortSignal
+}
+
+/**
+ * Read the models one endpoint lists at its protocol's listing path.
+ * @param request - endpoint, protocol, credential, headers, and cancellation.
+ * @returns the listed models in endpoint order, without duplicate ids.
+ * @throws LlmError `ABORTED` after cancellation, otherwise `DISCOVERY_FAILED`
+ *   when the endpoint is unreachable, refuses the request, or answers with
+ *   something other than a supported model listing.
+ */
+export async function requestEndpointListing(request: EndpointListingRequest): Promise<LlmDiscoveredModel[]> {
+  const { api, apiKey } = request
+  const url = listingUrl(request.baseURL, api)
   let response: Response
   try {
-    const headers = new Headers(stored?.headers === undefined ? undefined : Object.entries(stored.headers))
+    const headers = new Headers(request.headers === undefined ? undefined : Object.entries(request.headers))
     headers.set('accept', 'application/json')
     if (api === 'anthropic-messages') {
       headers.set('anthropic-version', ANTHROPIC_VERSION)

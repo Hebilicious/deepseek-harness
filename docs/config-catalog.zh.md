@@ -1989,7 +1989,7 @@ export interface Config extends ProtocolConfig, ModelListingConfig {
 
 - `inject`: `llm`
 - `refs`: `Api` (`@earendil-works/pi-ai`) · `CacheRetention` (`@earendil-works/pi-ai`) · `Model` (`@earendil-works/pi-ai`) · `ModelThinkingLevel` (`@earendil-works/pi-ai`) · `OpenAICompletionsCompat` (`@earendil-works/pi-ai`) · [`RetryPolicyConfig`](../packages/llm/llm/src/index.ts) · `ThinkingBudgets` (`@earendil-works/pi-ai`) · `Transport` (`@earendil-works/pi-ai`) · `Volatile` (`@deepseek-ai/cordis`)
-- `source`: [`packages/llm/llm-pi-ai/src/config.ts:252`](../packages/llm/llm-pi-ai/src/config.ts)
+- `source`: [`packages/llm/llm-pi-ai/src/config.ts:287`](../packages/llm/llm-pi-ai/src/config.ts)
 
 ```ts config-catalog
 /** Plugin configuration: the provider routes this instance owns. */
@@ -2015,6 +2015,17 @@ export interface PiAiProviderProfile {
   /** Name shown by configuration surfaces; defaults to the route key. */
   displayName?: string
   /**
+   * Installed pi-ai provider whose endpoint, protocols, and model catalog —
+   * with its catalog overlay — this route inherits under its own key, which is
+   * how a second account on a catalog provider's service is declared. Every
+   * other field keeps its meaning, now relative to the inherited catalog. The
+   * route authenticates through `apiKeyEnv` or `headers` only, never through
+   * the inherited provider's own environment. Only a route the installed
+   * catalog does not ship may set it, and it must name a provider the
+   * installed catalog ships.
+   */
+  catalog?: string
+  /**
    * Wire protocol every model on this route speaks. Omission keeps each
    * installed catalog model's own protocol, which is why a catalog route needs
    * no protocol at all; a route the catalog does not ship must name one.
@@ -2037,6 +2048,24 @@ export interface PiAiProviderProfile {
    * model the catalog does not describe is refused rather than skipped.
    */
   modelOverrides?: Record<string, PiAiModelOverride>
+  /**
+   * Serve the models the route's endpoint lists at its protocol's listing path
+   * (`GET {baseURL}/models`; Anthropic Messages at `/v1/models`) instead of a
+   * fixed list. Each listed model is described by its `models` entry, then the
+   * route's catalog, then the listing's own fields, then the route defaults; a
+   * `models` entry the listing omits keeps serving, and a catalog model it
+   * omits does not. Until the first listing loads, and while a load fails
+   * without an earlier success, the route serves what it would without this
+   * switch.
+   */
+  followModelListing?: boolean
+  /** Deadline of one listing request, which also bounds the first access's wait (default 5,000); requires {@link followModelListing}. */
+  modelsTimeoutMs?: number
+  /**
+   * Listing age after which the next access refreshes it in the background
+   * (default 600,000); 0 refreshes on every access. Requires {@link followModelListing}.
+   */
+  modelsMaxAgeMs?: number
   /**
    * pi-ai wire-compatibility switches defaulting every model on this route
    * whose protocol declares them; each model's own `compat` overrides per

@@ -26,6 +26,16 @@
  *         models:
  *           - id: claude-sonnet-4-5
  *             contextWindow: 200000
+ *       # Second account on an installed provider's service, under its own key.
+ *       opencode-go-2:
+ *         catalog: opencode-go
+ *         apiKeyEnv: OPENCODE_GO_2_API_KEY
+ *       # Gateway serving whatever its own /models listing names.
+ *       acme-listed:
+ *         apiKeyEnv: ACME_GATEWAY_API_KEY
+ *         api: openai-completions
+ *         baseURL: https://listed.acme.example/v1
+ *         followModelListing: true
  *       # Hand-declared route: pi-ai ships nothing under this key.
  *       acme-gateway:
  *         displayName: Acme Gateway
@@ -73,9 +83,11 @@ import { catalogSnapshotPath, startCatalogRefresh } from './catalog-sync.ts'
 import type { CatalogRefreshHandle } from './catalog-sync.ts'
 import { assertServiceable, catalogOverlaySource, Config, resolveProfiles } from './config.ts'
 import type { ResolvedPiAiProviderProfile } from './config.ts'
-import { discoverModels } from './discovery.ts'
+import { discoverModels, requestEndpointListing } from './discovery.ts'
 import type { StoredModelDiscoveryProfile } from './discovery.ts'
 import { registerPiAiFlows } from './login.ts'
+import { ModelListingCache } from './model-listing.ts'
+import type { ListedModel } from './model-listing.ts'
 import { providerDefaultsOf } from './provider-data.ts'
 import type { PiAiRequestHeaderContext } from './types.ts'
 
@@ -209,6 +221,10 @@ export function apply(ctx: Context, config: Config): void {
   let refresh: CatalogRefreshHandle | undefined
   /** This route's overlay entries, which the resolver merges under the installed catalog. */
   const overlayFor = (provider: string): readonly CatalogModel[] | undefined => overlay?.get(provider)
+  /** Listing caches of the routes that follow their endpoint's model listing, by route. */
+  const listings = new Map<string, ModelListingCache>()
+  /** A following route's last good listing, which the resolver reads in place of a fixed list. */
+  const listingFor = (provider: string): readonly ListedModel[] | undefined => listings.get(provider)?.current()
   /**
    * The resolved profiles for the current configuration, memoized by the raw
    * snapshot's identity — which is also what makes the adapter's own snapshot
@@ -222,7 +238,12 @@ export function apply(ctx: Context, config: Config): void {
   const profiles = (): ReadonlyMap<string, ResolvedPiAiProviderProfile> => {
     const raw = config.providers.get()
     if (raw === lastRaw && memoized !== undefined) return memoized
-    const next = resolveProfiles(structuredClone(raw) as import('./config.ts').Options['providers'], 'deferred', overlayFor)
+    const next = resolveProfiles(
+      structuredClone(raw) as import('./config.ts').Options['providers'],
+      'deferred',
+      overlayFor,
+      listingFor,
+    )
     lastRaw = raw
     memoized = next
     return next
@@ -270,6 +291,60 @@ export function apply(ctx: Context, config: Config): void {
     )
   }
 
+  /**
+   * Bring one route's listing current, creating its cache on first use. A
+   * changed listing drops the profile memo, so the next operation resolves the
+   * route against it, and tells every surface to reload the route's models.
+   * A route whose credential does not resolve is not listed: the operation
+   * that follows reports that failure through its own credential resolution.
+   */
+  const prepareListing = async (
+    provider: string,
+    options: { readonly refresh?: boolean; readonly signal?: AbortSignal },
+  ): Promise<void> => {
+    const profile = profiles().get(provider)
+    const settings = profile?.modelListing
+    if (profile === undefined || settings === undefined) return
+    let cache = listings.get(provider)
+    if (cache === undefined) {
+      cache = new ModelListingCache({
+        load: (endpoint, apiKey, signal) => requestEndpointListing({
+          baseURL: endpoint.baseURL,
+          api: endpoint.api,
+          ...apiKey === undefined ? {} : { apiKey },
+          headers: profiles().get(provider)?.headers,
+          signal,
+        }),
+        now: () => Date.now(),
+        warn: (message) => { ctx.logger.warn(message) },
+        changed: () => {
+          memoized = undefined
+          ctx.emit('llm/models-updated', provider)
+        },
+      })
+      listings.set(provider, cache)
+    }
+    let apiKey: string | undefined
+    try {
+      apiKey = await resolveApiKey(provider, profile)
+    } catch (unresolved) {
+      // The operation that follows resolves the same credential and reports this failure itself.
+      void unresolved
+      return
+    }
+    await cache.access(settings, apiKey, options)
+  }
+  /** Dispose the caches of routes that no longer follow a listing. */
+  const pruneListings = (): void => {
+    const current = profiles()
+    for (const [provider, cache] of listings) {
+      if (current.get(provider)?.modelListing !== undefined) continue
+      listings.delete(provider)
+      void cache.dispose()
+    }
+  }
+  ctx.effect(() => () => Promise.all([...listings.values()].map(cache => cache.dispose())).then(() => {}))
+
   // One store and one ambient context for the whole plugin instance: both read
   // through `ctx` per call, so they stay correct across the collection rebuilds
   // a configuration change causes, and a sign-in survives one.
@@ -291,9 +366,15 @@ export function apply(ctx: Context, config: Config): void {
         + ` sending that message as provider-neutral content (${reason})`,
       )
     },
-    // A surface's explicit refresh fetches the directory now; an unconfigured
-    // overlay has nothing to fetch, so the adapter's refresh settles at once.
-    refreshModelCatalog: async () => { await refresh?.refresh() },
+    // A surface's explicit refresh fetches the directory and every followed
+    // listing now; with neither configured, the adapter's refresh settles at once.
+    refreshModelCatalog: async () => {
+      await Promise.all([
+        refresh?.refresh(),
+        ...[...profiles().keys()].map(provider => prepareListing(provider, { refresh: true })),
+      ])
+    },
+    prepareModels: (provider, signal) => prepareListing(provider, signal === undefined ? {} : { signal }),
   })
   // Independent of the route set: signing in is what makes a route worth
   // adding, so the flows are offered before any profile names their provider.
@@ -438,7 +519,7 @@ export function apply(ctx: Context, config: Config): void {
   ensureRegistrationFacts()
 
   ctx.on('loader/volatile-update', () => {
-    try { ensureRegistrationFacts(); ensureDirectory() }
+    try { ensureRegistrationFacts(); ensureDirectory(); pruneListings() }
     catch (error) {
       ctx.logger.error('llm-pi-ai: configuration conflicts with an existing provider route')
       ctx.logger.error(error)

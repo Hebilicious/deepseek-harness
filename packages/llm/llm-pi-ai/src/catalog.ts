@@ -5,6 +5,11 @@
  * stays configuration-free while a route pi-ai has never heard of is fully
  * describable from `cordis.patch.yml`.
  *
+ * A route the installed catalog does not ship may inherit another installed
+ * provider's catalog under its own key, and a route may follow its endpoint's
+ * model listing, which then decides the models it serves while the catalog and
+ * the profile still describe them.
+ *
  * Strict resolution rejects unserviceable models before settings writes.
  * Deferred resolution retains their diagnostics so stored catalog drift does
  * not prevent inspection, repair, or requests to independently valid models.
@@ -15,6 +20,8 @@
 import { builtinProviders, getAllBuiltinModels, getBuiltinModels } from '@earendil-works/pi-ai/providers/all'
 import type { BuiltinProvider } from '@earendil-works/pi-ai/providers/all'
 import { overlayCatalog } from './catalog-overlay.ts'
+import { isListableProtocol } from './model-listing.ts'
+import type { ListedModel } from './model-listing.ts'
 import type {
   AnthropicMessagesCompat,
   Api,
@@ -653,6 +660,12 @@ export type PiAiModelOverride = Omit<PiAiModelProfile, 'id'>
 export interface RouteCatalogRequest {
   /** Provider route key, stamped onto every materialized model. */
   provider: string
+  /**
+   * Installed provider whose catalog and endpoint this route inherits; absent
+   * means the route key's own. Only a route the installed catalog does not
+   * ship may name one.
+   */
+  catalog?: string
   /** Wire protocol override; absent defers to each catalog model's own API. */
   api?: string
   /** Endpoint override; absent defers to the catalog model, then the catalog provider. */
@@ -670,6 +683,17 @@ export interface RouteCatalogRequest {
    * one; an id the installed catalog also describes keeps the installed entry.
    */
   overlay?: readonly Model<Api>[]
+  /**
+   * Whether this route serves the models its endpoint lists. A following route
+   * may resolve no models while its first listing is outstanding.
+   */
+  followListing?: boolean
+  /**
+   * The route's last good listing; absent until one loads. It decides which
+   * models the route serves: each listed id in listing order, then every
+   * `models` entry the listing omits.
+   */
+  listing?: readonly ListedModel[]
   /** Context capacity for a model neither the entry nor the catalog sizes. */
   defaultContextWindow: number
   /** Output capability for a model neither the entry nor the catalog sizes. */
@@ -852,6 +876,75 @@ export interface RouteCatalog {
    * picked, so only an explicit configuration lands here.
    */
   configuredMaxTokens: ReadonlyMap<string, number>
+  /** Where a following route reads its listing; absent on a route that does not follow one. */
+  listingEndpoint?: ListingEndpoint
+}
+
+/** The endpoint and protocol a following route's listing is read from. */
+export interface ListingEndpoint {
+  /** Endpoint root the protocol's listing path is joined to. */
+  readonly baseURL: string
+  /** Wire protocol the listing is read with, and the one a model only the listing names is served over. */
+  readonly api: string
+}
+
+/**
+ * The installed catalog a route resolves against: the route key's own, or the
+ * one its `catalog` field inherits.
+ * @param request - the route-level catalog facts.
+ * @returns the installed provider id whose catalog applies.
+ */
+function catalogSource(request: RouteCatalogRequest): string {
+  const { provider, catalog } = request
+  if (catalog === undefined) return provider
+  if (catalogProvider(provider) !== undefined) {
+    invalid(provider, `sets catalog "${catalog}", but the installed catalog already ships this route;`
+      + ' a route inherits another provider\'s catalog only under a key of its own')
+  }
+  if (catalogProvider(catalog) === undefined) {
+    invalid(provider, `sets catalog "${catalog}", which the installed pi-ai catalog does not ship;`
+      + ' name an installed provider, or remove catalog and list the route\'s models')
+  }
+  return catalog
+}
+
+/**
+ * Where a following route reads its listing. The protocol is the route's own,
+ * else the one its catalog's models agree on, else Chat Completions when some
+ * catalog model speaks it; the endpoint is the route's own, else the one the
+ * catalog's models of that protocol share, else the catalog provider's.
+ * @param provider - provider route key, for diagnostics.
+ * @param request - the route-level catalog facts.
+ * @param defaults - the catalog the route resolves against.
+ * @param providerBaseUrl - the catalog provider's endpoint, when one exists.
+ * @returns the listing endpoint and protocol.
+ */
+function resolveListingEndpoint(
+  provider: string,
+  request: RouteCatalogRequest,
+  defaults: ReadonlyMap<string, Model<Api>>,
+  providerBaseUrl: string | undefined,
+): ListingEndpoint {
+  const catalogApis = new Set([...defaults.values()].map(model => model.api))
+  const api = request.api
+    ?? sharedCatalogApi(defaults)
+    ?? (catalogApis.has('openai-completions') ? 'openai-completions' : undefined)
+  if (api === undefined) {
+    invalid(provider, 'follows its model listing but names no api, and no catalog model settles one;'
+      + ' set the route\'s api to the protocol its listing is read with')
+  }
+  if (!isListableProtocol(api)) {
+    invalid(provider, `follows its model listing over api "${api}", which has no listing this build can read;`
+      + ' listings are read over anthropic-messages, openai-completions, and openai-responses')
+  }
+  const sharedBaseUrls = new Set([...defaults.values()].filter(model => model.api === api).map(model => model.baseUrl))
+  const baseURL = request.baseURL
+    ?? (sharedBaseUrls.size === 1 ? [...sharedBaseUrls][0] : undefined)
+    ?? providerBaseUrl
+  if (baseURL === undefined || baseURL.length === 0) {
+    invalid(provider, 'follows its model listing but has no baseURL to read it from')
+  }
+  return { baseURL, api }
 }
 
 /**
@@ -869,8 +962,16 @@ export function resolveRouteModels(
   validation: 'strict' | 'deferred' = 'strict',
 ): RouteCatalog {
   const { provider } = request
-  const defaults = overlayCatalog(catalogModels(provider), request.overlay)
-  const providerBaseUrl = catalogProvider(provider)?.baseUrl
+  const source = catalogSource(request)
+  const defaults = overlayCatalog(catalogModels(source), request.overlay)
+  const providerBaseUrl = catalogProvider(source)?.baseUrl
+  const listingEndpoint = request.followListing === true
+    ? resolveListingEndpoint(provider, request, defaults, providerBaseUrl)
+    : undefined
+  // Only a following route's listing applies; a listing kept for a route that
+  // stopped following is not this route's catalog.
+  const listing = listingEndpoint === undefined ? undefined : request.listing
+  const listed = new Map(listing?.map(model => [model.id, model]))
   // An absent `models` key and an empty one are the same request: the config
   // schema materializes `[]` for the absent case, and an empty catalog could
   // serve no request anyway, so both mean "serve the installed catalog".
@@ -904,10 +1005,21 @@ export function resolveRouteModels(
   // An override becomes the catalog entry's configuration, so everything a
   // models entry may declare — capacities, efforts, compat — resolves through
   // the same path with the same diagnostics and request-default semantics.
-  const entries: readonly PiAiModelProfile[] = configured.length > 0
-    ? configured
-    : [...defaults.values()].map(model => ({ id: model.id, ...overrides[model.id] }))
-  if (entries.length === 0) {
+  const catalogEntry = (id: string): PiAiModelProfile => ({ id, ...overrides[id] })
+  // A listing decides the served set: catalog models it omits are no longer
+  // served, while a `models` entry it omits stays, because a deployment wrote it.
+  const configuredById = new Map(configured.map(entry => [entry.id, entry]))
+  const entries: readonly PiAiModelProfile[] = listing !== undefined
+    ? [
+      ...listing.map(model => configuredById.get(model.id) ?? catalogEntry(model.id)),
+      ...configured.filter(entry => !listed.has(entry.id)),
+    ]
+    : configured.length > 0
+      ? configured
+      : [...defaults.values()].map(model => catalogEntry(model.id))
+  // A following route may list nothing yet, or list nothing at all; it serves
+  // no models until its listing names one.
+  if (entries.length === 0 && listingEndpoint === undefined) {
     invalid(provider, 'resolves no models; the installed catalog does not describe this route, so its models'
       + ' must be listed in configuration')
   }
@@ -924,12 +1036,14 @@ export function resolveRouteModels(
     if (seen.has(entry.id)) invalid(provider, `lists model "${entry.id}" more than once`)
     seen.add(entry.id)
     const base = defaults.get(entry.id)
-    const api = request.api ?? base?.api ?? routeApi
+    // On a following route, a model its catalog does not describe is served
+    // over the protocol and at the endpoint the listing is read from.
+    const api = request.api ?? base?.api ?? routeApi ?? listingEndpoint?.api
     if (api === undefined) {
       invalid(provider, `model "${entry.id}" needs an api; the installed catalog does not describe it, so set the`
         + ' route\'s api to the wire protocol its endpoint speaks')
     }
-    const baseUrl = request.baseURL ?? base?.baseUrl ?? providerBaseUrl
+    const baseUrl = request.baseURL ?? base?.baseUrl ?? listingEndpoint?.baseURL ?? providerBaseUrl
     if (baseUrl === undefined) {
       invalid(provider, `model "${entry.id}" needs a baseURL; the installed catalog does not describe this route`)
     }
@@ -937,11 +1051,13 @@ export function resolveRouteModels(
     // discloses nothing but ids still yields a serviceable route. The fallback
     // is a guess by construction, which is why it is a configurable route field
     // rather than a constant buried here.
-    const contextWindow = entry.contextWindow ?? base?.contextWindow ?? request.defaultContextWindow
+    const listedFacts = listed.get(entry.id)
+    const contextWindow = entry.contextWindow ?? base?.contextWindow ?? listedFacts?.contextWindow
+      ?? request.defaultContextWindow
     if (!Number.isInteger(contextWindow) || contextWindow <= 0) {
       invalid(provider, `model "${entry.id}" contextWindow must be a positive integer`)
     }
-    const maxTokens = entry.maxTokens ?? base?.maxTokens ?? request.defaultMaxTokens
+    const maxTokens = entry.maxTokens ?? base?.maxTokens ?? listedFacts?.maxTokens ?? request.defaultMaxTokens
     if (!Number.isInteger(maxTokens) || maxTokens <= 0) {
       invalid(provider, `model "${entry.id}" maxTokens must be a positive integer`)
     }
@@ -956,7 +1072,7 @@ export function resolveRouteModels(
       // never enumerate.
       ...base,
       id: entry.id,
-      name: entry.name ?? base?.name ?? entry.id,
+      name: entry.name ?? base?.name ?? listedFacts?.name ?? entry.id,
       api,
       provider,
       baseUrl,
@@ -986,11 +1102,18 @@ export function resolveRouteModels(
   // models take beside one only its anthropic models do, and neither should
   // fail for the other's sake. What is refused is a route default no model on
   // the route could ever read, which is a route that will not behave as written.
-  for (const [field] of configuredCompatEntries(request.compat)) {
+  // A following route whose listing has named nothing yet has no model to judge by.
+  const judged = listingEndpoint === undefined || serviceableModels.length > 0
+  for (const [field] of judged ? configuredCompatEntries(request.compat) : []) {
     const takers = compatProtocols(field)
     if (serviceableModels.some(model => takers.includes(model.api))) continue
     invalid(provider, `sets compat "${field}", but no model on the route speaks a protocol that takes it;`
       + ` it exists on ${takers.join(', ')}`)
   }
-  return { models: serviceableModels, configuredMaxTokens, modelErrors }
+  return {
+    models: serviceableModels,
+    configuredMaxTokens,
+    modelErrors,
+    ...listingEndpoint === undefined ? {} : { listingEndpoint },
+  }
 }

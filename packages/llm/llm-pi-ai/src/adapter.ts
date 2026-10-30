@@ -132,6 +132,15 @@ export interface PiAiAdapterOptions {
    * started. Absent means the deployment serves the installed catalog alone.
    */
   refreshModelCatalog?: () => Promise<void>
+  /**
+   * Bring one route's model listing current before an operation reads the
+   * route's models; absent for a deployment whose routes follow no listing.
+   * It must settle without throwing except on `signal` cancellation: a failed
+   * listing leaves the route serving its previous models.
+   * @param provider - route the operation reads.
+   * @param signal - abandons the wait; the listing load itself continues.
+   */
+  prepareModels?: (provider: string, signal?: AbortSignal) => Promise<void>
 }
 
 /** The two auth injectables a pi-ai collection is built with. */
@@ -386,6 +395,7 @@ export class PiAiAdapter extends LlmAdapter {
 
   override listModels(provider: string): Promise<readonly LlmModelInfo[]> {
     return Promise.resolve().then(async () => {
+      await this.config.prepareModels?.(provider)
       const snapshot = this.current()
       const profile = this.profileOf(snapshot, provider)
       try { await this.config.resolveApiKey(provider, profile) }
@@ -415,9 +425,10 @@ export class PiAiAdapter extends LlmAdapter {
   override resolveModel(
     provider: string,
     model: string,
-    _signal?: AbortSignal,
+    signal?: AbortSignal,
   ): Promise<LlmResolvedModelInfo> {
-    return Promise.resolve().then(() => {
+    return Promise.resolve().then(async () => {
+      await this.config.prepareModels?.(provider, signal)
       const snapshot = this.current()
       return this.modelInfo(snapshot, provider, model)
     })
@@ -442,12 +453,13 @@ export class PiAiAdapter extends LlmAdapter {
     }
   }
 
-  override prepareCall(provider: string, model: string, _signal?: AbortSignal): Promise<PreparedAdapterCall> {
+  override async prepareCall(provider: string, model: string, signal?: AbortSignal): Promise<PreparedAdapterCall> {
+    await this.config.prepareModels?.(provider, signal)
     const snapshot = this.current()
-    return Promise.resolve({
+    return {
       model: this.modelInfo(snapshot, provider, model),
       stream: options => this.streamWithSnapshot(options, snapshot),
-    })
+    }
   }
 
   stream(options: GenerateOptions): AsyncIterable<StreamChunk> {

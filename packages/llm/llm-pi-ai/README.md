@@ -9,7 +9,7 @@ English | [中文](README.zh.md)
 
 ## Summary
 
-`@deepseek-ai/dsh-llm-pi-ai` routes model requests to multiple pi-ai providers, OpenAI-compatible gateways, or self-hosted servers from one configuration. Installed pi-ai providers supply endpoint, protocol, and model-catalog defaults; custom routes can declare those values without code changes, and an opt-in overlay adds models a published directory lists that the installed catalog has not caught up with. Profiles and credentials are resolved for each request, so settings changes take effect on the next request without a restart. Supported providers can use stored OAuth or interactive-key sign-in with cross-process refresh locking. The package may start with no routes and activate when user settings add them.
+`@deepseek-ai/dsh-llm-pi-ai` routes model requests to multiple pi-ai providers, OpenAI-compatible gateways, or self-hosted servers from one configuration. Installed pi-ai providers supply endpoint, protocol, and model-catalog defaults; custom routes declare them, inherit an installed provider's, or follow their endpoint's listing, and an opt-in overlay adds models a published directory lists that the installed catalog has not caught up with. Profiles and credentials are resolved for each request, so settings changes apply to the next request. Supported providers can use stored OAuth or interactive-key sign-in with cross-process refresh locking. The package may start with no routes and activate when user settings add them.
 
 ## Table of Contents
 
@@ -76,10 +76,14 @@ Each profile may set a `retryPolicy`; omission uses normal mode with five retrie
 |---|---|---|
 | `apiKeyEnv` | absent | Credential reference resolved per request; omission defers to pi-ai ambient discovery |
 | `displayName` | provider name | Label shown by selector surfaces |
+| `catalog` | absent | Installed provider whose endpoint, protocols, and catalog this route inherits under its own key |
 | `api` | catalog protocol | Wire protocol; only needed for routes the catalog does not supply |
 | `baseURL` | catalog endpoint | Endpoint of every model on the route |
 | `models` | installed catalog | Replaces the route's catalog wholesale; each entry defaults from the installed model |
 | `modelOverrides` | none | Reshapes individual installed-catalog models without replacing the rest |
+| `followModelListing` | `false` | Serves the models the route's endpoint lists |
+| `modelsTimeoutMs` | `5,000` | Deadline of one listing request and of the first access's wait |
+| `modelsMaxAgeMs` | `600,000` | Listing age after which the next access refreshes it in the background; `0` refreshes on every access |
 | `compat` | catalog detection | Wire-compatibility switches for unrecognized endpoints |
 | `defaultContextWindow` | `1,000,000` | Capacity fallback for undescribed models |
 | `defaultMaxTokens` | `128,000` | Output-cap fallback for undescribed models |
@@ -116,6 +120,38 @@ The overlay adds directory entries the installed catalog does not describe to th
 
 The snapshot is cached at `$DSH_HOME/cache/llm-pi-ai/models-dev.json` and republished on the next start before any fetch, so a start with an unreachable directory still serves the last one fetched; a failed refresh reports once and keeps the snapshot in use. Nothing is fetched on a schedule: a start reads the directory when that snapshot is missing or older than `refreshHours`, and the model picker's refresh button beside its search field asks the Host to fetch it again on demand, so a model published since this process started becomes selectable without a restart. A change to the section itself starts the same reader over. The cache records the directory it came from, so repointing `url` fetches the new one rather than serving the previous one's models. Turning the section off, or removing it, stops the refresh and drops the overlay, leaving every route on the installed catalog.
 
+### Inherit another provider's catalog
+
+A second account on a service pi-ai ships — another OpenCode Go subscription, say — is a route under its own key that names the installed provider in `catalog`:
+
+```yaml
+providers:
+  opencode-go-2:
+    catalog: opencode-go
+    displayName: OpenCode Go (second)
+    apiKeyEnv: OPENCODE_GO_2_API_KEY
+```
+
+The route then resolves its endpoints, protocols, and models exactly as `opencode-go` would, including the models `catalogOverlay` adds for `opencode-go`, and they follow that catalog whenever it changes. `displayName`, `apiKeyEnv`, `headers`, `baseURL`, `models`, `modelOverrides`, and every other field keep their meaning, now relative to the inherited catalog. The route authenticates only through its own `apiKeyEnv` or `headers`, never through the inherited provider's environment variables or sign-in, so it cannot bill the other account. `catalog` is refused on a route key the installed catalog already ships and when it names the route itself or a provider the installed catalog does not ship.
+
+### Follow an endpoint's model listing
+
+`followModelListing: true` makes a route serve the models its endpoint lists at its protocol's listing path — `GET {baseURL}/models` for the OpenAI protocols, `GET /v1/models` for Anthropic Messages — read with the same authentication and `headers` as its requests:
+
+```yaml
+providers:
+  commandcode-goat:
+    apiKeyEnv: COMMANDCODE_API_KEY
+    api: openai-completions
+    baseURL: https://api.commandcode.ai/provider/v1
+    followModelListing: true
+    modelsMaxAgeMs: 600000       # optional; default ten minutes
+```
+
+The first access after start, or after the endpoint or credential changes, waits for the listing for at most `modelsTimeoutMs`. A later access returns at once and, once the listing is older than `modelsMaxAgeMs`, refreshes it in the background; the model picker's refresh button reloads every followed listing on demand. A changed listing reaches every surface without a restart. A failed load keeps the last good listing, and before any load succeeds the route serves what it would without the switch: its `models`, else its catalog. The listing is kept in memory per endpoint and credential, so a rotated key never serves another account's models.
+
+The listing decides which models the route serves: each listed id in listing order, then every `models` entry the listing omits, because a deployment wrote it; a catalog model the listing omits is no longer served. Each model's fields come from its `models` entry, then the route's catalog entry — its own or the inherited one — then the context window, output cap, and name the listing reports, then `defaultContextWindow`, `defaultMaxTokens`, and `defaultInput`. A model the catalog does not describe is served over the listing's protocol at the listing's endpoint. The listing protocol is the route's `api`, else the one its catalog's models share, else Chat Completions when some catalog model speaks it; its endpoint is the route's `baseURL`, else the one the catalog's models of that protocol share. A route with neither a resolvable listable protocol nor an endpoint is refused, as are `modelsTimeoutMs` and `modelsMaxAgeMs` without the switch. A hand-declared following route may omit `models` and serves nothing until its listing names a model.
+
 ### Run with reasoning and wire compatibility
 
 `reasoningEfforts` declares a model's selectable thinking levels: each key is a level selectors offer, its value the spelling dispatch sends on the wire, so `max: ultra` renames a level for a gateway with its own vocabulary. Omitting the field keeps the installed catalog entry's capability; `false` declares a non-reasoning model. `compat` switches reshape the request for endpoints pi-ai cannot recognize — which role carries the system prompt, which field caps output, how a thinking level travels — configurable per route and per model. A model neither the entry nor the installed catalog sizes takes the route's `defaultContextWindow` and `defaultMaxTokens` fallbacks.
@@ -134,7 +170,7 @@ The plugin answers "which models can this provider serve?" for a route a configu
 
 ### Failures and recovery
 
-A route pi-ai does not ship needs `api`, `baseURL`, and a non-empty `models` list; an unserviceable profile is refused where it is written, naming the route and model. Failures carry stable codes: a credential that cannot be used fails with `INVALID_CREDENTIAL` naming the route and reference, a route whose `apiKeyEnv` reference resolves to nothing fails with `MISSING_CREDENTIAL`, an unconfigured model fails with `UNKNOWN_MODEL`, and terminal provider failures distinguish `QUOTA` from transient `RATE_LIMIT`. `GenerateOptions.stop` is rejected with `UNSUPPORTED_OPTION` because pi-ai's common streaming UI cannot guarantee it across providers.
+A route pi-ai does not ship needs `api`, `baseURL`, and a non-empty `models` list unless it inherits a `catalog` or follows its model listing; an unserviceable profile is refused where it is written, naming the route and model. Failures carry stable codes: a credential that cannot be used fails with `INVALID_CREDENTIAL` naming the route and reference, a route whose `apiKeyEnv` reference resolves to nothing fails with `MISSING_CREDENTIAL`, an unconfigured model fails with `UNKNOWN_MODEL`, and terminal provider failures distinguish `QUOTA` from transient `RATE_LIMIT`. `GenerateOptions.stop` is rejected with `UNSUPPORTED_OPTION` because pi-ai's common streaming UI cannot guarantee it across providers.
 
 Config updates strictly validate changed providers. Initial loading retains stored catalog failures as editable provider diagnostics; unchanged failed providers do not block edits elsewhere. Serviceable models remain selectable, and unresolved models fail before network I/O. Repairing or deleting the offending configuration clears its diagnostic.
 
@@ -187,7 +223,8 @@ This event covers inference calls with or without a Session id, including auxili
 | [`src/context.ts`](src/context.ts) | Harness-to-pi-ai context conversion, image handling, replay restore |
 | [`src/stream.ts`](src/stream.ts) | pi-ai event conversion into harness `StreamChunk` values |
 | [`src/replay.ts`](src/replay.ts) | Versioned `ReplayEnvelope` storage and validation |
-| [`src/discovery.ts`](src/discovery.ts) | Endpoint interrogation for configuration surfaces |
+| [`src/discovery.ts`](src/discovery.ts) | Endpoint interrogation for configuration surfaces and followed listings |
+| [`src/model-listing.ts`](src/model-listing.ts) | Credential-scoped listing cache of a route that follows its endpoint's model listing |
 
 ### Registration and directory
 
@@ -279,7 +316,8 @@ These limits define where the adapter stops and future work begins. They are cur
 - **Reset restores inherited configuration** — resetting a route supplied by a lower profile layer restores that route.
 - **Complete Config replacement can remove inherited dictionary entries** — a field reset instead restores its inherited value.
 - **`headers` can carry a credential the redactor never sees** — profile resolution rejects names and values Fetch cannot represent, but the dict remains plain strings; store credentials as `apiKeyEnv` references.
-- **The installed catalog never refreshes itself** — a route serves what the installed pi-ai build records for it, plus whatever `catalogOverlay` adds; nothing here asks a provider for the models it serves at request time.
+- **The installed catalog never refreshes itself** — a route serves what the installed pi-ai build records for it, plus whatever `catalogOverlay` adds, unless it sets `followModelListing`.
+- **A listing reports no modalities or reasoning** — a listed model the catalog does not describe takes `defaultInput` and does not reason; declare either in a `models` entry. A followed listing is kept in memory only, so each start loads it again.
 - **An overlay entry needs an installed sibling** — a provider and protocol with no installed model yields no endpoint facts, so such an entry is skipped rather than guessed at, and a gateway quirk the installed catalog does not record is corrected with `modelOverrides` instead.
 - **An overlay snapshot is shared through the harness home** — the cache under `$DSH_HOME/cache` is one file for every deployment using that home, and a start with no cache and no reachable directory serves no overlay at all.
 - **Discovery does not change configured models** — adopt discovery results explicitly into the route configuration.

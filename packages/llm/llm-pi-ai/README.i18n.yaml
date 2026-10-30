@@ -9,8 +9,8 @@
   en: 33763dd0a848143d
   zh: 82743942bc6df660
 /deepseek-ai-dsh-llm-pi-ai/summary:
-  en: 1a208ce10d61342b
-  zh: adb2c47e43a71985
+  en: c6b8355162c1d6e3
+  zh: bd6a17e422c6a976
 /deepseek-ai-dsh-llm-pi-ai/table-of-contents:
   en: d152484eb41ac6b4
   zh: 09388d293f9be9cb
@@ -21,8 +21,8 @@
   en: f3b761c7c7ecb82f
   zh: e10d999aa348ef86
 /deepseek-ai-dsh-llm-pi-ai/use-this-package/configure-provider-routes:
-  en: 738edb4ae053740d
-  zh: cc6853e2bdac01ec
+  en: d368e829b2b83e24
+  zh: 19b37c83bb34376b
 /deepseek-ai-dsh-llm-pi-ai/use-this-package/sign-in-to-a-provider:
   en: c36f66438638ae08
   zh: 066a2fc4cb97c86f
@@ -32,6 +32,12 @@
 /deepseek-ai-dsh-llm-pi-ai/use-this-package/extend-the-catalog-from-a-model-directory:
   en: c57c0d74877a7ba8
   zh: 487b3cc8cf1a2b11
+/deepseek-ai-dsh-llm-pi-ai/use-this-package/inherit-another-provider-s-catalog:
+  en: d7ba58992a6fe43a
+  zh: 282fc6bae9ab0a43
+/deepseek-ai-dsh-llm-pi-ai/use-this-package/follow-an-endpoint-s-model-listing:
+  en: b97b06e2ba6b5c12
+  zh: 31bb312e252eb6e6
 /deepseek-ai-dsh-llm-pi-ai/use-this-package/run-with-reasoning-and-wire-compatibility:
   en: b58b917e7f250aee
   zh: aff599081bac08c3
@@ -42,8 +48,8 @@
   en: 6619e8cfe7555c73
   zh: b2f80c25acb81cf8
 /deepseek-ai-dsh-llm-pi-ai/use-this-package/failures-and-recovery:
-  en: 0c094523aef92fb5
-  zh: 025876f2c94ce2d0
+  en: 5038f26d19f267ea
+  zh: add4ea9ef2317b6a
 /deepseek-ai-dsh-llm-pi-ai/understand-the-implementation:
   en: 1598ac8a8bb9b6bf
   zh: fdd089c5ae7722cd
@@ -54,8 +60,8 @@
   en: 089b733dbbac8d66
   zh: 83361a78d0edfb7a
 /deepseek-ai-dsh-llm-pi-ai/understand-the-implementation/source-map:
-  en: 69be336a01328d5b
-  zh: bce04385b99ecdc6
+  en: 4ad20a67cbd8b417
+  zh: 30b43eb61dab49ca
 /deepseek-ai-dsh-llm-pi-ai/understand-the-implementation/registration-and-directory:
   en: 0c6df3e8b6a75372
   zh: 476666a6f209542c
@@ -96,8 +102,8 @@
   en: b6bd570c0159ba08
   zh: 7d2d91eea6a8d830
 /deepseek-ai-dsh-llm-pi-ai/known-limitations-and-deferred-work:
-  en: 685853b22e1531b7
-  zh: 375255a68e51e068
+  en: e32d3339e546e004
+  zh: 3f89f4acdf87f1ba
 /deepseek-ai-dsh-llm-pi-ai/known-limitations-and-deferred-work/dev-note:
   en: 3678dd0f6642c2a5
   zh: 75cbdd064cc64282
