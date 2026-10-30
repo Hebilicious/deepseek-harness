@@ -12,11 +12,11 @@ import { brandString } from '@deepseek-ai/dsh-brand'
 import { assertNever, deepFreeze, snapshotJsonValue } from '@deepseek-ai/dsh-util-values'
 import { scopeOf, scopeTarget } from '@deepseek-ai/dsh-scope'
 import type { Scoped } from '@deepseek-ai/dsh-scope'
-import type { Message } from '@deepseek-ai/dsh-llm'
+import type { Message, ToolCallId } from '@deepseek-ai/dsh-llm'
 import { SESSION_FORMAT_VERSION, SessionLogOffset, SessionSeq } from './types.ts'
 import type { TypertLookup } from '@deepseek-ai/dsh-typert-protocol'
 import type { CreateSessionOptions, EpochHeader, PluginRecord, PluginRecordMap, PluginRecordType, PrepareSessionOptions, RequestContext, SessionEvent, SessionEventMap, SessionEventType, SessionHeader, SessionId, SessionSeedEventState, SurfaceIntent, SurfaceEventType } from './types.ts'
-import { SurfaceManager, validateSessionEventData, validateSurfaceMetadata } from './surface.ts'
+import { SurfaceManager, validateSessionEventData, validateSurfaceMetadata, withoutUnanswerableToolCalls } from './surface.ts'
 import type { SessionSurface, SessionMessageProjection } from './surface.ts'
 import { foldRequestHeader } from './request-header.ts'
 import { ToolHistoryProjection } from './tool-history.ts'
@@ -31,7 +31,7 @@ export type { SessionPreparationOptions } from './preparation.ts'
 export type { AssistantMessage, DeveloperMessage, SystemMessage, ToolResultMessage, UserMessage } from '@deepseek-ai/dsh-llm'
 export { interruptedTurnClosers, ToolCallRecovery, TOOL_NOT_STARTED, TOOL_OUTCOME_UNKNOWN } from './repair.ts'
 export type { SessionSurface, SurfaceFoldReplacement, SurfaceFoldResult, SessionMessageProjection, SessionMessageProjectionContext } from './surface.ts'
-export { deriveEventMessage, foldSurface, isAppendSurfaceEvent, isReplacementSurfaceEvent, isSurfaceEvent, isSurfaceEligibleType } from './surface.ts'
+export { deriveEventMessage, foldSurface, isAppendSurfaceEvent, isReplacementSurfaceEvent, isSurfaceEvent, isSurfaceEligibleType, withoutUnanswerableToolCalls } from './surface.ts'
 export { canonicalHeader, foldRequestHeader, headerEquals } from './request-header.ts'
 export { KNOWN_SESSION_EVENT_TYPES } from './known-event-types.ts'
 
@@ -977,6 +977,10 @@ export class Session {
   private derivedNodes = 0
   /** {@link SurfaceManager.contentGeneration} the cache was built under. */
   private derivedGeneration = 0
+  /** Tool-block-free history reuse, keyed by the unanswered-call set and cache length it was built for. */
+  private representable: { signature: string; messages: readonly Message[] } | undefined
+  /** Unanswerable-call set reuse, keyed by the surface and log the walk consumed. */
+  private unanswerable: { key: string; calls: ReadonlySet<ToolCallId> } | undefined
 
   /**
    * Derive the LLM message history by walking the ordered sequences of
@@ -986,7 +990,8 @@ export class Session {
    * turn boundary) is correctly absent, and a compaction `replace` deletes the
    * shadowed nodes from the derivation. The projection rules are
    * {@link deriveEventMessage}, with logged message projections applied
-   * without changing node membership or message identity.
+   * without changing node membership or message identity, and
+   * {@link representableHistory} applied to the resulting history.
    *
    * CACHED: pure tail growth costs O(new nodes); a replacement or message projection
    * ({@link SessionSurface.contentGeneration}) rebuilds. The returned array is
@@ -1004,6 +1009,7 @@ export class Session {
       this.derived = []
       this.derivedNodes = 0
       this.derivedGeneration = generation
+      this.representable = undefined
     }
     for (const seq of nodes.slice(this.derivedNodes)) {
       // Surface sequences are built from this.log — seq is always a valid
@@ -1016,7 +1022,95 @@ export class Session {
       if (msg) this.derived.push(msg)
     }
     this.derivedNodes = nodes.length
-    return [...this.derived]
+    return this.representableHistory()
+  }
+
+  /**
+   * Tool calls in the current surface that no tool result answers and that no
+   * open step can answer later. Every provider protocol requires each call to
+   * carry its result before the next assistant turn, so such a call can never
+   * enter a request: derived history omits it, and compaction treats it as
+   * absent content rather than as a pair whose cut would split it from a
+   * result. A call in the step still open is pending and stays visible until
+   * its result lands, because that step will answer it.
+   *
+   * CACHED: the set is shared and reused until the surface content or the step
+   * boundaries change, so consumers comparing the returned identity see one
+   * stable value per state. Callers must not mutate it.
+   * @returns the unanswerable call ids, in surface order.
+   */
+  unanswerableToolCalls(): ReadonlySet<ToolCallId> {
+    const key = `${this.surface.contentGeneration}:${this.log.length}`
+    if (this.unanswerable?.key === key) return this.unanswerable.calls
+    const candidates = new Map<ToolCallId, SessionSeq>()
+    const open = new Map<ToolCallId, SessionSeq>()
+    for (const seq of this.surface.nodes) {
+      // oxlint-disable-next-line typescript/no-non-null-assertion -- surface nodes index this log by construction
+      const message = this.deriveEventMessage(this.log[seq]!)
+      if (message === null) continue
+      if (message.role === 'assistant') {
+        // The next assistant turn ends the previous calls' answer window.
+        for (const [callId, callSeq] of open) candidates.set(callId, callSeq)
+        open.clear()
+        for (const block of message.content) {
+          if (block.type === 'tool-call') open.set(block.id, seq)
+        }
+      } else if (message.role === 'tool') {
+        open.delete(message.toolCallId)
+      }
+    }
+    for (const [callId, callSeq] of open) candidates.set(callId, callSeq)
+    const calls = new Set<ToolCallId>()
+    for (const [callId, callSeq] of candidates) {
+      if (this.stepClosedAfter(callSeq)) calls.add(callId)
+    }
+    this.unanswerable = { key, calls }
+    return calls
+  }
+
+  /**
+   * Whether the step containing an event has closed, so no later result can
+   * answer a call it recorded. Steps never nest, so the most recent boundary
+   * marker decides: `step/end` closes every earlier step, and `step/start`
+   * leaves only the step it opened open. Without any boundary marker the step
+   * state is unknown, and the call counts as pending.
+   * @param seq - sequence of the event whose step is checked.
+   * @returns true when a recorded boundary proves the step ended.
+   */
+  private stepClosedAfter(seq: SessionSeq): boolean {
+    for (let index = this.log.length - 1; index >= 0; index -= 1) {
+      // oxlint-disable-next-line typescript/no-non-null-assertion -- bounded index into this log
+      const event = this.log[index]!
+      if (event.type === 'step/end') return true
+      if (event.type === 'step/start') return seq < event.seq
+    }
+    return false
+  }
+
+  /**
+   * Remove assistant tool calls that can never be answered. Derived history is
+   * the provider transcript, and every provider protocol requires each call to
+   * carry its result before the next assistant turn. The durable log keeps the
+   * call: the agent loop records a canonical recovery result when a step fails
+   * after committing one, and this projection covers histories written before
+   * it did.
+   * @returns the derived history without unanswerable calls.
+   */
+  private representableHistory(): Message[] {
+    const unanswered = this.unanswerableToolCalls()
+    if (unanswered.size === 0) {
+      this.representable = undefined
+      return [...this.derived]
+    }
+    const signature = `${this.derived.length}:${[...unanswered].sort().join(',')}`
+    if (this.representable?.signature === signature) return [...this.representable.messages]
+    const messages: Message[] = []
+    for (const message of this.derived) {
+      const projected = withoutUnanswerableToolCalls(message, unanswered)
+      if (projected !== null) messages.push(projected)
+    }
+    this.representable = { signature, messages }
+    return [...messages]
   }
 
   /**

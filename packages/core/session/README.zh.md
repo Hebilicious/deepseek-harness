@@ -126,7 +126,7 @@ session.deriveMessages()         // the derived model history
 
 ### 派生历史
 
-`deriveMessages()` 缓存深度冻结的派生消息，每次调用返回新数组。surface 事件类型（`system/message`、`developer/message`、`user/message`、`assistant/message`、`tool/result`）提供记录的消息身份和内容，空内容的 system 和 developer 节点不派生消息。插件拥有的投影修改派生内容，不修改记录的消息。替换和投影决策使缓存失效。嵌入式 Assistant stream 与 `assistant/attempt` 事件只保留回放和诊断数据。普通提示与注入上下文在派生时不会按类型或来源自动添加包装。生产方负责记录内容中的所有框定格式。
+`deriveMessages()` 缓存深度冻结的派生消息，每次调用返回新数组。surface 事件类型（`system/message`、`developer/message`、`user/message`、`assistant/message`、`tool/result`）提供记录的消息身份和内容，空内容的 system 和 developer 节点不派生消息。插件拥有的投影修改派生内容，不修改记录的消息。替换和投影决策使缓存失效。嵌入式 Assistant stream 与 `assistant/attempt` 事件只保留回放和诊断数据。普通提示与注入上下文在派生时不会按类型或来源自动添加包装。生产方负责记录内容中的所有框定格式。没有任何工具结果回应、且没有任何打开步骤仍能回应的助手工具调用会从结果中省略，`unanswerableToolCalls()` 会报告该集合：提供方拒绝调用没有结果的记录，而持久日志为人类记录保留该调用。步骤在提交调用后失败时，循环记录恢复结果，因此只有更早写入的历史才会让模型看不到它。压缩读取同一集合，因此这类调用不约束任何区域边界。
 
 ### 请求头
 

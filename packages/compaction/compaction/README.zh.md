@@ -88,7 +88,7 @@ kind: "package-reference"
 <a id="tool-pairing-boundaries"></a>
 ### 工具配对边界
 
-该 Service Definition 导出 `toolPairingBalancedBefore(session, seq)` 与 `toolPairingBalancedAfter(session, seq)`，用于对齐和验证压缩边界。安全边界不会被尚未回答的 assistant 工具调用跨越。每个 helper 都会验证给定事件 seq 位于当前表层，并根据按表层顺序缓存的各切分点配对状态返回结果，因此重复检查不读取事件；replace generation 会重建缓存，缺失 seq 或孤立的 `tool/result` 会被视为表层状态损坏并遭拒绝。
+该 Service Definition 导出 `toolPairingBalancedBefore(session, seq)` 与 `toolPairingBalancedAfter(session, seq)`，用于对齐和验证压缩边界。安全边界不会被仍由某个答案或某个打开步骤负责的 assistant 工具调用跨越；已关闭步骤从未回答的调用不会出现在派生历史中，因此不约束任何切分点。每个 helper 都会验证给定事件 seq 位于当前表层，并根据按表层顺序缓存的各切分点配对状态返回结果，因此重复检查不读取事件；replace generation 或不可应答调用集合的改变会重建缓存，缺失 seq 或孤立的 `tool/result` 会被视为表层状态损坏并遭拒绝。
 
 ### 表层约定
 

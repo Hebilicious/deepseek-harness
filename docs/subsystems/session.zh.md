@@ -651,7 +651,8 @@ declare class Session {
    * turn boundary) is correctly absent, and a compaction `replace` deletes the
    * shadowed nodes from the derivation. The projection rules are
    * {@link deriveEventMessage}, with logged message projections applied
-   * without changing node membership or message identity.
+   * without changing node membership or message identity, and
+   * {@link representableHistory} applied to the resulting history.
    *
    * CACHED: pure tail growth costs O(new nodes); a replacement or message projection
    * ({@link SessionSurface.contentGeneration}) rebuilds. The returned array is
@@ -662,6 +663,21 @@ declare class Session {
    * @returns a fresh array of the shared, frozen derived history.
    */
   deriveMessages(): Message[];
+  /**
+   * Tool calls in the current surface that no user turn answers and that no
+   * open step can answer later. Every provider protocol requires each call to
+   * carry its result in the user turn that follows, so such a call can never
+   * enter a request: derived history omits it, and compaction treats it as
+   * absent content rather than as a pair whose cut would split it from a
+   * result. A call in the step still open is pending and stays visible until
+   * its result lands, because that step will answer it.
+   *
+   * CACHED: the set is shared and reused until the surface content or the step
+   * boundaries change, so consumers comparing the returned identity see one
+   * stable value per state. Callers must not mutate it.
+   * @returns the unanswerable call ids, in surface order.
+   */
+  unanswerableToolCalls(): ReadonlySet<ToolCallId>;
   /**
    * Project one event with all committed message projections applied.
    * The original durable event remains unchanged.
@@ -674,7 +690,7 @@ declare class Session {
 
 ## 派生历史：`deriveMessages()` 与 `deriveEventMessage()`
 
-`Session.deriveMessages()` 将事件日志投影为模型看到的 `Message[]`。它是缓存的（每个 surface 节点在首次出现时投影一次；surface 重写触发重建）且冻结的（每次调用返回一个新数组，引用共享的深冻结消息，因此通过投影修改已记录的历史在类型上不可表达）。`deriveEventMessage(event)` 是折叠所应用的逐节点纯函数，公开暴露以便外部重建器能以完全相同的规则投影日志前缀，不会与缓存产生分歧。投影规则：
+`Session.deriveMessages()` 将事件日志投影为模型看到的 `Message[]`。它是缓存的（每个 surface 节点在首次出现时投影一次；surface 重写触发重建）且冻结的（每次调用返回一个新数组，引用共享的深冻结消息，因此通过投影修改已记录的历史在类型上不可表达）。`deriveEventMessage(event)` 是折叠所应用的逐节点纯函数，公开暴露以便外部重建器能以完全相同的规则投影日志前缀，不会与缓存产生分歧。折叠之后还会应用一条历史级规则：没有任何用户轮次应答的 assistant 工具调用会被省略，当其消息没有其他内容时整条消息一并省略（[决策](../../.agents/notes/implemented/architecture/2026-09-21-unanswered-tool-call-recovery.zh.md)）。投影规则：
 
 - `user/message` → 一条携带确切 `content` 的 user 消息；可选 envelope 仅作为日志中的展示元数据保留。
 - `assistant/message` → 一条 assistant 消息，包含生成它的提供方和模型，以及可选的适配器私有回放状态。其嵌入式紧凑 stream 是回放、usage 与 UI 证据，而不是第二条 message。**内容为空的** `assistant/message` 也会跳过：因 max-tokens 而截断且无内容的步骤仍会记录一条 `assistant/message` 来保存 stream、usage、提供方和模型，但无内容的 assistant 轮次不得进入提供方 transcript（文本记录）。
