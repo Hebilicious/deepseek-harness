@@ -1,6 +1,31 @@
-# Bilingual-pair consistency record (docs/i18n/README.md): the git blob hash of each
-# side as of the last confirmed-consistent state. Both languages carry equal authority;
-# after editing either side, bring the other along and re-record with:
+# Bilingual-pair consistency record for 2026-09-11-keyless-exa-mcp-search-provider.md (docs/i18n/README.md): per heading
+# section, a hash of its English and Chinese blocks outside code blocks and generated regions.
+# After editing either side, bring the other along and re-record with:
 #   pnpm run verify-translation-pairing --write .agents/notes/implemented/feature/2026-09-11-keyless-exa-mcp-search-provider.md
-2026-09-11-keyless-exa-mcp-search-provider.md: cfea125a708104290694a062250ae5fd7602cbce
-2026-09-11-keyless-exa-mcp-search-provider.zh.md: 92df9cfa7a38b55c3e72acf941b8c6a6d9bf3505
+/agent-note-keyless-exa-mcp-search-provider:
+  en: fd1729ab8d136193
+  zh: 6c1774faa44ece62
+/agent-note-keyless-exa-mcp-search-provider/problem:
+  en: dd5ee67f30f964f2
+  zh: 01c4bb1ffafe3c3b
+/agent-note-keyless-exa-mcp-search-provider/decision:
+  en: 88628c3946ff3109
+  zh: 0d702d0fbea8ba27
+/agent-note-keyless-exa-mcp-search-provider/decision/endpoint-contract:
+  en: 39baf298d85a6774
+  zh: 08e958be2dd36e79
+/agent-note-keyless-exa-mcp-search-provider/decision/mapping:
+  en: 1f4d508168b111ec
+  zh: 5be12d2d8f3ad377
+/agent-note-keyless-exa-mcp-search-provider/alternatives-considered:
+  en: a3c356507f1ea7a0
+  zh: 1309b0d4f74f05f1
+/agent-note-keyless-exa-mcp-search-provider/consequences:
+  en: 13ff2846716cb1c5
+  zh: 4c4d7c3d29ac5586
+/agent-note-keyless-exa-mcp-search-provider/testing:
+  en: c5bb9437e9dd6811
+  zh: ca219de3169e1d9d
+/agent-note-keyless-exa-mcp-search-provider/related:
+  en: 4cef1a3206d2e362
+  zh: 2b2cf71b7d5d2b1d

@@ -16,7 +16,7 @@ Each package entry labels its data with three identifiers: `inject` lists the se
 
 - `inject`: `agents` · `llm` · `sessionPersistence` · `sessions`
 - `refs`: `Stream` (`@agentclientprotocol/sdk`)
-- `source`: [`packages/acp/acp/src/index.ts:74`](../packages/acp/acp/src/index.ts)
+- `source`: [`packages/acp/acp/src/index.ts:76`](../packages/acp/acp/src/index.ts)
 
 ```ts config-catalog
 /** Plugin config: the provider/model selection used for each ACP-created agent. */
@@ -738,6 +738,12 @@ export interface BasicCompactionConfig extends CompactionPolicyConfig {
   modelPolicies?: ModelCompactPolicyConfig[]
   /** Enable automatic step-boundary pressure and overflow-recovery listeners. Defaults to `true`. */
   auto?: boolean
+  /**
+   * Text appended to every checkpoint preamble. Empty or absent appends
+   * nothing, leaving the default framing. The text must not contain the
+   * summary framing tags.
+   */
+  checkpointNotice?: string
 }
 
 /** Policy fields shared by the default policy and exact model overrides. */
@@ -1617,6 +1623,27 @@ export interface Config {
 ```
 <!-- END GENERATED config-catalog:@deepseek-ai/dsh-goal -->
 
+<!-- BEGIN GENERATED config-catalog:@deepseek-ai/dsh-goal-round-driver -->
+<a id="deepseek-aidsh-goal-round-driver"></a>
+
+## `@deepseek-ai/dsh-goal-round-driver`
+
+- `inject`: `agents` · `goals` · `sessions`
+- `source`: [`packages/goal/goal-round-driver/src/index.ts:24`](../packages/goal/goal-round-driver/src/index.ts)
+
+```ts config-catalog
+/** Model-visible round policy. */
+export interface Config {
+  /**
+   * Completion-protocol text placed in every round prompt after the shared
+   * instruction body. Empty or absent uses the default protocol, which leaves
+   * the goal active for the next round while work remains.
+   */
+  roundProtocol?: string
+}
+```
+<!-- END GENERATED config-catalog:@deepseek-ai/dsh-goal-round-driver -->
+
 <!-- BEGIN GENERATED config-catalog:@deepseek-ai/dsh-headless -->
 <a id="deepseek-aidsh-headless"></a>
 
@@ -1960,7 +1987,7 @@ export interface Config extends ProtocolConfig, ModelListingConfig {
 
 - `inject`: `llm`
 - `refs`: `Api` (`@earendil-works/pi-ai`) · `CacheRetention` (`@earendil-works/pi-ai`) · `Model` (`@earendil-works/pi-ai`) · `ModelThinkingLevel` (`@earendil-works/pi-ai`) · `OpenAICompletionsCompat` (`@earendil-works/pi-ai`) · [`RetryPolicyConfig`](../packages/llm/llm/src/index.ts) · `ThinkingBudgets` (`@earendil-works/pi-ai`) · `Transport` (`@earendil-works/pi-ai`) · `Volatile` (`@deepseek-ai/cordis`)
-- `source`: [`packages/llm/llm-pi-ai/src/config.ts:222`](../packages/llm/llm-pi-ai/src/config.ts)
+- `source`: [`packages/llm/llm-pi-ai/src/config.ts:252`](../packages/llm/llm-pi-ai/src/config.ts)
 
 ```ts config-catalog
 /** Plugin configuration: the provider routes this instance owns. */
@@ -1971,6 +1998,12 @@ export interface Config {
    * and registers them the moment a settings section supplies profiles.
    */
   providers: Volatile<Record<string, PiAiProviderProfile>>
+  /**
+   * Opt-in overlay of models the installed pi-ai catalog does not describe,
+   * read from a published model directory. Its entries extend a route the
+   * installed catalog ships and never declare an endpoint of their own.
+   */
+  catalogOverlay: Volatile<PiAiCatalogOverlayConfig | undefined>
 }
 
 /** Configuration for one pi-ai provider route; the `providers` dict key IS the route. */
@@ -2065,6 +2098,28 @@ export interface PiAiProviderProfile {
   requestImageMaxBytes?: number
   /** Provider-owned model-request retry policy; omission uses normal mode with five retries. */
   retryPolicy?: RetryPolicyConfig
+}
+
+/**
+ * Model-directory overlay of the installed catalog: the entries this section
+ * fetches are the models a route serves that the installed pi-ai catalog does
+ * not describe yet.
+ *
+ * Absence and `false` disable the overlay entirely, which keeps a deployment's
+ * routes exactly as the installed catalog describes them. `true` uses this
+ * build's published directory and snapshot age; an object overrides either.
+ * The switch is a union rather than a bare object because schemastery
+ * materializes an absent object as `{}`, which would make every deployment
+ * fetch the directory whether or not anyone asked for it.
+ *
+ * Nothing runs on a schedule: the directory is read at each start, and a
+ * selector's explicit refresh fetches it again on demand.
+ */
+export type PiAiCatalogOverlayConfig = boolean | {
+  /** Directory document URL; defaults to the published models.dev catalog. */
+  url?: string
+  /** Hours a cached snapshot stays current before the next start refetches it; 0 refetches at every start. */
+  refreshHours?: number
 }
 
 /** One configured model entry: an id plus the catalog fields it overrides. */
@@ -4082,13 +4137,20 @@ export interface Config {
 ## `@deepseek-ai/dsh-tool-goal`
 
 - `inject`: `agents` · `goals` · `tools` · `systemPrompt`
-- `source`: [`packages/goal/tool-goal/src/index.ts:32`](../packages/goal/tool-goal/src/index.ts)
+- `source`: [`packages/goal/tool-goal/src/index.ts:33`](../packages/goal/tool-goal/src/index.ts)
 
 ```ts config-catalog
 /** Model policy and hard lower bounds for goal-state updates. */
 export interface Config {
   /** Minimum admitted goal rounds before the model may self-report `blocked`. */
   blockedAfterConsecutiveRounds?: number
+  /**
+   * Permitted-reason policy appended to the `tool:goal` guidance. Supplying it
+   * also enables the capacity screen, so the executor refuses a `blocked_reason`
+   * that the supplied policy does not permit. Empty or absent appends nothing
+   * and screens nothing.
+   */
+  blockedReasonPolicy?: string
 }
 ```
 <!-- END GENERATED config-catalog:@deepseek-ai/dsh-tool-goal -->
@@ -4702,6 +4764,27 @@ export interface Config {
 ```
 <!-- END GENERATED config-catalog:@deepseek-ai/dsh-web-search-exa -->
 
+<!-- BEGIN GENERATED config-catalog:@deepseek-ai/dsh-web-search-exa-mcp -->
+<a id="deepseek-aidsh-web-search-exa-mcp"></a>
+
+## `@deepseek-ai/dsh-web-search-exa-mcp`
+
+- `inject`: `web`
+- `source`: [`packages/web/web-search-exa-mcp/src/index.ts:32`](../packages/web/web-search-exa-mcp/src/index.ts)
+
+```ts config-catalog
+/** Plugin config (all optional — `apply` fills the environment and constant defaults). */
+export interface Config {
+  /** Exa API key, sent as the endpoint's `exaApiKey` parameter. Falls back to `$EXA_API_KEY`; absent = anonymous access. */
+  apiKey?: string
+  /** Endpoint URL. Defaults to the hosted Exa MCP endpoint. */
+  endpoint?: string
+  /** Default result count when a request carries no `maxResults`. Omitted = the endpoint's own default. */
+  numResults?: number
+}
+```
+<!-- END GENERATED config-catalog:@deepseek-ai/dsh-web-search-exa-mcp -->
+
 <!-- BEGIN GENERATED config-catalog:@deepseek-ai/dsh-web-search-perplexity -->
 <a id="deepseek-aidsh-web-search-perplexity"></a>
 
@@ -4914,7 +4997,6 @@ These load from a `cordis.yml` entry with no `config:` block; they declare no co
 | `@deepseek-ai/dsh-experimental-tool-worktree` | `tools` · `worktrees` | [`packages/experimental/tool-worktree/src/index.ts`](../packages/experimental/tool-worktree/src/index.ts) |
 | `@deepseek-ai/dsh-fs-observation-policy` | — | [`packages/fs/fs-observation-policy/src/index.ts`](../packages/fs/fs-observation-policy/src/index.ts) |
 | `@deepseek-ai/dsh-fs-ssh` | `ssh` · `sandboxPolicy` | [`packages/ssh/fs-ssh/src/index.ts`](../packages/ssh/fs-ssh/src/index.ts) |
-| `@deepseek-ai/dsh-goal-round-driver` | `agents` · `goals` · `sessions` | [`packages/goal/goal-round-driver/src/index.ts`](../packages/goal/goal-round-driver/src/index.ts) |
 | `@deepseek-ai/dsh-harness-dev-context` | `systemPrompt` · `sessionProjections` · `webApp` | [`packages/context/harness-dev-context/src/index.ts`](../packages/context/harness-dev-context/src/index.ts) |
 | `@deepseek-ai/dsh-host-directory-picker-auto` | `webServer` · `connection` · `loader` | [`packages/host/directory-picker-auto/src/index.ts`](../packages/host/directory-picker-auto/src/index.ts) |
 | `@deepseek-ai/dsh-host-directory-picker-native` | — | [`packages/host/directory-picker-native/src/index.ts`](../packages/host/directory-picker-native/src/index.ts) |

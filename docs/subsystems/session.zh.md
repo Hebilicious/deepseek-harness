@@ -664,9 +664,9 @@ declare class Session {
    */
   deriveMessages(): Message[];
   /**
-   * Tool calls in the current surface that no user turn answers and that no
+   * Tool calls in the current surface that no tool result answers and that no
    * open step can answer later. Every provider protocol requires each call to
-   * carry its result in the user turn that follows, so such a call can never
+   * carry its result before the next assistant turn, so such a call can never
    * enter a request: derived history omits it, and compaction treats it as
    * absent content rather than as a pair whose cut would split it from a
    * result. A call in the step still open is pending and stays visible until

@@ -10,7 +10,7 @@ The [Codex subagent provider](../../../../packages/subagent/subagent-codex/READM
 
 That left a delegation wanting a different effort than the interactive Codex session with only bad options. Pointing the provider row at a second `CODEX_HOME` makes the child read different configuration, but that home needs its own authentication, and its `auth-locks` directory sits beside a different copy of the account token. Setting the effort in the shared `~/.codex/config.toml` changes every interactive Codex session instead.
 
-The [product subagent backends](2026-08-04-claude-code-and-codex-subagent-backends.md) note owns the provider's existing shape: one fresh process, thread, and turn per run, with native Codex configuration authoritative. The [credential records and authorization flows](../architecture/2026-08-13-credential-records-and-authorization-flows.md) note owns why the harness does not read another tool's credential file.
+The [product subagent backends](../../archived/feature/2026-08-04-claude-code-and-codex-subagent-backends.md) note owns the provider's existing shape: one fresh process, thread, and turn per run, with native Codex configuration authoritative. The [credential records and authorization flows](../architecture/2026-08-13-credential-records-and-authorization-flows.md) note owns why the harness does not read another tool's credential file.
 
 ## Decision
 

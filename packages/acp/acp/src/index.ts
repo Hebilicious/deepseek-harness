@@ -292,8 +292,8 @@ export function apply(ctx: Context, config: AcpConfig): void {
       }
       for (const event of events) {
         if (event.type === 'user/message') {
-          const message = (event as SessionEvent<'user/message'>).data
-          if (message.source?.kind !== 'user') continue
+          const message = event.data
+          if (message.source.kind !== 'user') continue
           for (const block of message.content) {
             if (block.type !== 'text' || block.text.length === 0) continue
             await notify({
@@ -302,7 +302,7 @@ export function apply(ctx: Context, config: AcpConfig): void {
             })
           }
         } else if (event.type === 'assistant/message') {
-          const message = (event as SessionEvent<'assistant/message'>).data.message
+          const message = event.data.message
           for (const block of message.content) {
             if (block.type === 'reasoning') continue
             const content = await assistantBlockToAcp(ctx, block)

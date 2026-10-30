@@ -270,7 +270,7 @@ Every package below exports a Cordis plugin that a bundle patch can name in a Lo
 |---|---|---|
 | `@deepseek-ai/dsh-command-goal` | no | Human-facing slash command for persisted same-session goals |
 | `@deepseek-ai/dsh-goal` | yes | Event-sourced same-session goal state and lifecycle service for the DeepSeek Harness |
-| `@deepseek-ai/dsh-goal-round-driver` | no | Race-fenced same-session goal-round driver |
+| `@deepseek-ai/dsh-goal-round-driver` | yes | Race-fenced same-session goal-round driver |
 | `@deepseek-ai/dsh-tool-goal` | yes | Model-facing same-session goal tools with execution-time authority checks |
 
 ## guard
@@ -519,6 +519,7 @@ Every package below exports a Cordis plugin that a bundle patch can name in a Lo
 | `@deepseek-ai/dsh-web-fetch-http` | yes | Anonymous HTTP(S) fetch provider for the DeepSeek Harness web capability seam (ctx.web) |
 | `@deepseek-ai/dsh-web-search-deepseek` | yes | DeepSeek-backed search provider (native web_search via the Anthropic-compatible API) for the DeepSeek Harness web capability seam (ctx.web) |
 | `@deepseek-ai/dsh-web-search-exa` | yes | Exa-backed search provider for the DeepSeek Harness web capability seam (ctx.web) |
+| `@deepseek-ai/dsh-web-search-exa-mcp` | yes | Exa MCP-backed keyless search provider for the DeepSeek Harness web capability seam (ctx.web) |
 | `@deepseek-ai/dsh-web-search-perplexity` | yes | Perplexity-backed search provider for the DeepSeek Harness web capability seam (ctx.web) |
 
 ## workflow
