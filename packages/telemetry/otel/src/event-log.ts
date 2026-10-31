@@ -1,5 +1,5 @@
 /** Ordinary event SDK batching over a cancellable HTTP transport. */
-import type { Attributes } from '@opentelemetry/api'
+import { ROOT_CONTEXT, trace, type Attributes, type SpanContext } from '@opentelemetry/api'
 import { addAbortListener } from 'node:events'
 import { SeverityNumber, type Logger } from '@opentelemetry/api-logs'
 import { ExportResultCode } from '@opentelemetry/core'
@@ -8,7 +8,7 @@ import { BatchLogRecordProcessor, LoggerProvider } from '@opentelemetry/sdk-logs
 import type { BatchLogRecordProcessorOptions, LogRecordExporter } from '@opentelemetry/sdk-logs'
 import type { SessionLogOptions } from './session-log.ts'
 import { createEventLogExporter } from './event-transport.ts'
-import type { LogExporterOptions } from './transport.ts'
+import type { LogExporterOptions, OtlpEncoding } from './transport.ts'
 
 /** Scalar values accepted by the collector's Arrow attributes map. */
 export type OTelEventScalar = string | number | boolean
@@ -25,11 +25,15 @@ export interface OTelEventRecord {
   severityNumber?: SeverityNumber
   /** Business fields selected by the caller; no automatic device or account identity. */
   attributes?: Record<string, OTelEventScalar | Record<string, OTelEventScalar>>
+  /** Span the record belongs to; its trace and span ids are exported with the record. */
+  spanContext?: SpanContext
 }
 
 /** Ordinary-event transport, resource, scope, and count-batching options. */
 export interface EventLogOptions {
   exporter: LogExporterOptions
+  /** OTLP/HTTP request body encoding; omitted values use `json`. */
+  encoding?: OtlpEncoding
   resourceAttributes: Attributes
   scope: { name: string; version?: string }
   processor: Omit<BatchLogRecordProcessorOptions, 'exporter'>
@@ -45,7 +49,7 @@ export class EventLogReporter {
 
   /** @param options - explicit transport, resource, scope, queue, and diagnostic settings. */
   constructor(options: EventLogOptions) {
-    const exporter = createEventLogExporter(options.exporter, this.cancellation.signal)
+    const exporter = createEventLogExporter(options.exporter, this.cancellation.signal, options.encoding)
     this.exporter = exporter
     this.provider = new LoggerProvider({
       resource: resourceFromAttributes(options.resourceAttributes),
@@ -71,8 +75,12 @@ export class EventLogReporter {
    * @param record - the ordinary event to report.
    */
   emit(record: OTelEventRecord): void {
-    const severityNumber = record.severityNumber ?? SeverityNumber.INFO
-    this.logger.emit({ ...record, observedTimestamp: Date.now(), severityNumber, severityText: SeverityNumber[severityNumber] })
+    const { spanContext, ...fields } = record
+    const severityNumber = fields.severityNumber ?? SeverityNumber.INFO
+    this.logger.emit({
+      ...fields, observedTimestamp: Date.now(), severityNumber, severityText: SeverityNumber[severityNumber],
+      ...spanContext === undefined ? {} : { context: trace.setSpanContext(ROOT_CONTEXT, spanContext) },
+    })
   }
 
   /**

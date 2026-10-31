@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Telemetria da atividade do agente",
+    "description": "Exporta prompts, solicitações ao modelo, chamadas de ferramentas, aprovações e turnos como logs e spans do OpenTelemetry para o coletor indicado pelas variáveis de ambiente OTEL, sem texto de prompt, argumentos ou saídas de ferramentas."
+  }
+}

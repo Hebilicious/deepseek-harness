@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Telemetrie der Agentenaktivität",
+    "description": "Exportiert Eingaben, Modellanfragen, Werkzeugaufrufe, Freigaben und Runden als OpenTelemetry-Logs und -Spans an den durch die OTEL-Umgebungsvariablen benannten Collector, ohne Eingabetext, Werkzeugargumente oder Ausgaben."
+  }
+}

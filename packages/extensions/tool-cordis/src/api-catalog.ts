@@ -2158,6 +2158,12 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
         returns: 'the caller-owned channel; no state is shared with other channels.',
       },
       {
+        signature: 'createSpanReporter(options: SpanOptions): SpanReporter',
+        description: 'Create an independent span channel with count-based batching. The injected consumer must drain it during its fiber disposal.',
+        parameters: [{ name: 'options', description: 'transport, encoding, scope, resource, queue, and diagnostic settings selected by the consumer.' }],
+        returns: 'the caller-owned channel; its tracer is not registered globally.',
+      },
+      {
         signature: 'createSessionLogReporter(options: SessionLogOptions): SessionLogReporter',
         description: 'Create an independent byte-bounded Session-log channel. Authorization and redaction precede reporting; the consumer owns shutdown and its outer deadline.',
         parameters: [{ name: 'options', description: 'transport, scope, resource, queue, and diagnostic settings selected by the consumer.' }],
@@ -6335,7 +6341,7 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   },
   {
     name: 'EventLogOptions',
-    declaration: 'export interface EventLogOptions {\n    exporter: LogExporterOptions;\n    resourceAttributes: Attributes;\n    scope: {\n        name: string;\n        version?: string;\n    };\n    processor: Omit<BatchLogRecordProcessorOptions, \'exporter\'>;\n    onFailure: SessionLogOptions[\'onFailure\'];\n}',
+    declaration: 'export interface EventLogOptions {\n    exporter: LogExporterOptions;\n    encoding?: OtlpEncoding;\n    resourceAttributes: Attributes;\n    scope: {\n        name: string;\n        version?: string;\n    };\n    processor: Omit<BatchLogRecordProcessorOptions, \'exporter\'>;\n    onFailure: SessionLogOptions[\'onFailure\'];\n}',
   },
   {
     name: 'EventLogReporter',
@@ -7359,11 +7365,15 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   },
   {
     name: 'OTelEventRecord',
-    declaration: 'export interface OTelEventRecord {\n    eventName: string;\n    body: string;\n    timestamp: number;\n    severityNumber?: SeverityNumber;\n    attributes?: Record<string, OTelEventScalar | Record<string, OTelEventScalar>>;\n}',
+    declaration: 'export interface OTelEventRecord {\n    eventName: string;\n    body: string;\n    timestamp: number;\n    severityNumber?: SeverityNumber;\n    attributes?: Record<string, OTelEventScalar | Record<string, OTelEventScalar>>;\n    spanContext?: SpanContext;\n}',
   },
   {
     name: 'OTelEventScalar',
     declaration: 'export type OTelEventScalar = string | number | boolean;',
+  },
+  {
+    name: 'OtlpEncoding',
+    declaration: 'export type OtlpEncoding = \'json\' | \'protobuf\';',
   },
   {
     name: 'OwnerIdentityRequest',
@@ -9016,6 +9026,14 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   {
     name: 'SkillViewOptions',
     declaration: 'export interface SkillViewOptions extends SkillLookupOptions {\n    readonly scope?: ScopeKey | undefined;\n}',
+  },
+  {
+    name: 'SpanOptions',
+    declaration: 'export interface SpanOptions {\n    exporter: LogExporterOptions;\n    encoding: OtlpEncoding;\n    resourceAttributes: Attributes;\n    scope: {\n        name: string;\n        version?: string;\n    };\n    processor: Omit<BatchSpanProcessorOptions, \'exporter\' | \'selfObsMeterProvider\'>;\n    onFailure: SessionLogOptions[\'onFailure\'];\n}',
+  },
+  {
+    name: 'SpanReporter',
+    declaration: 'export class SpanReporter {\n    readonly tracer: Tracer;\n    constructor(options: SpanOptions);\n    async shutdown(signal?: AbortSignal): Promise<void>;\n}',
   },
   {
     name: 'SpawnTeammateRequest',

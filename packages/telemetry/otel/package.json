@@ -1,6 +1,6 @@
 {
   "name": "@deepseek-ai/dsh-otel",
-  "description": "Cordis service for independent ordinary-event and byte-bounded Session-log OTLP channels",
+  "description": "Cordis service for independent ordinary-event, span, and byte-bounded Session-log OTLP channels",
   "version": "0.2.2-alpha.2",
   "publishConfig": {
     "access": "public"
@@ -36,7 +36,8 @@
     "@opentelemetry/sdk-logs": "0.222.0",
     "@opentelemetry/core": "2.11.0",
     "@opentelemetry/otlp-transformer": "0.222.0",
-    "got": "^14.6.6"
+    "got": "^14.6.6",
+    "@opentelemetry/sdk-trace": "2.11.0"
   },
   "peerDependencies": {
     "@deepseek-ai/cordis": "workspace:~",

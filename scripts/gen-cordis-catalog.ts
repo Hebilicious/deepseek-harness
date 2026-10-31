@@ -307,6 +307,8 @@ export const LINK_MAP: Readonly<Record<string, string>> = {
   RemoteUplinkWindow: 'typert.md',
   EventLogOptions: 'otel.md',
   EventLogReporter: 'otel.md',
+  SpanOptions: 'otel.md',
+  SpanReporter: 'otel.md',
   SessionLogOptions: 'otel.md',
   SessionLogReporter: 'otel.md',
   OTelEventRecord: 'otel.md',

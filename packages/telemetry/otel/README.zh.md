@@ -1,5 +1,5 @@
 ---
-description: "通过共享 Cordis OTel 服务创建独立的 OTLP 上报通道。"
+description: "通过共享 Cordis OTel 服务创建独立的 OTLP 日志与 span 上报通道。"
 kind: "package-reference"
 ---
 
@@ -9,7 +9,7 @@ kind: "package-reference"
 
 ## 概述
 
-挂载一个 `otel` 服务即可创建普通事件和 Session 日志上报通道。每个通道拥有独立的 exporter、resource、instrumentation scope 和队列。仅挂载不会创建传输、身份或发送数据。业务调用方负责授权、脱敏、字段选择及通道销毁。
+挂载一个 `otel` 服务即可创建普通事件、span 和 Session 日志上报通道。每个通道拥有独立的 exporter、resource、instrumentation scope 和队列。仅挂载不会创建传输、身份或发送数据。业务调用方负责授权、脱敏、字段选择及通道销毁。
 
 ## 目录
 
@@ -23,18 +23,18 @@ kind: "package-reference"
 <a id="use-this-package"></a>
 ## 使用本包
 
-base bundle 挂载 `@deepseek-ai/dsh-otel`。独立组合必须在注入 `otel` 的调用方之前挂载它。普通埋点调用 `ctx.otel.createEventReporter(options)`，完整 Session 事件调用 `ctx.otel.createSessionLogReporter(options)`。选项显式提供 endpoint、scope、resource attributes、队列设置和诊断回调；服务本身没有部署默认值或自动采集策略。
+base bundle 挂载 `@deepseek-ai/dsh-otel`。独立组合必须在注入 `otel` 的调用方之前挂载它。普通事件调用 `ctx.otel.createEventReporter(options)`，span 调用 `ctx.otel.createSpanReporter(options)`，完整 Session 事件调用 `ctx.otel.createSessionLogReporter(options)`。选项显式提供 endpoint、scope、resource attributes、队列设置和诊断回调；服务本身没有部署默认值或自动采集策略。
 
 返回的通道由调用方持有。普通事件 `shutdown(signal)` 在传入信号中止时取消请求和重试等待，并在传输清理完成后返回。将关闭注册到调用方的 Cordis fiber，并用配置的期限约束完整清空过程。注入机制使服务替换时卸载依赖方。调用方卸载后不得继续保留通道。产品和 Session 适配器为 UI 和反馈调用方实现这些职责。
 
-普通通道使用 SDK 按条数聚合。Session 通道将每条完整事件保留为一个记录，包含 `eventName: "session-log"`、`sessionId` 和 JSON 字符串 `content`，并保证未压缩请求不超过 4,000,000 字节。字节限制、单条拒绝、串行传输结束和关闭行为见 [Session 适配器](../../session/session-telemetry-otel/README.zh.md)。Session 通道不会与普通事件共享请求或队列。
+普通事件通道和 span 通道使用 SDK 按条数聚合，请求编码为 OTLP JSON，或在 `encoding: 'protobuf'` 时编码为 OTLP protobuf；普通事件默认使用 JSON。普通事件可以指明所属 span，其记录随后携带该 span 的 trace id 与 span id。span 通道的 tracer 不注册为全局，调用方需显式传入父上下文；关闭时仍未结束的 span 不会导出，最后一次导出失败会交给 `onFailure`，而不会使关闭被拒绝。Session 通道将每条完整事件保留为一个记录，包含 `eventName: "session-log"`、`sessionId` 和 JSON 字符串 `content`，并保证未压缩请求不超过 4,000,000 字节。字节限制、单条拒绝、串行传输结束和关闭行为见 [Session 适配器](../../session/session-telemetry-otel/README.zh.md)。Session 通道不会与普通事件共享请求或队列。
 
 Header 显式提供。服务不会附加 channel header，也不继承环境中的授权 header 或 TLS 身份。Agent factory 配置返回的 agent，包括 keepAlive。普通事件通道在关闭时销毁自己的 agent；factory 必须为每个通道提供独立 agent。每个调用方提供 scope 名称和版本，因此共享传输不会改变事件归属。
 
 <a id="understand-the-implementation"></a>
 ## 理解实现
 
-`src/index.ts` 注册服务；`event-log.ts` 负责普通事件的 SDK 聚合；`session-log.ts` 负责字节和条数调度；`transport.ts` 提供 Session 的 SDK JSON HTTP delegate，并持有共享的 exporter 指标记录器（不接收 meter provider，不记录任何指标）；`event-transport.ts` 使用 Got 实现可取消的普通事件 HTTP 请求和重试等待，序列化与导出计数仍由 SDK 负责。不安装全局 OTel provider；接受的 exporter 选项排除上游的 `selfObsMeterProvider`，Session processor 也只接受它实现的聚合字段，因此 exporter 和 Session processor 的自观测指标都不会被记录。Session processor 对每条记录只计量一次，按保守大小组包，并在每次回调后等待 SDK 并发队列清理完成才发送下一请求。
+`src/index.ts` 注册服务；`event-log.ts` 负责普通事件的 SDK 聚合；`session-log.ts` 负责字节和条数调度；`transport.ts` 提供 Session 的 SDK JSON HTTP delegate，并持有共享的 exporter 指标记录器（不接收 meter provider，不记录任何指标）；`span-log.ts` 负责 span 的 SDK 聚合；`event-transport.ts` 使用 Got 实现可取消的普通事件与 span HTTP 请求和重试等待，序列化与导出计数仍由 SDK 负责。不安装全局 OTel provider；接受的 exporter 选项排除上游的 `selfObsMeterProvider`，Session processor 也只接受它实现的聚合字段，因此 exporter 和 Session processor 的自观测指标都不会被记录。Session processor 对每条记录只计量一次，按保守大小组包，并在每次回调后等待 SDK 并发队列清理完成才发送下一请求。
 
 本服务及其两个适配器的 OpenTelemetry SDK 依赖使用同一配套版本系列的精确版本。
 

@@ -3,23 +3,23 @@
 # After editing either side, bring the other along and re-record with:
 #   pnpm run verify-translation-pairing --write packages/telemetry/otel/README.md
 /:
-  en: 49f35d8bc0fe3689
-  zh: ef2fd903cca7d129
+  en: 7e3f0be6845acc20
+  zh: f177cf6f8c86ab75
 /deepseek-ai-dsh-otel:
   en: 925bc4650e9895d6
   zh: 02f8917c4048f6e2
 /deepseek-ai-dsh-otel/summary:
-  en: e32c122f34c04593
-  zh: bea48183ab438454
+  en: b975cfcc4fa1d286
+  zh: 9340cf2f637d4352
 /deepseek-ai-dsh-otel/table-of-contents:
   en: 23386452a66b2fbd
   zh: 55b2121ae6059425
 /deepseek-ai-dsh-otel/use-this-package:
-  en: f141a9d909c555d8
-  zh: e4f5b690ccb1337c
+  en: 2eb1c01ee5e62bc4
+  zh: 0c37156157120714
 /deepseek-ai-dsh-otel/understand-the-implementation:
-  en: 56298bd5a3be2cdb
-  zh: 4dff467a0cb30a38
+  en: d76cf14aa990643c
+  zh: 3162bcbde0b7957a
 /deepseek-ai-dsh-otel/further-exploration:
   en: ee17b991de098cc0
   zh: f90257e411921f2b

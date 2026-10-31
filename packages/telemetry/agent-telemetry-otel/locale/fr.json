@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Télémétrie de l'activité de l'agent",
+    "description": "Exporte les invites, requêtes au modèle, appels d'outils, approbations et tours sous forme de journaux et de spans OpenTelemetry vers le collecteur désigné par les variables d'environnement OTEL, sans texte d'invite, arguments ni sorties d'outils."
+  }
+}

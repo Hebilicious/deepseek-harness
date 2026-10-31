@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Agent activity telemetry",
+    "description": "Exports prompts, model requests, tool calls, approvals, and turns as OpenTelemetry logs and spans to the collector named by the OTEL environment variables, without prompt text, tool arguments, or output."
+  }
+}

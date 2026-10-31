@@ -1,22 +1,55 @@
-/** Cancellable ordinary-event HTTP exports, including retry waits and response reads. */
+/** Cancellable ordinary-event and span HTTP exports, including retry waits and response reads. */
 import type { Agent as HttpsAgent } from 'node:https'
 import { gzipSync } from 'node:zlib'
 import got from 'got'
-import { createOtlpNetworkExportDelegate, OTLPExporterBase } from '@opentelemetry/otlp-exporter-base'
-import { JsonLogsSerializer } from '@opentelemetry/otlp-transformer'
-import type { LogRecordExporter } from '@opentelemetry/sdk-logs'
-import { createLogExporterMetrics, type LogExporterOptions, logTransportOptions } from './transport.ts'
+import type { ExportResult } from '@opentelemetry/core'
+import { createOtlpNetworkExportDelegate, type ExporterMetrics, OTLPExporterBase } from '@opentelemetry/otlp-exporter-base'
+import { type ISerializer, JsonLogsSerializer, JsonTraceSerializer, ProtobufLogsSerializer, ProtobufTraceSerializer } from '@opentelemetry/otlp-transformer'
+import type { LogRecordExporter, ReadableLogRecord } from '@opentelemetry/sdk-logs'
+import type { ReadableSpan, SpanExporter } from '@opentelemetry/sdk-trace'
+import { createLogExporterMetrics, createSpanExporterMetrics, type LogExporterOptions, logTransportOptions, type OtlpEncoding } from './transport.ts'
+
+/** Export, flush, and shutdown operations common to the SDK log and span exporters. */
+interface CancellableExporter<Item> {
+  export(items: Item[], callback: (result: ExportResult) => void): void
+  forceFlush(): Promise<void>
+  shutdown(): Promise<void>
+}
 
 /**
  * Create a channel-owned exporter whose cancellation releases requests and retry timers.
  * @param options - explicit collector and SDK HTTP settings.
  * @param signal - channel cancellation, shared by current and future batch exports.
+ * @param encoding - OTLP/HTTP request body encoding; defaults to `json`.
  * @returns the SDK exporter; shutdown also destroys its owned HTTP agent.
  */
-export function createEventLogExporter(options: LogExporterOptions, signal: AbortSignal): LogRecordExporter {
-  const config = logTransportOptions(options)
+export function createEventLogExporter(options: LogExporterOptions, signal: AbortSignal, encoding: OtlpEncoding = 'json'): LogRecordExporter {
+  return createCancellableExporter<ReadableLogRecord>(
+    logTransportOptions(options, 'LOGS', encoding), encoding === 'json' ? JsonLogsSerializer : ProtobufLogsSerializer,
+    createLogExporterMetrics(options.url), signal)
+}
+
+/**
+ * Create a channel-owned span exporter whose cancellation releases requests and retry timers.
+ * @param options - explicit collector and SDK HTTP settings.
+ * @param signal - channel cancellation, shared by current and future batch exports.
+ * @param encoding - OTLP/HTTP request body encoding.
+ * @returns the SDK exporter; shutdown also destroys its owned HTTP agent.
+ */
+export function createSpanExporter(options: LogExporterOptions, signal: AbortSignal, encoding: OtlpEncoding): SpanExporter {
+  return createCancellableExporter<ReadableSpan>(
+    logTransportOptions(options, 'TRACES', encoding), encoding === 'json' ? JsonTraceSerializer : ProtobufTraceSerializer,
+    createSpanExporterMetrics(options.url), signal)
+}
+
+function createCancellableExporter<Item>(
+  config: ReturnType<typeof logTransportOptions>,
+  serializer: ISerializer<Item[], unknown>,
+  metrics: ExporterMetrics<Item[]>,
+  signal: AbortSignal,
+): CancellableExporter<Item> {
   let agent: ReturnType<typeof config.agentFactory> | undefined
-  const exporter = new OTLPExporterBase(createOtlpNetworkExportDelegate(config, JsonLogsSerializer, createLogExporterMetrics(config.url), {
+  const exporter = new OTLPExporterBase(createOtlpNetworkExportDelegate(config, serializer, metrics, {
     async send(data, timeoutMillis) {
       signal.throwIfAborted()
       agent ??= config.agentFactory(new URL(config.url).protocol)
@@ -44,7 +77,7 @@ export function createEventLogExporter(options: LogExporterOptions, signal: Abor
   }))
   let shutdown: Promise<void> | undefined
   return {
-    export: (records, callback) => { exporter.export(records, callback) },
+    export: (items, callback) => { exporter.export(items, callback) },
     forceFlush: () => exporter.forceFlush(),
     shutdown() {
       shutdown ??= (async () => {

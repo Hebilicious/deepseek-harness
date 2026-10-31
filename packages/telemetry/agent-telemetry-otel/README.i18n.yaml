@@ -1,0 +1,46 @@
+# Bilingual-pair consistency record for README.md (docs/i18n/README.md): per heading
+# section, a hash of its English and Chinese blocks outside code blocks and generated regions.
+# After editing either side, bring the other along and re-record with:
+#   pnpm run verify-translation-pairing --write packages/telemetry/agent-telemetry-otel/README.md
+/:
+  en: 05ba21f4acf88564
+  zh: f0596014e5c77120
+/deepseek-ai-dsh-agent-telemetry-otel:
+  en: 7c4cf4d4a0eae72f
+  zh: 9a975edbd27d1a2a
+/deepseek-ai-dsh-agent-telemetry-otel/summary:
+  en: 8e5aaadb1301a8f1
+  zh: 19fef614ebf89792
+/deepseek-ai-dsh-agent-telemetry-otel/table-of-contents:
+  en: d152484eb41ac6b4
+  zh: 9aa34fb1dc95d8cf
+/deepseek-ai-dsh-agent-telemetry-otel/use-this-package:
+  en: 8f6d5275074f63d3
+  zh: 5112bd771fb85542
+/deepseek-ai-dsh-agent-telemetry-otel/use-this-package/environment-variables:
+  en: 095440ec7981b05b
+  zh: 56d6dc623bf91e3a
+/deepseek-ai-dsh-agent-telemetry-otel/use-this-package/log-records:
+  en: d58c4ea1d45d463d
+  zh: ee2f13ce2ae80e39
+/deepseek-ai-dsh-agent-telemetry-otel/use-this-package/traces:
+  en: 9ba567b345266be7
+  zh: 48b6a4b40ba61aee
+/deepseek-ai-dsh-agent-telemetry-otel/understand-the-implementation:
+  en: 26ffd2b318e2afc9
+  zh: 4af7d0e6dfd0f456
+/deepseek-ai-dsh-agent-telemetry-otel/further-exploration:
+  en: f0fbcba385aeb8ed
+  zh: df1ca73dd336fe90
+/deepseek-ai-dsh-agent-telemetry-otel/model-experience:
+  en: 0633f01decca5726
+  zh: 7d0b9d0778d1b8da
+/deepseek-ai-dsh-agent-telemetry-otel/model-experience/kv-cache-effect:
+  en: 8be9251f0d5256ed
+  zh: 3853b8b8cbe58206
+/deepseek-ai-dsh-agent-telemetry-otel/known-limitations-and-deferred-work:
+  en: ac2d199c9f944222
+  zh: 1e71bc4352d03c56
+/deepseek-ai-dsh-agent-telemetry-otel/known-limitations-and-deferred-work/dev-note:
+  en: 0a1253c6f7b5e8b9
+  zh: 9f56528562c7c914

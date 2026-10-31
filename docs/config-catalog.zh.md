@@ -173,6 +173,65 @@ export interface Config {
 ```
 <!-- END GENERATED config-catalog:@deepseek-ai/dsh-agent-preset-registry -->
 
+<!-- BEGIN GENERATED config-catalog:@deepseek-ai/dsh-agent-telemetry-otel -->
+<a id="deepseek-aidsh-agent-telemetry-otel"></a>
+
+## `@deepseek-ai/dsh-agent-telemetry-otel`
+
+- `inject`: `otel`
+- `source`: [`packages/telemetry/agent-telemetry-otel/src/config.ts:14`](../packages/telemetry/agent-telemetry-otel/src/config.ts)
+
+```ts config-catalog
+/**
+ * Raw exporter settings. Each destination field that the configuration omits
+ * takes the value of the standard OpenTelemetry environment variable named
+ * beside it ({@link withEnvironment}).
+ */
+export interface Config {
+  /** `OTEL_SDK_DISABLED=true`: export nothing. */
+  disabled?: boolean
+  /** `OTEL_EXPORTER_OTLP_ENDPOINT`: base URL; `/v1/logs` and `/v1/traces` are appended per signal. */
+  endpoint?: string
+  /** `OTEL_EXPORTER_OTLP_LOGS_ENDPOINT`: full logs URL, used as is. */
+  logsEndpoint?: string
+  /** `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT`: full traces URL, used as is. */
+  tracesEndpoint?: string
+  /** `OTEL_LOGS_EXPORTER`: `otlp` (default) or `none`. */
+  logsExporter?: string
+  /** `OTEL_TRACES_EXPORTER`: `otlp` (default) or `none`. */
+  tracesExporter?: string
+  /** `OTEL_EXPORTER_OTLP_PROTOCOL`: `http/protobuf` (default) or `http/json`. */
+  protocol?: string
+  /** `OTEL_EXPORTER_OTLP_LOGS_PROTOCOL`: overrides {@link protocol} for logs. */
+  logsProtocol?: string
+  /** `OTEL_EXPORTER_OTLP_TRACES_PROTOCOL`: overrides {@link protocol} for traces. */
+  tracesProtocol?: string
+  /** `OTEL_EXPORTER_OTLP_HEADERS`: `key=value` pairs separated by commas, values percent-encoded. */
+  headers?: string
+  /** `OTEL_EXPORTER_OTLP_LOGS_HEADERS`: merged over {@link headers} for logs. */
+  logsHeaders?: string
+  /** `OTEL_EXPORTER_OTLP_TRACES_HEADERS`: merged over {@link headers} for traces. */
+  tracesHeaders?: string
+  /** `OTEL_SERVICE_NAME`: resource `service.name`; wins over {@link resourceAttributes}. */
+  serviceName?: string
+  /** `OTEL_RESOURCE_ATTRIBUTES`: `key=value` pairs separated by commas, values percent-encoded. */
+  resourceAttributes?: string
+  /** Maximum records or spans per export; must not exceed maxQueueSize. */
+  maxExportBatchSize: number
+  /** Maximum queued records or spans per signal; the SDK drops new ones when full. */
+  maxQueueSize: number
+  /** Delay before exporting a partial batch. */
+  scheduledDelayMillis: number
+  /** Exporter HTTP deadline, including transient-error retries. */
+  timeoutMillis: number
+  /** Processor deadline for one batch export. */
+  exportTimeoutMillis: number
+  /** Drain deadline at unload; expiry cancels pending exports. */
+  shutdownTimeoutMillis: number
+}
+```
+<!-- END GENERATED config-catalog:@deepseek-ai/dsh-agent-telemetry-otel -->
+
 <!-- BEGIN GENERATED config-catalog:@deepseek-ai/dsh-agent-tool-presentation -->
 <a id="deepseek-aidsh-agent-tool-presentation"></a>
 

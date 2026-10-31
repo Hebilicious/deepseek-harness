@@ -482,7 +482,8 @@ Every package below exports a Cordis plugin that a bundle patch can name in a Lo
 
 | Package | Config | Description |
 |---|---|---|
-| `@deepseek-ai/dsh-otel` | no | Cordis service for independent ordinary-event and byte-bounded Session-log OTLP channels |
+| `@deepseek-ai/dsh-agent-telemetry-otel` | yes | Agent activity (prompts, model requests, tool calls, approvals, turns) as OTLP/HTTP logs and spans, configured by the OpenTelemetry exporter environment variables |
+| `@deepseek-ai/dsh-otel` | no | Cordis service for independent ordinary-event, span, and byte-bounded Session-log OTLP channels |
 
 ## terminal
 

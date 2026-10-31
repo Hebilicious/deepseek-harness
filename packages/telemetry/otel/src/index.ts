@@ -1,7 +1,8 @@
-/** Cordis entry for independent ordinary-event and Session-log OTLP channels. */
+/** Cordis entry for independent ordinary-event, span, and Session-log OTLP channels. */
 import { Context, Service } from '@deepseek-ai/cordis'
 import { EventLogReporter, type EventLogOptions } from './event-log.ts'
 import { SessionLogReporter, type SessionLogOptions } from './session-log.ts'
+import { SpanReporter, type SpanOptions } from './span-log.ts'
 
 declare module '@deepseek-ai/cordis' {
   interface Context {
@@ -22,6 +23,14 @@ export default class OTel extends Service {
   createEventReporter(options: EventLogOptions): EventLogReporter { return new EventLogReporter(options) }
 
   /**
+   * Create an independent span channel with count-based batching.
+   * The injected consumer must drain it during its fiber disposal.
+   * @param options - transport, encoding, scope, resource, queue, and diagnostic settings selected by the consumer.
+   * @returns the caller-owned channel; its tracer is not registered globally.
+   */
+  createSpanReporter(options: SpanOptions): SpanReporter { return new SpanReporter(options) }
+
+  /**
    * Create an independent byte-bounded Session-log channel.
    * Authorization and redaction precede reporting; the consumer owns shutdown and its outer deadline.
    * @param options - transport, scope, resource, queue, and diagnostic settings selected by the consumer.
@@ -32,4 +41,5 @@ export default class OTel extends Service {
 
 export type { EventLogOptions, OTelEventRecord, OTelEventScalar, EventLogReporter } from './event-log.ts'
 export type { SessionLogProcessorOptions, SessionLogRecord, SessionLogOptions, SessionLogReporter } from './session-log.ts'
-export type { LogExporterOptions } from './transport.ts'
+export type { SpanOptions, SpanReporter } from './span-log.ts'
+export type { LogExporterOptions, OtlpEncoding } from './transport.ts'

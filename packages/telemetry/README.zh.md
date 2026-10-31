@@ -9,7 +9,7 @@ kind: "package-group"
 
 ## 概述
 
-本组提供产品埋点和反馈授权 Session 上传共用的上报基础设施。业务插件选择事件、身份、授权和脱敏规则；传输插件负责编码和投递。
+本组提供产品埋点、反馈授权 Session 上传和智能体活动导出共用的上报基础设施。业务插件选择事件、身份、授权和脱敏规则；传输插件负责编码和投递。
 
 ## 目录
 
@@ -22,7 +22,8 @@ kind: "package-group"
 
 | 包 | 职责 |
 |---|---|
-| [`otel`](otel/README.zh.md) | 创建独立普通事件通道和受字节上限约束的 Session 日志通道的 Cordis 服务 |
+| [`otel`](otel/README.zh.md) | 创建独立普通事件通道、span 通道和受字节上限约束的 Session 日志通道的 Cordis 服务 |
+| [`agent-telemetry-otel`](agent-telemetry-otel/README.zh.md) | 以 OTLP/HTTP 日志和 span 导出智能体活动，由 OpenTelemetry 环境变量配置 |
 
 <a id="related-documentation"></a>
 ## 相关文档

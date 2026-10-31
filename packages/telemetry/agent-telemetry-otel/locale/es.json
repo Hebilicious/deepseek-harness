@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Telemetría de actividad del agente",
+    "description": "Exporta indicaciones, solicitudes al modelo, llamadas a herramientas, aprobaciones y turnos como registros y spans de OpenTelemetry al colector indicado por las variables de entorno OTEL, sin texto de indicaciones, argumentos ni salidas de herramientas."
+  }
+}

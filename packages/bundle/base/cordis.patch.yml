@@ -202,6 +202,14 @@
     - id: otel
       name: '@deepseek-ai/dsh-otel'
 
+    # Agent activity (prompts, model requests, tool calls, approvals, turns)
+    # as OTLP/HTTP logs and spans, without prompt text, tool arguments, or
+    # output. The standard OTEL_* exporter variables of the launching process
+    # or the Harness home .env choose the collector; without an endpoint,
+    # nothing is exported.
+    - id: agent-telemetry-otel
+      name: '@deepseek-ai/dsh-agent-telemetry-otel'
+
     # OTel releases a Session-log prefix only after explicit user feedback,
     # regardless of model provider. Ordinary activity never triggers capture.
     # DSH_TELEMETRY_OTLP_URL overrides the production endpoint. A non-empty

@@ -1,5 +1,5 @@
 ---
-description: "Create independent OTLP reporting channels through the shared Cordis OTel service."
+description: "Create independent OTLP log and span reporting channels through the shared Cordis OTel service."
 kind: "package-reference"
 ---
 
@@ -9,7 +9,7 @@ English | [中文](README.zh.md)
 
 ## Summary
 
-Mount one `otel` service to create ordinary-event and Session-log reporting channels. Each channel has its own exporter, resource, instrumentation scope, and queue. Mounting alone creates no transport or identity and sends nothing. Business consumers own authorization, redaction, field selection, and their channel's disposal.
+Mount one `otel` service to create ordinary-event, span, and Session-log reporting channels. Each channel has its own exporter, resource, instrumentation scope, and queue. Mounting alone creates no transport or identity and sends nothing. Business consumers own authorization, redaction, field selection, and their channel's disposal.
 
 ## Table of Contents
 
@@ -23,18 +23,18 @@ Mount one `otel` service to create ordinary-event and Session-log reporting chan
 <a id="use-this-package"></a>
 ## Use this package
 
-The base bundle mounts `@deepseek-ai/dsh-otel`. Independent compositions must mount it before consumers that inject `otel`. Call `ctx.otel.createEventReporter(options)` for ordinary analytics or `ctx.otel.createSessionLogReporter(options)` for complete Session events. Options explicitly supply endpoint, scope, resource attributes, queue settings, and a diagnostic callback; the service has no deployment defaults or automatic collection policy of its own.
+The base bundle mounts `@deepseek-ai/dsh-otel`. Independent compositions must mount it before consumers that inject `otel`. Call `ctx.otel.createEventReporter(options)` for ordinary events, `ctx.otel.createSpanReporter(options)` for spans, or `ctx.otel.createSessionLogReporter(options)` for complete Session events. Options explicitly supply endpoint, scope, resource attributes, queue settings, and a diagnostic callback; the service has no deployment defaults or automatic collection policy of its own.
 
 The returned channel belongs to the consumer. Ordinary-event `shutdown(signal)` cancels requests and retry waits when the supplied signal aborts, and resolves after transport cleanup. Register shutdown with the consumer's Cordis fiber and bound the complete drain with its configured deadline. Injection makes service replacement unload dependent consumers. Do not retain a channel after its consumer unloads. The product and Session adapters implement this ownership for UI and feedback callers.
 
-Ordinary channels use SDK count-based batching. Session channels preserve one complete event per record with `eventName: "session-log"`, `sessionId`, and a JSON string `content`, and enforce at most 4,000,000 uncompressed request bytes. Their byte limits, single-record rejection, serial transport settlement, and shutdown behavior are specified by the [Session adapter](../../session/session-telemetry-otel/README.md). A Session channel never shares a request or queue with ordinary events.
+Ordinary-event and span channels use SDK count-based batching and encode requests as OTLP JSON or, with `encoding: 'protobuf'`, OTLP protobuf; ordinary events default to JSON. An ordinary event may name the span it belongs to, and its record then carries that span's trace and span ids. A span channel's tracer is not registered globally, so callers pass parent contexts explicitly; spans still open at shutdown are not exported, and a failed final export reaches `onFailure` instead of rejecting shutdown. Session channels preserve one complete event per record with `eventName: "session-log"`, `sessionId`, and a JSON string `content`, and enforce at most 4,000,000 uncompressed request bytes. Their byte limits, single-record rejection, serial transport settlement, and shutdown behavior are specified by the [Session adapter](../../session/session-telemetry-otel/README.md). A Session channel never shares a request or queue with ordinary events.
 
 Headers are explicit. The service does not add a channel header or inherit ambient authorization headers or TLS identity. Agent factories configure their returned agents, including keepAlive. Ordinary-event channels destroy their agent on shutdown; factories must provide a dedicated agent for each channel. Scope names and versions are supplied by each consumer, so transport sharing does not change event attribution.
 
 <a id="understand-the-implementation"></a>
 ## Understand the implementation
 
-`src/index.ts` registers the service; `event-log.ts` owns ordinary SDK batching; `session-log.ts` owns byte/count scheduling; `transport.ts` supplies the Session SDK JSON HTTP delegate and owns the shared exporter metrics recorder, which receives no meter provider and records nothing; `event-transport.ts` uses Got for cancellable ordinary-event HTTP requests and retry waits with SDK serialization and export accounting. No global OTel provider is installed; the accepted exporter options exclude the upstream `selfObsMeterProvider`, and the Session processor accepts only the batching fields it implements, so exporter and Session-processor self-observability metrics stay unrecorded. The Session processor measures each record once, groups conservative sizes, and waits for the SDK concurrency queue to clear after every callback before sending another request.
+`src/index.ts` registers the service; `event-log.ts` owns ordinary SDK batching; `session-log.ts` owns byte/count scheduling; `transport.ts` supplies the Session SDK JSON HTTP delegate and owns the shared exporter metrics recorder, which receives no meter provider and records nothing; `span-log.ts` owns span SDK batching; `event-transport.ts` uses Got for cancellable ordinary-event and span HTTP requests and retry waits with SDK serialization and export accounting. No global OTel provider is installed; the accepted exporter options exclude the upstream `selfObsMeterProvider`, and the Session processor accepts only the batching fields it implements, so exporter and Session-processor self-observability metrics stay unrecorded. The Session processor measures each record once, groups conservative sizes, and waits for the SDK concurrency queue to clear after every callback before sending another request.
 
 OpenTelemetry SDK dependencies use exact versions from one coordinated release across this service and its two adapters.
 
