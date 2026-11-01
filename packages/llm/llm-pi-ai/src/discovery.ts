@@ -74,6 +74,29 @@ interface ListingEntry {
   maxTokens?: unknown
   limit?: ListingLimit | null
   top_provider?: ListingTopProvider | null
+  /** Gateway extension (e.g. CommandCode): the request paths a model accepts, such as `/messages`. */
+  supported_endpoints?: unknown
+}
+
+/** The request path each protocol sends a model's requests to, as gateways list it in `supported_endpoints`. */
+const PROTOCOL_ENDPOINTS: Readonly<Record<string, string>> = {
+  'anthropic-messages': '/messages',
+  'openai-completions': '/chat/completions',
+  'openai-responses': '/responses',
+}
+
+/**
+ * Whether a listed model can be served over a protocol. A gateway that lists
+ * `supported_endpoints` for a model (CommandCode does) refuses that model on
+ * any other path, so a route keeps only the models whose list names its
+ * protocol's path. A model without the list, or a protocol without a known
+ * path, is kept: the listing says nothing against it.
+ */
+function servesProtocol(entry: ListingEntry | null, api: string | undefined): boolean {
+  const endpoint = api === undefined ? undefined : PROTOCOL_ENDPOINTS[api]
+  const supported = entry?.supported_endpoints
+  if (endpoint === undefined || !Array.isArray(supported)) return true
+  return supported.some(path => typeof path === 'string' && path.replace(/^\/v1(?=\/)/, '') === endpoint)
 }
 
 /** A positive integer field of a listing entry, or `undefined` when absent or unusable. */
@@ -119,12 +142,15 @@ function listingUrl(baseURL: string, api: string): string {
  * object-valued map entries are models; primitive properties are ignored
  * because they may be directory metadata rather than model records.
  *
+ * Entries whose `supported_endpoints` exclude the protocol's request path are
+ * skipped too: the gateway would refuse them on this route.
+ *
  * Entries without a usable id, and later rows repeating an id, are skipped rather than failing the whole
  * interrogation: a single malformed row should not deny the user the rest of
  * a working endpoint's catalog. Missing names fall back to the adopted id so
  * the Web form receives a complete human-readable row.
  */
-function readListing(body: unknown): LlmDiscoveredModel[] {
+function readListing(body: unknown, api?: string): LlmDiscoveredModel[] {
   const listing = body as { data?: unknown; models?: unknown } | null
   const data = listing?.data
   let listed: { readonly key?: string; readonly raw: unknown }[]
@@ -148,6 +174,7 @@ function readListing(body: unknown): LlmDiscoveredModel[] {
   const seen = new Set<string>()
   for (const { key, raw } of listed) {
     const entry = raw as ListingEntry | null
+    if (!servesProtocol(entry, api)) continue
     const id = label(key, entry?.id)
     // A repeated id keeps its first row: a route serves one model per id.
     if (id === undefined || seen.has(id)) continue
@@ -349,5 +376,5 @@ export async function requestEndpointListing(request: EndpointListingRequest): P
   } catch (error: unknown) {
     throw new LlmError(`${url} did not answer with JSON`, 'DISCOVERY_FAILED', { cause: error })
   }
-  return readListing(body)
+  return readListing(body, api)
 }

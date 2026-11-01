@@ -318,6 +318,35 @@ describe('draft-provider model discovery', () => {
     await expect(ctx.llm.discoverModels('llm-pi-ai', { provider: 'deepseek' })).resolves.not.toHaveLength(0)
   })
 
+  it('keeps only the models whose supported_endpoints name the protocol\'s path', async () => {
+    // A gateway listing per-model endpoints (CommandCode's shape) refuses a model on any other path.
+    const server = await listingServer({
+      body: JSON.stringify({
+        data: [
+          { id: 'claude-x', supported_endpoints: ['/messages'] },
+          { id: 'gpt-x', supported_endpoints: ['/chat/completions', '/responses'] },
+          { id: 'glm-x', supported_endpoints: ['/v1/chat/completions'] },
+          { id: 'unlisted-x' },
+        ],
+      }),
+    })
+    const ctx = await harness()
+
+    const completions = await ctx.llm.discoverModels('llm-pi-ai', {
+      baseURL: `${server.url}/v1`,
+      api: 'openai-completions',
+      apiKey: 'probe-key',
+    })
+    const messages = await ctx.llm.discoverModels('llm-pi-ai', {
+      baseURL: server.url,
+      api: 'anthropic-messages',
+      apiKey: 'probe-key',
+    })
+
+    expect(completions.map(model => model.id)).toEqual(['gpt-x', 'glm-x', 'unlisted-x'])
+    expect(messages.map(model => model.id)).toEqual(['claude-x', 'unlisted-x'])
+  })
+
   it('drops unusable rows rather than failing the whole listing', async () => {
     const server = await listingServer({
       body: JSON.stringify({
