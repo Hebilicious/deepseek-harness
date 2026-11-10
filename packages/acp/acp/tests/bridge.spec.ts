@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { AttachmentError } from '@deepseek-ai/dsh-attachment'
+import ApprovalService from '@deepseek-ai/dsh-user-approval'
 import { ToolCallId, type StreamChunk } from '@deepseek-ai/dsh-llm'
 import { SESSION_FORMAT_VERSION, SessionId, SessionLogOffset, SessionSeq } from '@deepseek-ai/dsh-session'
 import type { SessionHeader } from '@deepseek-ai/dsh-session'
@@ -202,6 +203,61 @@ describe('automation-only ACP bridge', () => {
     expect(harness.adapter.requests[1]?.messages.map(message => message.content)).toContainEqual([
       { type: 'text', text: 'first prompt' },
     ])
+  })
+
+  it('pins the configured permission preset on created and resumed sessions', async () => {
+    harness = await makeBridgeHarness({ config: { permissionPreset: 'danger-full-access' } })
+    const presets = new Map<string, string>()
+    const pinned: { sessionId: string; preset: string }[] = []
+    harness.ctx.provide('permissionPresets', {
+      current: (session: { id: string }) => presets.get(session.id) ?? 'workspace-write',
+      set(session: { id: string }, preset: string) {
+        presets.set(session.id, preset)
+        pinned.push({ sessionId: session.id, preset })
+      },
+    } as never)
+    await harness.client.initialize({ protocolVersion: PROTOCOL_VERSION, clientCapabilities: {} })
+    const created = await harness.client.newSession({ cwd: process.cwd(), mcpServers: [] })
+    await harness.client.closeSession({ sessionId: created.sessionId })
+    presets.set(created.sessionId, 'workspace-write')
+    await harness.client.resumeSession({ sessionId: created.sessionId, cwd: process.cwd(), mcpServers: [] })
+    await harness.client.closeSession({ sessionId: created.sessionId })
+    await harness.client.resumeSession({ sessionId: created.sessionId, cwd: process.cwd(), mcpServers: [] })
+
+    // The second resume finds the preset already in effect and appends nothing.
+    expect(pinned).toEqual([
+      { sessionId: created.sessionId, preset: 'danger-full-access' },
+      { sessionId: created.sessionId, preset: 'danger-full-access' },
+    ])
+  })
+
+  it('pins the configured approval policy only when the session records another', async () => {
+    harness = await makeBridgeHarness({ config: { approvalPolicy: 'never' } })
+    await harness.ctx.plugin(ApprovalService, { policy: 'ask' })
+    await harness.client.initialize({ protocolVersion: PROTOCOL_VERSION, clientCapabilities: {} })
+    const created = await harness.client.newSession({ cwd: process.cwd(), mcpServers: [] })
+    await harness.client.closeSession({ sessionId: created.sessionId })
+    await harness.client.resumeSession({ sessionId: created.sessionId, cwd: process.cwd(), mcpServers: [] })
+
+    const session = harness.ctx.sessions.get(SessionId(created.sessionId))
+    expect(session?.snapshotEvents().filter(event => event.type === 'approval/policy').map(event => event.data))
+      .toEqual([{ policy: 'never' }])
+  })
+
+  it('rejects a configured approval policy without the approval service', async () => {
+    harness = await makeBridgeHarness({ config: { approvalPolicy: 'never' } })
+    await harness.client.initialize({ protocolVersion: PROTOCOL_VERSION, clientCapabilities: {} })
+
+    await expect(harness.client.newSession({ cwd: process.cwd(), mcpServers: [] }))
+      .rejects.toThrow(/approvalPolicy requires the approval service/)
+  })
+
+  it('rejects a configured permission preset without the permission presets service', async () => {
+    harness = await makeBridgeHarness({ config: { permissionPreset: 'danger-full-access' } })
+    await harness.client.initialize({ protocolVersion: PROTOCOL_VERSION, clientCapabilities: {} })
+
+    await expect(harness.client.newSession({ cwd: process.cwd(), mcpServers: [] }))
+      .rejects.toThrow(/permissionPreset requires the permissionPresets service/)
   })
 
   it('materializes an empty closed session for list and resume', async () => {

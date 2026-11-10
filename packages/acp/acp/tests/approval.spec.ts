@@ -50,6 +50,23 @@ describe('ACP machine permission policy', () => {
     await expect(harness.ctx.approval.request(request)).resolves.toBe('rejected')
   })
 
+  it('sends no metadata for a plain request', async () => {
+    harness = await makeBridgeHarness()
+    const request = await ownedRequest()
+    await harness.ctx.approval.request(request)
+    expect(harness.permissionRequests[0]).not.toHaveProperty('_meta')
+  })
+
+  it('carries the asker reason and, when configured, marks the request for a person', async () => {
+    harness = await makeBridgeHarness({ config: { requireUserForPermissions: true } })
+    const request = await ownedRequest({ reason: 'Auto review denied tool "bash": deletes user data' })
+    await harness.ctx.approval.request(request)
+    expect(harness.permissionRequests[0]?._meta).toEqual({
+      requiresUser: true,
+      reason: 'Auto review denied tool "bash": deletes user data',
+    })
+  })
+
   it('maps cancellation and unknown choices without granting access', async () => {
     harness = await makeBridgeHarness()
     const request = await ownedRequest()

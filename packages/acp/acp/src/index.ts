@@ -49,8 +49,10 @@ import {
 } from '@agentclientprotocol/sdk'
 import type { SessionEvent, SessionId } from '@deepseek-ai/dsh-session'
 import type {} from '@deepseek-ai/dsh-session-persistence'
-// Side-effect type import: declaration-merges the approval waterfall answered below.
-import type {} from '@deepseek-ai/dsh-user-approval'
+// Declaration-merges the approval waterfall answered below; the values pin a configured policy.
+import { APPROVAL_POLICIES, setApprovalPolicy, type ApprovalPolicy } from '@deepseek-ai/dsh-user-approval'
+// Type-only: declaration-merges `ctx.permissionPresets` for the optional preset pin.
+import type {} from '@deepseek-ai/dsh-permission-presets'
 import { assistantBlockToAcp, supportsAcpImagePrompts } from './content.ts'
 import { AcpMcpConfigError } from './mcp.ts'
 import { AcpModelConfigError } from './model-control.ts'
@@ -80,6 +82,28 @@ export interface AcpConfig {
   model?: string
   /** Maximum summaries returned by one session/list page. */
   sessionListPageSize?: number
+  /**
+   * Permission preset applied to every session the bridge creates or resumes.
+   * ACP carries no permission mode, so a client that always means one (T3 Code's
+   * full-access threads) pins it here; sessions recorded under another preset
+   * switch on resume. Omitted: sessions keep their recorded or default preset.
+   */
+  permissionPreset?: string
+  /**
+   * Approval policy applied after {@link permissionPreset}, for a preset whose
+   * own policy the client cannot honor: `auto` asks the client about reviewer
+   * denials, which a client that allows every request turns into approvals;
+   * `never` makes those denials final. Omitted: the preset's own policy.
+   */
+  approvalPolicy?: ApprovalPolicy
+  /**
+   * Mark every permission request `_meta.requiresUser: true`: a person has to
+   * decide it, even where the client allows requests on its own. Fits a
+   * deployment that asks only for that, such as `auto` (unconfined, so every
+   * request is a reviewer denial). Requests always carry `_meta.reason` when
+   * the asker gave one.
+   */
+  requireUserForPermissions?: boolean
   /** Runtime-only transport override; production uses stdio. */
   stream?: Stream
 }
@@ -88,6 +112,9 @@ export const Config: Schema<AcpConfig> = Schema.object({
   provider: Schema.string(),
   model: Schema.string(),
   sessionListPageSize: Schema.natural().min(1).default(DEFAULT_SESSION_LIST_PAGE_SIZE),
+  permissionPreset: Schema.string(),
+  approvalPolicy: Schema.union(APPROVAL_POLICIES as ApprovalPolicy[]),
+  requireUserForPermissions: Schema.boolean().default(false),
 })
 
 /**
@@ -110,6 +137,21 @@ export function apply(ctx: Context, config: AcpConfig): void {
   const ownedRecord = (agent: Parameters<AcpSession['owns']>[0]): AcpSession | undefined => {
     const record = sessions.get(agent.session.id)
     return record?.owns(agent) === true ? record : undefined
+  }
+
+  /** Switch one bridge-owned session to the configured preset and policy; each is a no-op when unset or already in effect. */
+  const applyPermissionPreset = (record: AcpSession): void => {
+    const session = record.agent.session
+    if (config.permissionPreset !== undefined) {
+      const permissions = ctx.get('permissionPresets')
+      if (permissions === undefined) throw internalError('acp permissionPreset requires the permissionPresets service')
+      if (permissions.current(session) !== config.permissionPreset) permissions.set(session, config.permissionPreset)
+    }
+    if (config.approvalPolicy !== undefined) {
+      const approval = ctx.get('approval')
+      if (approval === undefined) throw internalError('acp approvalPolicy requires the approval service')
+      if (approval.overrideOf(session) !== config.approvalPolicy) setApprovalPolicy(session, config.approvalPolicy)
+    }
   }
 
   const assertOpen = (): void => {
@@ -170,6 +212,11 @@ export function apply(ctx: Context, config: AcpConfig): void {
           { optionId: 'reject-once', name: 'Reject', kind: 'reject_once' },
         ],
       }
+      const meta = {
+        ...config.requireUserForPermissions === true ? { requiresUser: true } : {},
+        ...request.reason !== undefined ? { reason: request.reason } : {},
+      }
+      if (Object.keys(meta).length > 0) params._meta = meta
       return conn.request(methods.client.session.requestPermission, params)
     }).then(({ outcome }) => {
       if (outcome.outcome === 'cancelled') return 'cancelled'
@@ -252,6 +299,7 @@ export function apply(ctx: Context, config: AcpConfig): void {
       }
       sessions.set(sessionId, record)
       try {
+        applyPermissionPreset(record)
         const configOptions = await record.configOptions(signal)
         assertOpen()
         // The attached log writer's flush materializes an empty session durably.
@@ -360,6 +408,7 @@ export function apply(ctx: Context, config: AcpConfig): void {
         }
         sessions.set(sessionId, record)
         try {
+          applyPermissionPreset(record)
           return { configOptions: await record.configOptions(signal) }
         } catch (error: unknown) {
           sessions.delete(sessionId)
